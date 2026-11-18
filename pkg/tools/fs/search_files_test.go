@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -438,7 +439,12 @@ func TestScanSearchFileFilesOnlyStopsAtFirstHit(t *testing.T) {
 
 	rowsSeen := 0
 	result, err := tool.scanSearchFile(
-		path, regexp.MustCompile("needle"), searchFilesOptions{outputMode: "files_only"}, &rowsSeen, 10, 1<<30,
+		path,
+		newSearchMatcher(regexp.MustCompile("needle")),
+		searchFilesOptions{outputMode: "files_only"},
+		&rowsSeen,
+		10,
+		1<<30,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -448,5 +454,28 @@ func TestScanSearchFileFilesOnlyStopsAtFirstHit(t *testing.T) {
 	}
 	if result.bytesRead >= int64(len(body))/2 {
 		t.Fatalf("files_only should stop at the first hit, read %d of %d bytes", result.bytesRead, len(body))
+	}
+}
+
+func TestSearchMatcherFindIndexMatchesRegexp(t *testing.T) {
+	patterns := []string{
+		"", "needle", `\Qa.b\E`, "[n]eedle", `\x6eeedle`,
+		"(?i)needle", "needle$", "^needle", `\bneedle\b`,
+		"needle|hay", "nee.*le", "nee+", "(?m)^needle",
+	}
+	lines := []string{
+		"", "needle", "a needle here", "NEEDLE", "a.b",
+		"hay", "nneee", "needless", "needle needle", "the needle",
+	}
+	for _, expr := range patterns {
+		pattern := regexp.MustCompile(expr)
+		matcher := newSearchMatcher(pattern)
+		for _, line := range lines {
+			want := pattern.FindStringIndex(line)
+			got := matcher.findIndex(line)
+			if !slices.Equal(got, want) {
+				t.Errorf("pattern %q line %q: findIndex = %v, want %v", expr, line, got, want)
+			}
+		}
 	}
 }

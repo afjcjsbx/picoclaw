@@ -1,6 +1,9 @@
+---
+description: "Reference for the tools block of config.json: global tool switches, path policy, sandbox limits, and the environment variable overrides."
+---
 # Tools Configuration
 
-PicoClaw's tool settings live under the `tools` field of `config.json`. This page is the reference for global tool behavior, path policy, and the master tool-switch table. Every tool family has a dedicated page under [docs/tools](../tools/README.md).
+PicoClaw's tool settings live under the `tools` field of `config.json`. This page is the reference for global tool behavior, path policy, and the master tool-switch table. Every tool family has a dedicated page under [docs/tools](../tools/).
 
 ## Tool switches
 
@@ -22,10 +25,10 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `web_fetch` | `tools.web_fetch.enabled` | `true` | Fetch settings under `tools.web`; see [Web tools](../tools/web.md) |
 | `exec` | `tools.exec.enabled` | `true` | See [Exec tool](../tools/exec.md) |
 | `cron` | `tools.cron.enabled` | `true` | See [Cron tool](../tools/cron.md) |
-| `todo` | `tools.todo.enabled` | `true` | See [Todo planning tool](../tools/todo.md) |
+| `todo` | `tools.todo.enabled` | `false` | See [Todo planning tool](../tools/todo.md) |
 | `ask_user` | `tools.ask_user.enabled` | `true` | Asks the user questions and waits for answers; timeout under `tools.ask_user.timeout_seconds` (`300`); see [Ask User tool](../tools/ask-user.md) |
 | `message` | `tools.message.enabled` | `true` | Media attachments gated by `tools.message.media_enabled` (`false`); see [Messaging tools](../tools/messaging.md) |
-| `reaction` | — | always on | No switch; fails gracefully on channels without reaction support |
+| `reaction` | `tools.reaction.enabled` | `false` | Fails gracefully on channels without reaction support; see [Messaging tools](../tools/messaging.md) |
 | `spawn` | `tools.spawn.enabled` | `true` | Requires `tools.subagent.enabled`; see [Subagent tools](../tools/subagents.md) |
 | `subagent` | `tools.subagent.enabled` | `true` | The sync `subagent` tool also requires `spawn` or `spawn_status` to be enabled |
 | `spawn_status` | `tools.spawn_status.enabled` | `false` | Requires `tools.subagent.enabled` |
@@ -82,7 +85,9 @@ These allowlists extend the workspace boundary defined by `agents.defaults.restr
 
 ## Sensitive Data Filtering
 
-Before tool results are sent to the LLM, PicoClaw can filter sensitive values (API keys, tokens, secrets) from the output. This prevents the LLM from seeing its own credentials.
+Before tool results are sent to the LLM, PicoClaw can redact exact sensitive values (API keys, tokens, secrets) from the output. This is a defense-in-depth control, not a data-loss-prevention (DLP) boundary.
+
+> **Defense in depth, not DLP.** Only exact configured values are replaced. Base64, hex, character-spaced, reversed, compressed, chunked, or model-reconstructed forms bypass the filter. It also does not cover artifacts on disk, logs, channel messages, or the final model response. Do not rely on it to prevent credential exfiltration.
 
 See [Sensitive Data Filtering](../security/sensitive_data_filtering.md) for full documentation.
 
@@ -95,15 +100,17 @@ Tool call logs record only the argument **keys** and count, never the argument v
 
 ## Large tool results
 
-Tool results larger than `max_inline_result_chars` (counted in Unicode characters, not bytes) are not injected into the model context in full. PicoClaw saves the full text as a local artifact in the agent workspace (`<workspace>/.artifacts/tool/`) and keeps a bounded **head+tail preview** inline: an honest, front-loaded truncation notice with the real number of omitted characters, then the first and last few kilobytes of the output, then a pointer to the full artifact. Keeping useful content inline means the model can usually answer without re-reading the artifact — important for content tools such as `read_file`, where re-reading a spilled artifact would spill again and loop. The artifact path is also exposed as a structured `[file:...]` tag so the model can read it (via `read_file` with `offset`/`length`) or forward it with `send_file`. The preview never removes a tool's own truncation guidance (for example `read_file`'s "call again with offset=…" hint stays in the head). Recognized JSON envelopes — `web_fetch`'s `{url, status, extractor, truncated, length, text}` result and an MCP tool's text payload shaped `{"result": <text>, ...}` — are saved as the pageable text they wrap: the wrapped content with real newlines, followed by a `<web-fetch-metadata>` or `<mcp-result-metadata>` block carrying the siblings embedded in that object. MCP text payloads are recognized only for tools whose name starts with `mcp_`; the protocol-level `structuredContent` and `_meta` fields of `CallToolResult` are separate from the text and are not included by this rewrite. That keeps the artifact pageable by `read_file`/`search_files` instead of one giant line with escaped newlines; any unrecognized JSON payload (for example from `exec`) is saved verbatim. This mirrors the large-text handling already used for MCP tools and applies to every tool, including results produced or replaced by an `AfterTool` hook; artifacts are pruned automatically (older than 24 hours, or beyond the newest 128 files per directory). Pruning is best-effort and throttled per directory: a directory is rescanned at most once per minute, and a burst of writes forces a rescan after 8 writes that skipped it, so a spill-heavy turn cannot rescan the directory on every write.
+Tool results larger than `max_inline_result_chars` (counted in Unicode characters, not bytes) are not injected into the model context in full. PicoClaw saves the full text as a local artifact in the agent workspace (`<workspace>/.artifacts/tool/`) and keeps a bounded **head+tail preview** inline: an honest, front-loaded truncation notice with the real number of omitted characters, then the first and last few kilobytes of the output, then a pointer to the full artifact. Keeping useful content inline means the model can usually answer without re-reading the artifact — important for content tools such as `read_file`, where re-reading a spilled artifact would spill again and loop. The artifact path is also exposed as a structured `[file:...]` tag so the model can read it (via `read_file` with `offset`/`length`) or forward it with `send_file`. The preview never removes a tool's own truncation guidance (for example `read_file`'s "call again with offset=…" hint stays in the head). Recognized JSON envelopes — `web_fetch`'s `{url, status, extractor, truncated, length, text}` result and an MCP tool's text payload shaped `{"result": <text>, ...}` — are saved as the pageable text they wrap: the wrapped content with real newlines, followed by a `<web-fetch-metadata>` or `<mcp-result-metadata>` block carrying the siblings embedded in that object. MCP text payloads are recognized only for tools whose name starts with `mcp_`; the protocol-level `structuredContent` and `_meta` fields of `CallToolResult` are separate from the text and are not included by this rewrite. That keeps the artifact pageable by `read_file`/`search_files` instead of one giant line with escaped newlines; any unrecognized JSON payload (for example from `exec`) is saved verbatim. This mirrors the large-text handling already used for MCP tools and applies to every tool, including results produced or replaced by an `AfterTool` hook; artifacts are pruned automatically (older than `tools.artifact_max_age_hours`, default 24 hours, or beyond the newest `tools.artifact_max_files` files per directory, default 128). Pruning is best-effort and throttled per directory: a directory is rescanned at most once per minute, and a burst of writes forces a rescan after 8 writes that skipped it, so a spill-heavy turn cannot rescan the directory on every write.
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `max_inline_result_chars` | int | `16384` | Maximum tool-result text kept inline, in Go runes. Larger results are spilled to a workspace artifact with a bounded head+tail preview. Set to `0` or a negative value to disable. |
+| `artifact_max_files` | int | `128` | Maximum number of files kept in each artifact directory (`.artifacts/tool`, `.artifacts/mcp`, and exec spill directories) after age-based pruning. Set to `0` or a negative value to disable the count bound. |
+| `artifact_max_age_hours` | int | `24` | Maximum age of an artifact file, in hours, before it is pruned. Set to `0` or a negative value to disable age-based pruning. |
 
 Truncation is separate from spillover. Some tools bound their own raw output before it reaches this layer: `exec` keeps the first 40% and the last 60% of foreground output beyond `tools.exec.max_output_chars` (default `50000`) around an `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, line-mode `read_file` clamps `max_lines` requests to `tools.read_file.max_lines` while cutting lines longer than `tools.read_file.max_line_length` with a ` ... [truncated]` marker, and MCP text results keep the first 40% and the last 60% of the sanitized text beyond `tools.mcp.max_inline_text_chars` around an `[MCP RESULT TRUNCATED - N chars omitted out of T total]` notice while persisting the full raw payload to their own `.artifacts/mcp` artifact.
 
-When a tool cut its own output (`exec`, `web_fetch`, or an MCP text result whose own artifact write failed), the spillover saves the **pre-truncation text** rather than the truncated view, and the inline preview shows the real head and tail of the full output — so the omitted middle stays readable from the artifact. Results under `max_inline_result_chars` are not spilled, so a deliberately small per-call cap (for example a small `maxChars`) keeps the tool's own truncated view.
+When a tool cut its own output (`exec`, `web_fetch`, or an MCP text result whose own artifact write failed), the spillover saves the **pre-truncation text** rather than the truncated view, and the inline preview shows the real head and tail of the full output — so the omitted middle stays readable from the artifact. Results under `max_inline_result_chars` are normally not spilled. `web_fetch` defaults `maxChars` to that same budget and may only lower it per call; when a smaller value cuts the preview, the full page is persisted **even when it fits the inline budget**, up to a server-side cap of `2,000,000` characters, and a front-loaded warning points the model at the artifact. If the page exceeds that cap, the artifact keeps a head+tail window plus an `[ARTIFACT TRUNCATED - N chars omitted out of T total]` notice, and the warning points to a structured endpoint or a narrower source.
 
 > **Security note — artifacts are not filtered.** The artifact file is written from the raw tool result inside result normalization, which runs **before** `filter_sensitive_data` is applied. The filter only redacts the content that is later injected into the model context, so the artifact on disk keeps the **unfiltered** payload (this was already true for MCP large-text artifacts; it now applies to every tool). A large `exec` result, for example, can persist raw secrets to the workspace even when filtering is enabled. The directory (`0700`) and files (`0600`) are permission-restricted, but their contents are not redacted, and the artifact path is exposed to the model — which can read it or forward it with `send_file`, delivering the raw file. Treat workspace artifacts as sensitive data. See [Sensitive Data Filtering](../security/sensitive_data_filtering.md#large-tool-result-artifacts).
 
@@ -132,6 +139,8 @@ For example:
 - `PICOCLAW_TOOLS_MCP_ENABLED=true`
 - `PICOCLAW_TOOLS_MCP_MAX_INLINE_TEXT_CHARS=16384`
 - `PICOCLAW_TOOLS_MAX_INLINE_RESULT_CHARS=16384`
+- `PICOCLAW_TOOLS_ARTIFACT_MAX_FILES=128`
+- `PICOCLAW_TOOLS_ARTIFACT_MAX_AGE_HOURS=24`
 
 Note: Nested map-style config (for example `tools.mcp.servers.<name>.*`) is configured in `config.json` rather than
 environment variables.

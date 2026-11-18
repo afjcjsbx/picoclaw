@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "将 PicoClaw 接入钉钉：通过 Stream 模式 SDK 建立长连接，无需公网回调地址，含配置与字段说明。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # 钉钉

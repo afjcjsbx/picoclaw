@@ -1,3 +1,6 @@
+---
+description: "Messaging tools: send text, files and audio to a chat channel, react to messages, and how they behave inside subagents."
+---
 # Messaging tools
 
 Messaging tools let the agent talk to chat channels directly. They are most useful in the gateway (where a channel manager delivers messages) and in subagents, which report results to the user through the `message` tool instead of the parent conversation.
@@ -5,7 +8,7 @@ Messaging tools let the agent talk to chat channels directly. They are most usef
 | Tool | What it does | Switch (default) |
 |------|--------------|------------------|
 | `message` | Send text and/or local media to a chat channel | `tools.message.enabled` (`true`) |
-| `reaction` | Add a reaction to a message | always registered |
+| `reaction` | Add a reaction to a message | `tools.reaction.enabled` (`false`) |
 
 ## `message`
 
@@ -38,7 +41,13 @@ Media files go through the same read policy as other filesystem reads: protected
 
 ## `reaction`
 
-Adds a lightweight reaction (for example a thumb-up) to a message, defaulting to the current inbound message. The tool has no configuration switch: it is always registered, and fails gracefully on channels that do not implement reactions.
+Adds a lightweight reaction (for example a thumb-up) to a message, defaulting to the current inbound message. It is disabled by default; set `tools.reaction.enabled` to `true` to register it. It fails gracefully on channels that do not implement reactions.
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `tools.reaction.enabled` | bool | `false` | Register the `reaction` tool |
+
+Environment variable: `PICOCLAW_TOOLS_REACTION_ENABLED`.
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
@@ -46,4 +55,4 @@ Adds a lightweight reaction (for example a thumb-up) to a message, defaulting to
 | `channel` | string | no | Target channel. Defaults to the current conversation's channel |
 | `chat_id` | string | no | Target chat/user ID. Defaults to the current conversation |
 
-Reaction support is checked at call time against the channel implementation (Slack, Feishu, and OneBot implement it); on unsupported channels the tool returns an error and the agent continues normally. The gateway also uses the same capability to acknowledge inbound messages with a working reaction and remove it when the reply is sent.
+Reaction support is checked at call time against the channel implementation (Telegram, Slack, Feishu, and OneBot implement it); on unsupported channels the tool returns an error and the agent continues normally. The gateway also uses the same capability to acknowledge inbound messages with a working reaction and remove it when the reply is sent.

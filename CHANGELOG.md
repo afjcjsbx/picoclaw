@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Exec now breaks out of a retry loop on blocked commands: after three consecutive identical guard rejections in one conversation, the result carries a `HARD STOP` message telling the model to stop retrying, rewording or splitting the command and to report the blocker instead. The breaker is process-local and bounded (64 conversations, one 64-bit hash and a counter each), and resets on a different command, an allowed run or `/clear`.
+- `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
+
+### Changed
+
+- The exec tool strips ANSI escape sequences (colors, cursor movement, OSC/DCS/APC strings) from foreground and background output as it is read. Stripping happens in place before truncation and spilling, so escape bytes neither consume the output budget nor reach the model or an artifact.
+
+### Fixed
+
+- The exec tool schema now declares `background` and `pty` as booleans, matching their documentation and the values the tool already accepted; string `"true"`/`"false"` arguments are still tolerated for models that emit the previous form.
+- Background `spawn` no longer drops requests above `agents.defaults.subturn.max_concurrent`: the tool reserves a concurrency slot before acknowledging, and CLI one-shot turns join their spawned children before answering.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

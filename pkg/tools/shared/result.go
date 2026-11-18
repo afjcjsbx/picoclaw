@@ -59,10 +59,11 @@ type ToolResult struct {
 	// without a follow-up assistant response.
 	ResponseHandled bool `json:"response_handled,omitempty"`
 
-	// LargeResultSpilled marks a result whose ForLLM was already reduced to a
-	// bounded preview by the large-result spill. It is set by the tools package
-	// rather than inferred from ForLLM, because ForLLM is tool-controlled text
-	// that could otherwise forge the marker and bypass the spill.
+	// LargeResultSpilled marks a result whose ForLLM is already a bounded
+	// preview and whose full payload was persisted by the tool or by the
+	// large-result spill. It is set by the tools package rather than inferred
+	// from ForLLM, because ForLLM is tool-controlled text that could otherwise
+	// forge the marker and bypass the spill.
 	LargeResultSpilled bool `json:"-"`
 
 	// FullText is the pre-truncation payload when a tool cut its own output
@@ -72,6 +73,18 @@ type ToolResult struct {
 	// and clears the field once handled. It is never part of the model-visible
 	// result itself.
 	FullText string `json:"-"`
+
+	// ForceArtifact asks the large-result spill to persist FullText even when
+	// it fits under the inline budget, because the tool was explicitly asked
+	// for a smaller preview (web_fetch's maxChars). The tool's bounded preview
+	// stays inline; only the artifact holds the full payload.
+	ForceArtifact bool `json:"-"`
+
+	// ArtifactMaxRunes caps the text persisted for this result (0 = no extra
+	// cap). Tools that fetch untrusted, potentially huge pages use it to bound
+	// disk usage; when the cap applies, the spill tells the model the artifact
+	// itself was truncated.
+	ArtifactMaxRunes int `json:"-"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the

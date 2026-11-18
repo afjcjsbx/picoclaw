@@ -182,6 +182,15 @@ export function DetailSheet({
                     rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeHighlight]}
                     components={{
                       pre: MarkdownCodeBlock,
+                      a: ({ href, children }) => (
+                        <a
+                          href={href}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          {children}
+                        </a>
+                      ),
                     }}
                   >
                     {selectedSkillDetail.content}

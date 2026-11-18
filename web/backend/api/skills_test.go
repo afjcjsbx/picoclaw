@@ -661,6 +661,7 @@ func TestHandleSearchSkills(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -876,6 +877,7 @@ func TestHandleSearchSkillsPagination(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -951,6 +953,7 @@ func TestHandleSearchSkillsClampsRegistryFanout(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -1034,6 +1037,7 @@ func TestHandleInstallSkill(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
 		t.Fatalf("SaveConfig() error = %v", saveErr)
 	}
@@ -1860,4 +1864,31 @@ func buildSkillZip(t *testing.T, files map[string]string) []byte {
 		t.Fatalf("Close() error = %v", err)
 	}
 	return buf.Bytes()
+}
+
+func TestIsWithinDir(t *testing.T) {
+	tmp := t.TempDir()
+	parent := filepath.Join(tmp, "workspace")
+	child := filepath.Join(parent, "skills", "my-skill")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	if !isWithinDir(child, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = false, want true", child, parent)
+	}
+	if !isWithinDir(parent, parent) {
+		t.Fatalf("isWithinDir(parent) = false, want true for exact match")
+	}
+	outside := filepath.Join(tmp, "other")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside): %v", err)
+	}
+	if isWithinDir(outside, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = true, want false", outside, parent)
+	}
+	sibling := parent + "-other"
+	if isWithinDir(sibling, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = true, want false for sibling prefix", sibling, parent)
+	}
 }

@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "OneBot is an open protocol standard for QQ bots, providing a unified interface for various QQ bot implementations (e.g. go-cqhttp, Mirai)."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # OneBot
 

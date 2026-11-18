@@ -1,3 +1,6 @@
+---
+description: "PicoClaw supports separating sensitive data (API keys, tokens, secrets, passwords) from the main configuration by storing them in a .security.yml file."
+---
 # Security Configuration
 
 ## Overview

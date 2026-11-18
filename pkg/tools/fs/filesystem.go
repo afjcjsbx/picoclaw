@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,16 @@ const (
 	// even when the caller asks for a handful of lines, so the hint is capped
 	// at this many bytes.
 	lineOutputPreallocLimit = 8 * 1024
+
+	// truncationHintPageSize is the default raw-read page size suggested for
+	// a line that was cut by max_line_length. It stays below the default
+	// max_inline_result_chars budget, so the follow-up read does not spill to
+	// an artifact and hide the rest of the line in the omitted middle.
+	truncationHintPageSize = 8 * 1024
+	// truncationHintReserve leaves room for the result header and the
+	// LINE TRUNCATED hint when calculating a page size from the configured
+	// inline budget.
+	truncationHintReserve = 1024
 )
 
 func ValidatePathWithAllowPaths(
@@ -276,6 +287,14 @@ func resolveExistingAncestor(path string) (string, error) {
 	}
 }
 
+// ResolvePathAgainstExistingAncestor resolves symlinks in path, falling back to
+// the nearest existing ancestor when the final component does not exist. This
+// keeps checks meaningful for paths that are about to be created, where a plain
+// filepath.EvalSymlinks would fail and leave the lexical path unchecked.
+func ResolvePathAgainstExistingAncestor(path string) (string, error) {
+	return resolvePathAgainstExistingAncestor(path)
+}
+
 func resolvePathAgainstExistingAncestor(path string) (string, error) {
 	cleaned := filepath.Clean(path)
 	for current := cleaned; ; current = filepath.Dir(current) {
@@ -311,11 +330,21 @@ type ReadFileTool struct {
 }
 
 type ReadFileLinesTool struct {
-	fs            fileSystem
-	workspace     string
-	maxSize       int64
-	maxLines      int
-	maxLineLength int
+	fs                   fileSystem
+	workspace            string
+	maxSize              int64
+	maxLines             int
+	maxLineLength        int
+	maxInlineResultChars int
+}
+
+// ReadFileAutoTool is the default read_file implementation: it returns
+// line-numbered output for text files and falls back to raw byte output for
+// binary files. The caller can force byte mode by passing offset or length.
+type ReadFileAutoTool struct {
+	bytes     *ReadFileTool
+	lines     *ReadFileLinesTool
+	workspace string
 }
 
 func NewReadFileTool(
@@ -374,11 +403,58 @@ func NewReadFileLinesTool(
 	}
 }
 
+func NewReadFileAutoTool(
+	workspace string,
+	restrict bool,
+	maxReadFileSize int,
+	maxLines int,
+	maxLineLength int,
+	allowPaths ...[]*regexp.Regexp,
+) *ReadFileAutoTool {
+	return &ReadFileAutoTool{
+		bytes:     NewReadFileTool(workspace, restrict, maxReadFileSize, allowPaths...),
+		lines:     NewReadFileLinesTool(workspace, restrict, maxReadFileSize, maxLines, maxLineLength, allowPaths...),
+		workspace: workspace,
+	}
+}
+
+// SetMaxInlineResultChars caps the page size suggested for a truncated line so
+// the follow-up raw read stays inside the large-result inline budget.
+func (t *ReadFileLinesTool) SetMaxInlineResultChars(maxChars int) {
+	t.maxInlineResultChars = maxChars
+}
+
+func (t *ReadFileAutoTool) SetMaxInlineResultChars(maxChars int) {
+	t.lines.SetMaxInlineResultChars(maxChars)
+}
+
+func (t *ReadFileLinesTool) truncationPageSize() int64 {
+	page := int64(truncationHintPageSize)
+	if t.maxInlineResultChars > 0 {
+		budget := int64(t.maxInlineResultChars) - truncationHintReserve
+		if budget < 512 {
+			budget = 512
+		}
+		page = budget
+	}
+	if page > t.maxSize {
+		page = t.maxSize
+	}
+	if page <= 0 {
+		page = t.maxSize
+	}
+	return page
+}
+
 func (t *ReadFileTool) Name() string {
 	return "read_file"
 }
 
 func (t *ReadFileLinesTool) Name() string {
+	return "read_file"
+}
+
+func (t *ReadFileAutoTool) Name() string {
 	return "read_file"
 }
 
@@ -388,6 +464,10 @@ func (t *ReadFileTool) Description() string {
 
 func (t *ReadFileLinesTool) Description() string {
 	return "Read a UTF-8 text file from the filesystem. Output always includes line numbers in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed). Supports partial reads via `start_line` and `max_lines` for large text files."
+}
+
+func (t *ReadFileAutoTool) Description() string {
+	return "Read a file. Text files return line-numbered output in the format `LINE_NUMBER|LINE_CONTENT` (1-indexed) and support `start_line`/`max_lines`. Binary files automatically fall back to raw bytes: omit `offset` and `length` to read the default byte range, or pass them to paginate raw output. Passing `offset` or `length` forces raw byte mode for text files too."
 }
 
 func (t *ReadFileTool) Parameters() map[string]any {
@@ -429,6 +509,38 @@ func (t *ReadFileLinesTool) Parameters() map[string]any {
 			"max_lines": map[string]any{
 				"type":        "integer",
 				"description": "Maximum number of lines to read.",
+			},
+		},
+		"required": []string{"path"},
+	}
+}
+
+func (t *ReadFileAutoTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Path to the file to read.",
+			},
+			"start_line": map[string]any{
+				"type":        "integer",
+				"description": "Text files: line number to start reading from (1-indexed, inclusive).",
+				"default":     1,
+			},
+			"max_lines": map[string]any{
+				"type":        "integer",
+				"description": "Text files: maximum number of lines to read.",
+			},
+			"offset": map[string]any{
+				"type":        "integer",
+				"description": "Binary files or raw reads: byte offset to start reading from. Providing offset or length forces byte mode. Omit both to read the default byte range.",
+				"default":     0,
+			},
+			"length": map[string]any{
+				"type":        "integer",
+				"description": "Binary files or raw reads: maximum number of bytes to read. Omit to use the default read size.",
+				"default":     t.bytes.maxSize,
 			},
 		},
 		"required": []string{"path"},
@@ -532,6 +644,9 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	data := probe[:min(int64(n), length)]
 
 	if len(data) == 0 {
+		if totalSize == 0 || (totalSize < 0 && offset == 0) {
+			return NewToolResult("[file is empty (0 bytes); do not retry]")
+		}
 		return NewToolResult("[END OF FILE - no content at this offset]")
 	}
 
@@ -654,9 +769,14 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	var byteBudgetTruncated bool
 	var lineTruncated bool
 	var linesTruncated int64
+	var firstLineByteOffset int64
+	var truncatedLineNumber int64
+	var truncatedLineByteOffset int64
+	var truncatedLinePrefixLen int64
+	var truncatedLineAtByteBudget bool
 
 	for lineIndex < startLine {
-		hasLine, _, consumeErr := consumeNextLine(reader)
+		hasLine, consumedBytes, consumeErr := consumeNextLine(reader)
 		if consumeErr != nil {
 			return ErrorResult(fmt.Sprintf("failed to read file content: %v", consumeErr))
 		}
@@ -664,6 +784,7 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 			reachedEOF = true
 			break
 		}
+		firstLineByteOffset += consumedBytes
 		lineIndex++
 	}
 
@@ -672,6 +793,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	lineBuf := make([]byte, 0, 4096)
 	var prefixBuf [24]byte
 	for !reachedEOF && (limit < 0 || linesRead < limit) {
+		currentLine := lineIndex
+		lineStartOffset := firstLineByteOffset + fileBytesRead
 		prefix := strconv.AppendInt(prefixBuf[:0], lineIndex, 10)
 		prefix = append(prefix, '|')
 		remaining := t.maxSize - outputBytesRead - int64(len(prefix))
@@ -726,6 +849,10 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 				displayLine = append(displayLine, '\n')
 			}
 			linesTruncated++
+			if truncatedLineNumber == 0 {
+				truncatedLineNumber = currentLine
+				truncatedLineByteOffset = lineStartOffset
+			}
 		}
 
 		if cutAtLineAllowance && (len(displayLine) == 0 || displayLine[len(displayLine)-1] != '\n') {
@@ -760,6 +887,12 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		if cutAtByteBudget {
 			byteBudgetTruncated = true
 			lineTruncated = true
+			if truncatedLineNumber == 0 {
+				truncatedLineNumber = currentLine
+				truncatedLineByteOffset = lineStartOffset
+				truncatedLinePrefixLen = int64(len(line))
+				truncatedLineAtByteBudget = true
+			}
 			break
 		}
 	}
@@ -776,6 +909,9 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if linesRead == 0 && content.Len() == 0 {
+		if totalSize == 0 || (totalSize < 0 && startLine == 1) {
+			return NewToolResult("[file is empty (0 bytes); do not retry]")
+		}
 		return NewToolResult(fmt.Sprintf("[END OF FILE - no content at or after start_line=%d]", startLine))
 	}
 
@@ -783,8 +919,8 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 	endLine := startLine + linesRead - 1
 	displayPath := filepath.Base(path)
 	header := fmt.Sprintf(
-		"[file: %s | read: lines %d-%d (1-indexed) | file_bytes: %d | output_bytes: %d]",
-		displayPath, start, endLine, fileBytesRead, outputBytesRead,
+		"[file: %s | read: lines %d-%d (1-indexed) | file_bytes: %d | output_bytes: %d | first_line_byte_offset: %d]",
+		displayPath, start, endLine, fileBytesRead, outputBytesRead, firstLineByteOffset,
 	)
 
 	switch {
@@ -817,18 +953,108 @@ func (t *ReadFileLinesTool) Execute(ctx context.Context, args map[string]any) *T
 		header += "\n[END OF FILE - no further content.]"
 	}
 
+	if truncatedLineNumber > 0 && (linesTruncated > 0 || lineTruncated) {
+		pageSize := t.truncationPageSize()
+		if truncatedLineAtByteBudget {
+			continueOffset := truncatedLineByteOffset + truncatedLinePrefixLen
+			header += fmt.Sprintf(
+				"\n[LINE TRUNCATED - line %d was cut at the %d-byte budget; its raw bytes start at offset %d and the returned prefix ends at offset %d. Call read_file with offset=%d and length=%d to continue; repeat with the next offset until EOF.]",
+				truncatedLineNumber,
+				t.maxSize,
+				truncatedLineByteOffset,
+				continueOffset,
+				continueOffset,
+				pageSize,
+			)
+		} else {
+			header += fmt.Sprintf(
+				"\n[LINE TRUNCATED - line %d was cut after %d characters; its raw bytes start at offset %d. Call read_file with offset=%d and length=%d to page the full line; repeat with the offset from the next header until EOF.]",
+				truncatedLineNumber,
+				t.maxLineLength,
+				truncatedLineByteOffset,
+				truncatedLineByteOffset,
+				pageSize,
+			)
+		}
+	}
+
 	logger.DebugCF("tool", "ReadFileTool execution completed successfully",
 		map[string]any{
-			"path":              path,
-			"lines_read":        linesRead,
-			"file_bytes_read":   fileBytesRead,
-			"output_bytes_read": outputBytesRead,
-			"truncated":         byteBudgetTruncated,
-			"lines_truncated":   linesTruncated,
-			"tool":              t.Name(),
+			"path":                       path,
+			"lines_read":                 linesRead,
+			"file_bytes_read":            fileBytesRead,
+			"output_bytes_read":          outputBytesRead,
+			"first_line_byte_offset":     firstLineByteOffset,
+			"truncated":                  byteBudgetTruncated,
+			"lines_truncated":            linesTruncated,
+			"truncated_line":             truncatedLineNumber,
+			"truncated_line_byte_offset": truncatedLineByteOffset,
+			"tool":                       t.Name(),
 		})
 
 	return NewToolResult(header + "\n\n" + content.String())
+}
+
+func (t *ReadFileAutoTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	path, ok := args["path"].(string)
+	if !ok {
+		return ErrorResult("path is required")
+	}
+
+	lineArgs := hasReadFileArg(args, "start_line", "max_lines")
+	byteArgs := hasReadFileArg(args, "offset", "length")
+	if lineArgs && byteArgs {
+		return ErrorResult(
+			"use either start_line/max_lines (text files) or offset/length (binary or raw reads), not both",
+		)
+	}
+
+	// An explicit byte range keeps the pre-auto behavior and lets the model
+	// page through text files that are better read raw (for example minified
+	// files with very long lines).
+	if byteArgs {
+		return t.bytes.Execute(ctx, args)
+	}
+
+	binary, errResult := t.isBinary(path)
+	if errResult != nil {
+		return errResult
+	}
+	if !binary {
+		return t.lines.Execute(ctx, args)
+	}
+	if lineArgs {
+		return ErrorResult("file appears to be binary; use offset/length to read raw bytes")
+	}
+	return t.bytes.Execute(ctx, args)
+}
+
+func (t *ReadFileAutoTool) isBinary(path string) (bool, *ToolResult) {
+	file, err := t.bytes.fs.Open(path)
+	if err != nil {
+		return false, ErrorResult(err.Error())
+	}
+	defer file.Close()
+
+	if info, statErr := file.Stat(); statErr == nil && info.IsDir() {
+		return false, ErrorResult(fmt.Sprintf("failed to open file: path is a directory: %s", path))
+	}
+
+	sample := make([]byte, 512)
+	n, readErr := file.Read(sample)
+	if readErr != nil && readErr != io.EOF {
+		return false, ErrorResult(fmt.Sprintf("failed to read file: %v", readErr))
+	}
+	return isBinaryReadFileData(sample[:n]), nil
+}
+
+func hasReadFileArg(args map[string]any, names ...string) bool {
+	for _, name := range names {
+		if value, ok := args[name]; ok && value != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func isBinaryReadFileData(data []byte) bool {
@@ -967,9 +1193,103 @@ func readerHasMoreContent(reader *bufio.Reader) (bool, error) {
 }
 
 type WriteFileTool struct {
-	fs        fileSystem
-	workspace string
-	altTools  []string
+	fs       fileSystem
+	altTools []string
+}
+
+// maxWriteFileCompareBytes bounds how much write_file reads from an existing
+// file to detect identical or append-shaped content. Bigger files fall back to
+// the overwrite guard instead of paying an extra full read.
+const maxWriteFileCompareBytes = 8 << 20
+
+// writeVerifyChunkSize bounds the read-back buffer. The verification streams
+// the file through this buffer instead of reading it into a second []byte, so
+// a large write costs one fixed allocation rather than twice the content size.
+const writeVerifyChunkSize = 32 * 1024
+
+// writeAction is the action a successful write_file call performed.
+type writeAction string
+
+const (
+	writeActionCreated     writeAction = "created"
+	writeActionOverwritten writeAction = "overwritten"
+	writeActionAppended    writeAction = "appended"
+	writeActionUnchanged   writeAction = "unchanged"
+)
+
+// writeResultError is the machine-readable error code in a write_file result.
+type writeResultError string
+
+const (
+	writeErrorFileExists       writeResultError = "file_exists"
+	writeErrorReadBackFailed   writeResultError = "read_back_failed"
+	writeErrorReadBackMismatch writeResultError = "read_back_mismatch"
+)
+
+// syntaxStatus is the verdict of a completed quick syntax check.
+type syntaxStatus string
+
+const syntaxStatusOK syntaxStatus = "ok"
+
+// writeFileConflict is the machine-readable payload returned when write_file
+// refuses to replace an existing file. The model can read path and
+// recommended_action without parsing the prose error, so it does not have to
+// probe the filesystem to pick its next call.
+type writeFileConflict struct {
+	Error             writeResultError `json:"error"`
+	Path              string           `json:"path"`
+	ResolvedPath      string           `json:"resolved_path"`
+	RecommendedAction string           `json:"recommended_action"`
+	AvailableActions  []string         `json:"available_actions"`
+	ExistingBytes     int64            `json:"existing_bytes"`
+	NewBytes          int              `json:"new_bytes"`
+	OverwriteRequired bool             `json:"overwrite_required"`
+}
+
+// writeFileResult is the machine-readable success payload. It tells the model
+// what actually happened (action), where the write landed (resolved_path), how
+// many bytes reached the file (bytes_written), whether a read-back matched
+// (verified), and whether the quick syntax check found a problem.
+type writeFileResult struct {
+	Success      bool        `json:"success"`
+	Action       writeAction `json:"action"`
+	ResolvedPath string      `json:"resolved_path"`
+	BytesWritten int         `json:"bytes_written"`
+	// Verified is true when the content was confirmed byte-for-byte: by a
+	// read-back after a write, or by the equality comparison for an unchanged
+	// no-op.
+	Verified    bool             `json:"verified"`
+	Syntax      syntaxStatus     `json:"syntax,omitempty"`
+	SyntaxError string           `json:"syntax_error,omitempty"`
+	Error       writeResultError `json:"error,omitempty"`
+	Message     string           `json:"message,omitempty"`
+	Detail      string           `json:"detail,omitempty"`
+}
+
+// pathResolver is implemented by filesystem backends that know where a tool
+// path lands on the host. write_file uses it to report resolved_path without
+// carrying a second copy of the backend's relative-path rules.
+type pathResolver interface {
+	ResolvePath(path string) string
+}
+
+// resolveToolPath asks the backend where path lands, falling back to the
+// process working directory for custom backends and test doubles.
+func resolveToolPath(sysFs fileSystem, path string) string {
+	if resolver, ok := sysFs.(pathResolver); ok {
+		return resolver.ResolvePath(path)
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
+
+// writePolicyChecker exposes the write tool's policy checks without opening or
+// modifying the target file.
+type writePolicyChecker interface {
+	checkWrite(path string) error
+	checkRead(path string) error
 }
 
 func NewWriteFileTool(
@@ -989,8 +1309,7 @@ func NewWriteFileTool(
 			workspace:  workspace,
 			restrict:   restrict,
 		},
-		workspace: workspace,
-		altTools:  []string{"append_file", "edit_file"},
+		altTools: []string{"append_file", "edit_file"},
 	}
 }
 
@@ -1019,7 +1338,9 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	desc := "Write content to a file, replacing any existing content. Content is written byte-for-byte after argument decoding. Standard JSON escaping applies: \\n for newline and \\\\n for a literal backslash-n sequence. If the file already exists you must set overwrite=true, which replaces the ENTIRE file."
+	desc := "Write content to a file, replacing any existing content. Content is written byte-for-byte after argument decoding. Standard JSON escaping applies: \\n for newline and \\\\n for a literal backslash-n sequence. " +
+		"If the file already exists, identical content is a no-op and content that only extends the existing file is accepted; any other replacement requires overwrite=true, which replaces the ENTIRE file. " +
+		"Returns JSON with the resolved absolute path, bytes_written, verified (a byte-for-byte read-back), and a quick syntax check for known extensions."
 	if phrase := t.altToolsPhrase(); phrase != "" {
 		desc += fmt.Sprintf(
 			" To add to or change part of an existing file without losing its current contents, use %s instead.",
@@ -1030,10 +1351,10 @@ func (t *WriteFileTool) Description() string {
 }
 
 func (t *WriteFileTool) Parameters() map[string]any {
-	overwriteDesc := "Set to true to replace an existing file in full. This discards the file's current contents."
+	overwriteDesc := "Set to true to replace an existing file in full, discarding its current contents. Omit it for new files, unchanged content, or content that only extends the existing file."
 	if phrase := t.altToolsPhrase(); phrase != "" {
 		overwriteDesc = fmt.Sprintf(
-			"Set to true to replace an existing file in full. This discards the file's current contents — to preserve them, use %s instead of write_file.",
+			"Set to true to replace an existing file in full, discarding its current contents. Omit it for new files, unchanged content, or content that only extends the existing file; to preserve the current contents, use %s instead.",
 			phrase,
 		)
 	}
@@ -1070,32 +1391,277 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	}
 
 	overwrite, _ := args["overwrite"].(bool)
+	contentBytes := []byte(content)
 
-	if !overwrite {
-		if _, err := t.fs.Open(path); err == nil {
-			if phrase := t.altToolsPhrase(); phrase != "" {
-				return ErrorResult(
-					fmt.Sprintf(
-						"file: %s already exists. To add to it or change part of it without losing the current contents, use %s. Only set overwrite=true if you intend to replace the entire file.",
-						path,
-						phrase,
-					),
-				)
-			}
-			return ErrorResult(
-				fmt.Sprintf(
-					"file: %s already exists. Set overwrite=true only if you intend to replace the entire file, which discards its current contents.",
-					path,
-				),
-			)
+	// Apply the write policy before stat/read so a refused path reports the
+	// policy error instead of a misleading "file already exists" conflict.
+	checker, hasPolicy := t.fs.(writePolicyChecker)
+	if hasPolicy {
+		if err := checker.checkWrite(path); err != nil {
+			return ErrorResult(err.Error())
 		}
 	}
 
-	if err := t.fs.WriteFile(path, []byte(content)); err != nil {
+	info, statErr := t.fs.Stat(path)
+	exists := statErr == nil
+	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+		return ErrorResult(fmt.Sprintf("failed to stat file: %v", statErr))
+	}
+	if exists && info.IsDir() {
+		return ErrorResult(fmt.Sprintf("path is a directory, expected a file: %s", path))
+	}
+	regular := exists && info.Mode().IsRegular()
+
+	// Only read when the existing file can possibly be identical to, or a
+	// prefix of, the incoming content. A bigger file cannot be either, and the
+	// cap keeps a large existing file from doubling the write's memory cost.
+	// The read policy can forbid inspecting a path that the write policy allows
+	// (for example .env.example), in which case the content is not compared.
+	readAllowed := !hasPolicy || checker.checkRead(path) == nil
+	var existing []byte
+	canCompare := readAllowed && regular && info.Size() <= int64(len(contentBytes)) &&
+		info.Size() <= maxWriteFileCompareBytes
+	if canCompare {
+		var readErr error
+		existing, readErr = t.fs.ReadFile(path)
+		if readErr != nil {
+			return ErrorResult(readErr.Error())
+		}
+	}
+
+	if exists && canCompare {
+		if bytes.Equal(existing, contentBytes) {
+			// Writing identical bytes would only churn the mtime and wake file
+			// watchers, so treat it as a successful no-op. The comparison above
+			// already proves the file matches, so no read-back is needed.
+			return t.unchangedResult(path, contentBytes)
+		}
+		if bytes.HasPrefix(contentBytes, existing) {
+			// The caller sent the old file plus a suffix: this is an append in
+			// disguise, and applying only the suffix cannot lose existing data.
+			appended := len(contentBytes) - len(existing)
+			if err := appendFile(t.fs, path, contentBytes[len(existing):]); err != nil {
+				return ErrorResult(err.Error())
+			}
+			// Verify only the appended suffix: seeking past the old end keeps
+			// the read-back proportional to what this call actually wrote.
+			return t.successResult(writeActionAppended, path, appended, contentBytes, len(existing))
+		}
+	}
+
+	if exists && !overwrite {
+		return t.conflictResult(path, info.Size(), len(contentBytes))
+	}
+
+	if err := t.fs.WriteFile(path, contentBytes); err != nil {
 		return ErrorResult(err.Error())
 	}
 
-	return SilentResult(fmt.Sprintf("File written: %s", path))
+	action := writeActionCreated
+	if exists {
+		action = writeActionOverwritten
+	}
+	return t.successResult(action, path, len(contentBytes), contentBytes, 0)
+}
+
+// successResult verifies the write and returns the structured payload. content
+// is the full post-write file; verifyFrom is the offset where this call started
+// writing, so an append only re-reads its suffix.
+func (t *WriteFileTool) successResult(
+	action writeAction, path string,
+	bytesWritten int,
+	content []byte,
+	verifyFrom int,
+) *ToolResult {
+	resolved := resolveToolPath(t.fs, path)
+	verified, err := verifyWrittenFile(t.fs, path, content[verifyFrom:], int64(verifyFrom))
+	if err != nil {
+		return writeFileFailure(
+			action,
+			resolved,
+			bytesWritten,
+			writeErrorReadBackFailed,
+			"the file was written but the read-back failed; inspect it before retrying",
+			err.Error(),
+		)
+	}
+	if !verified {
+		return writeFileFailure(
+			action,
+			resolved,
+			bytesWritten,
+			writeErrorReadBackMismatch,
+			"the file was written but the read-back did not match; inspect it before retrying",
+			"",
+		)
+	}
+
+	result := writeFileResult{
+		Success:      true,
+		Action:       action,
+		ResolvedPath: resolved,
+		BytesWritten: bytesWritten,
+		Verified:     true,
+	}
+	applySyntaxCheck(&result, path, content)
+	return jsonToolResult(result, false)
+}
+
+// unchangedResult reports the no-op path. The byte comparison that detected it
+// already proves the file matches, so no extra read-back is needed.
+func (t *WriteFileTool) unchangedResult(path string, content []byte) *ToolResult {
+	result := writeFileResult{
+		Success:      true,
+		Action:       writeActionUnchanged,
+		ResolvedPath: resolveToolPath(t.fs, path),
+		BytesWritten: 0,
+		Verified:     true,
+	}
+	applySyntaxCheck(&result, path, content)
+	return jsonToolResult(result, false)
+}
+
+// applySyntaxCheck fills the advisory syntax fields for known extensions. A
+// skipped check is reported as absent rather than as a pass, so the model never
+// sees "ok" for a check that did not run.
+func applySyntaxCheck(result *writeFileResult, path string, content []byte) {
+	check := quickSyntaxCheck(path, content)
+	if !check.Checked || check.Skipped {
+		return
+	}
+	if check.Problem == "" {
+		result.Syntax = syntaxStatusOK
+	} else {
+		result.SyntaxError = check.Problem
+	}
+}
+
+func writeFileFailure(
+	action writeAction,
+	resolved string,
+	bytesWritten int,
+	code writeResultError,
+	message, detail string,
+) *ToolResult {
+	result := writeFileResult{
+		Success:      false,
+		Action:       action,
+		ResolvedPath: resolved,
+		BytesWritten: bytesWritten,
+		Verified:     false,
+		Error:        code,
+		Message:      message,
+		Detail:       detail,
+	}
+	return jsonToolResult(result, true)
+}
+
+// jsonToolResult encodes a structured tool payload. The payload types contain
+// only strings, bools, and ints, so encoding cannot fail today; the error path
+// keeps the tool contract explicit if a future field changes that.
+func jsonToolResult(payload any, isError bool) *ToolResult {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to encode tool result: %v", err))
+	}
+	if isError {
+		return ErrorResult(string(encoded))
+	}
+	return SilentResult(string(encoded))
+}
+
+// verifyWrittenFile streams the file back from offset and compares it with
+// expected. The fixed buffer keeps the check's memory flat regardless of file
+// size. Appends need a seekable file; every production backend opens a regular
+// file through *os.File, so a non-seeker is a backend contract violation.
+func verifyWrittenFile(sysFs fileSystem, path string, expected []byte, offset int64) (bool, error) {
+	f, err := sysFs.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	if offset > 0 {
+		seeker, ok := f.(io.Seeker)
+		if !ok {
+			return false, fmt.Errorf("read-back of appended content requires a seekable file")
+		}
+		if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
+			return false, err
+		}
+	}
+
+	bufSize := len(expected)
+	if bufSize == 0 {
+		bufSize = 1 // one spare byte detects content past an empty expected value
+	}
+	if bufSize > writeVerifyChunkSize {
+		bufSize = writeVerifyChunkSize
+	}
+	buf := make([]byte, bufSize)
+	matched := 0
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			if matched+n > len(expected) || !bytes.Equal(buf[:n], expected[matched:matched+n]) {
+				return false, nil
+			}
+			matched += n
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return false, readErr
+		}
+	}
+	return matched == len(expected), nil
+}
+
+// conflictResult builds the "file already exists" error. The first line stays
+// human-readable and backward compatible; the second is a structured payload
+// that names the path and the safest next action.
+func (t *WriteFileTool) conflictResult(path string, existingBytes int64, newBytes int) *ToolResult {
+	available := make([]string, 0, len(t.altTools)+1)
+	recommended := "overwrite"
+	if len(t.altTools) > 0 {
+		recommended = t.altTools[0]
+		for _, name := range t.altTools {
+			if name == "edit_file" {
+				recommended = name
+				break
+			}
+		}
+		available = append(available, t.altTools...)
+	}
+	available = append(available, "overwrite")
+
+	message := fmt.Sprintf(
+		"file: %s already exists. Set overwrite=true only if you intend to replace the entire file, which discards its current contents.",
+		path,
+	)
+	if phrase := t.altToolsPhrase(); phrase != "" {
+		message = fmt.Sprintf(
+			"file: %s already exists. To add to it or change part of it without losing the current contents, use %s. Only set overwrite=true if you intend to replace the entire file.",
+			path,
+			phrase,
+		)
+	}
+
+	payload, err := json.Marshal(writeFileConflict{
+		Error:             writeErrorFileExists,
+		Path:              path,
+		ResolvedPath:      resolveToolPath(t.fs, path),
+		RecommendedAction: recommended,
+		AvailableActions:  available,
+		ExistingBytes:     existingBytes,
+		NewBytes:          newBytes,
+		OverwriteRequired: true,
+	})
+	if err != nil {
+		return ErrorResult(message)
+	}
+	return ErrorResult(fmt.Sprintf("%s\nstructured: %s", message, payload))
 }
 
 type ListDirTool struct {
@@ -1196,6 +1762,14 @@ func (h *hostFs) WriteFile(path string, data []byte) error {
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
 	// Using 0o600 (owner read/write only) for secure default permissions.
 	return fileutil.WriteFileAtomic(path, data, 0o600)
+}
+
+// ResolvePath reports the absolute path hostFs targets.
+func (h *hostFs) ResolvePath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 // fileAppender is implemented by filesystems that can append without reading
@@ -1445,6 +2019,21 @@ func (r *sandboxFs) Open(path string) (fs.File, error) {
 	return f, err
 }
 
+// ResolvePath reports the workspace path sandboxFs targets.
+func (r *sandboxFs) ResolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if r.workspace == "" {
+		return path
+	}
+	abs, err := filepath.Abs(r.workspace)
+	if err != nil {
+		return path
+	}
+	return filepath.Join(abs, path)
+}
+
 // whitelistFs wraps a sandboxFs and allows access to specific paths outside
 // the workspace when they match any of the provided patterns.
 type whitelistFs struct {
@@ -1497,6 +2086,14 @@ func (w *whitelistFs) Open(path string) (fs.File, error) {
 		return w.host.Open(path)
 	}
 	return w.sandbox.Open(path)
+}
+
+// ResolvePath delegates to the backend that serves the path.
+func (w *whitelistFs) ResolvePath(path string) string {
+	if w.matches(path) {
+		return w.host.ResolvePath(path)
+	}
+	return w.sandbox.ResolvePath(path)
 }
 
 // buildFs applies the read policy to every filesystem tool that can inspect files.

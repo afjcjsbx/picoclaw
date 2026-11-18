@@ -1,6 +1,10 @@
+---
+description: "PicoClaw configuration reference: environment variables, workspace layout, routing rules, sandbox and isolation settings."
+title: "Configuration Guide"
+---
 # ⚙️ Configuration Guide
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ## ⚙️ Configuration
 
@@ -69,7 +73,9 @@ The Gateway can reload `config.json` without a restart. Two independent triggers
 
   The default is `false`. When enabled, PicoClaw polls the config file (every 2 seconds, scaled by `power.poll_interval_multiplier`) and reloads after a change is written and validated. An invalid or partially written file is ignored and retried on the next poll; the last valid configuration stays in effect.
 
-- **`POST /reload`** — always available, regardless of `gateway.hot_reload`, on the shared Gateway HTTP server. It requires the Gateway auth token (`Authorization: Bearer <token>`) when one is configured and returns `202 Accepted` as soon as the reload is scheduled. The reload itself runs asynchronously; watch the `gateway.reload.started` / `gateway.reload.completed` / `gateway.reload.failed` runtime events, or the logs, for the outcome.
+- **`POST /reload`** — always available, regardless of `gateway.hot_reload`, on the shared Gateway HTTP server. It requires the Gateway auth token (`Authorization: Bearer <token>`) when one is configured and returns `202 Accepted` as soon as the reload is scheduled. The reload itself runs asynchronously; watch the `gateway.reload.started` / `gateway.reload.completed` / `gateway.reload.failed` runtime events, or the logs, for the outcome. `GET /reload/status` reports the latest reload generation and outcome so callers can wait for completion.
+
+Saving model settings from the Web UI triggers a reload automatically and clears the dashboard's restart-required banner once the reload succeeds. Failed reloads leave the previous configuration active and keep the banner visible.
 
 A reload swaps the provider and the agent registry/configuration, restarts the cron, heartbeat, media, device and voice services, and restarts only the channels whose configuration changed. In-flight requests are allowed to drain before the previous provider is closed.
 
@@ -87,6 +93,7 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ├── memory/           # Long-term memory (MEMORY.md)
 ├── state/            # Persistent state (last channel, etc.)
 ├── cron/             # Scheduled jobs database
+├── commands/         # Custom prompt commands (*.md)
 ├── skills/           # Custom skills
 ├── AGENT.md          # Agent behavior guide
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
@@ -225,6 +232,7 @@ dammi le ultime news
 
 - Generic slash commands are executed through a single path in `pkg/agent/loop.go` via `commands.Executor`.
 - Channel adapters no longer consume generic commands locally; they forward inbound text to the bus/agent path. Telegram still auto-registers supported commands such as `/start`, `/help`, `/show`, `/list`, `/use` at startup.
+- Custom prompt commands from `<workspace>/commands/` and `<PICOCLAW_HOME>/commands/` are expanded into a user prompt and continue through the normal agent turn. See [Custom Prompt Commands](custom-commands.md).
 - Unknown slash command (for example `/foo`) passes through to normal LLM processing.
 - Registered but unsupported command on the current channel (for example `/show` on WhatsApp) returns an explicit user-facing error and stops further processing.
 
@@ -442,14 +450,14 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 
 #### Additional Exec Protection
 
-Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous commands:
+By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
 
 * `rm -rf`, `del /f`, `rmdir /s` — Bulk deletion
-* `format`, `mkfs`, `diskpart` — Disk formatting
-* `dd if=` — Disk imaging
-* Writing to `/dev/sd[a-z]` — Direct disk writes
-* `shutdown`, `reboot`, `poweroff` — System shutdown
-* Fork bomb `:(){ :|:& };:`
+* `format`, `mkfs`, `diskpart` — Disk formatting (always-on for disk formats)
+* `dd if=` — Disk imaging (always-on)
+* Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
+* `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
+* Fork bomb `:(){ :|:& };:` — Always-on
 
 ### File Access Control
 
@@ -462,15 +470,25 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 
 ### Read File Mode
 
-`read_file` has two mutually exclusive implementations selected by config. PicoClaw registers exactly one of them at startup:
+`read_file` has three modes selected by config. PicoClaw registers exactly one implementation at startup:
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `tools.read_file.enabled` | bool | `true` | Enables the `read_file` tool |
-| `tools.read_file.mode` | string | `bytes` | Selects the `read_file` implementation: `bytes` or `lines` |
+| `tools.read_file.mode` | string | `auto` | Selects the `read_file` implementation: `auto`, `bytes`, or `lines` |
 | `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes returned by `read_file` |
 | `tools.read_file.max_lines` | int | `2000` | Upper bound on lines returned by a single line-mode read; larger `max_lines` requests are clamped |
 | `tools.read_file.max_line_length` | int | `2000` | Maximum characters per line in the line-numbered view; the remainder is replaced by a ` ... [truncated]` marker |
+
+#### Mode: `auto` (default)
+
+Inspects the first 512 bytes. Text files use the line-numbered behavior below, while binary-looking files fall back to raw byte output instead of being rejected. The tool exposes both parameter sets:
+
+* `start_line` / `max_lines` select line mode for text files
+* `offset` / `length` select byte mode; supplying either one forces byte mode even for text files (useful for minified files with very long lines)
+* For binary files, omitting both `offset` and `length` reads the default `max_read_file_size` range
+* Mixing the two parameter sets in one call is rejected
+* An empty file returns `[file is empty (0 bytes); do not retry]` in every mode
 
 #### Mode: `bytes`
 
@@ -499,7 +517,7 @@ Parameters:
 
 Behavior notes:
 
-* Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes`
+* Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes` or `mode = auto`
 * Extremely long single lines are cut after `tools.read_file.max_line_length` characters with a ` ... [truncated]` marker, and the read continues with the next line; if the byte budget runs out mid-line, the header reports that cut instead
 
 Use `mode = lines` when:
@@ -515,7 +533,7 @@ Use `mode = lines` when:
   "tools": {
     "read_file": {
       "enabled": true,
-      "mode": "lines",
+      "mode": "auto",
       "max_read_file_size": 65536,
       "max_lines": 2000,
       "max_line_length": 2000
@@ -529,8 +547,8 @@ Use `mode = lines` when:
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `tools.exec.allow_remote` | bool | `false` | Allow exec tool from remote channels (Telegram/Discord etc.) |
-| `tools.exec.enable_deny_patterns` | bool | `true` | Enable dangerous command interception |
-| `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block |
+| `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
+| `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Custom regex patterns to allow |
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
@@ -1178,6 +1196,12 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 
 > **Note**: The `providers` format is deprecated. Use the new `model_list` format with `.security.yml` for better security.
 >
+> **`max_tool_iterations`**: Cap on LLM+tool rounds per turn. If the model still wants tools when the cap is hit, PicoClaw makes one extra tool-less call with the history plus a `user` message asking for a final summary of what was done, and returns that reply (the request itself is not saved to the session). It closes the turn; it does not grant more iterations or guarantee the task finished. If that call fails or returns nothing, the canned "reached `max_tool_iterations`" message is returned instead.
+>
+> **`max_tool_budget_warning_ratio`**: Share of `max_tool_iterations` after which the model gets one checkpoint notice (default `0.75`; strictly between `0` and `1`, otherwise the config is rejected; `0`/unset means the default). On the iteration that reaches it (75 of 100), PicoClaw appends `[SYSTEM NOTICE — iteration budget checkpoint] You have used 75 of 100 iterations. Checkpoint durable progress now, then continue the task; do not stop solely because of this warning.` to the last tool result of that iteration. It is plain text, not a `system` or `user` message; tools stay available and the task continues. It is sent once per turn and re-armed on the next turn. The threshold is `round(ratio × max_tool_iterations)`; when it falls on the last iteration (for example `max_tool_iterations: 2`) no notice is sent.
+>
+> **`run_budget_seconds`** / **`run_budget_warning_threshold`**: wall-clock budget of one turn, separate from `max_tool_iterations` (default off; `0` or `null` disables it). Every new user message starts a fresh count; it is not a cumulative session limit. Once `threshold × run_budget_seconds` has elapsed (default `0.8`; strictly between `0` and `1`, otherwise the config is rejected), the next batch of tool results gets a plain-text wrap-up notice appended to its last result: `SYSTEM NOTICE — Run time budget nearly exhausted. Stop new discovery/verification work now. Produce the required final answer from the state you already have, completing only mandatory writes.` It is not a `system` or `user` message, rewrites no persisted message, and is sent once per turn. It is only a warning: nothing is interrupted or terminated when the budget runs out, tools stay available, and the process is not stopped, so an external deadline still has to be enforced by whoever sets it. The notice is checked when tool results are handled, so a long model call cannot receive it mid-flight; if the threshold passes while there is no tool result to carry it (for example, the model answers without tools), nothing is sent and it is retried at the next batch. While a budget is set, non-streaming model calls whose model entry has no explicit `request_timeout` are also capped at the budget still left, never below 60 s; explicit `request_timeout` values and streaming calls are never touched. Sub-turns are not budgeted.
+>
 > **`max_parallel_tool_calls`**: Maximum number of tool calls from one model response that may run concurrently. `4` is the default; `0` or `1` = sequential. Only consecutive, compatible calls (read-only web tools and non-conflicting file operations) run together; see [Parallel tool calls](../architecture/parallel-tool-calls.md).
 >
 > **`memory`** (`agents.defaults.memory`): bounds the persistent memory injected into the system prompt. `memory_enabled` (default `true`) injects `memory/MEMORY.md` (`USER.md` is injected either way) and registers the `memory` tool (`add` / `replace` / `remove` on `MEMORY.md` or `USER.md`). `memory_char_limit` (`2200`) and `user_char_limit` (`1375`) cap those files; a write past the cap is refused with `success: false`, the characters to free and the current entries, and nothing is truncated or dropped silently. `daily_notes_enabled` (`true`) injects the last `recent_daily_notes_count` (`3`) daily notes (`memory/YYYYMM/YYYYMMDD.md`), each capped at `daily_notes_char_limit` (`1000`). A file that is already over its cap (for example a hand-edited `MEMORY.md`) is never rewritten: the prompt gets the newest sections whole, older ones reduced to their headings, and a footer pointing to the full file. The prompt carries a snapshot frozen when the session starts, so memory written mid-session reaches the file at once but shows up from the next session (or after `/clear`), which keeps the provider prompt cache warm. While memory is enabled, `write_file`, `edit_file` and `append_file` refuse any write to `MEMORY.md` and `USER.md` (reading them is fine), so the limits cannot be bypassed: only the `memory` tool changes them. The `exec` tool is not covered. Limits count characters, not bytes; a non-positive limit means the default.
@@ -1267,15 +1291,15 @@ PicoClaw supports cron-style scheduled tasks via the `cron` tool. The agent can 
 
 Scheduled tasks persist across restarts and are stored in `~/.picoclaw/workspace/cron/`.
 
-Command cron jobs can execute shell commands. By default, remote channels cannot schedule command jobs. To allow specific remote channels, set `command_allowed_remotes` to entries such as `"telegram"` or `"telegram:1234567890"`; use `"*"` only if every non-empty channel should be allowed. The `"*"` wildcard is potentially dangerous because any remote channel that can talk to PicoClaw can schedule shell commands. This does not bypass `allow_command`, `command_confirm`, or exec safety checks.
+Command cron jobs can execute shell commands. By default, remote channels cannot schedule command jobs. To allow specific remote channels, set `command_allowed_remotes` to entries such as `"telegram"` or `"telegram:1234567890"`; use `"*"` only if every non-empty channel should be allowed. The `"*"` wildcard is potentially dangerous because any remote channel that can talk to PicoClaw can schedule shell commands. This does not bypass `allow_command`, `command_confirm`, or exec safety checks. `command_allowed_remotes` is independent of `tools.exec.allow_remote`, which controls direct exec calls: remote cron command jobs do not require `allow_remote`, and PicoClaw re-checks the cron allowlist when a job fires.
 
 ### Advanced Topics
 
 | Topic | Description |
 | ----- | ----------- |
 | [Security Configuration](../security/security_configuration.md) | Store API keys and secrets in separate `.security.yml` file |
-| [Sensitive Data Filtering](../security/sensitive_data_filtering.md) | Filter API keys and tokens from tool results before sending to LLM |
-| [Hook System](../architecture/hooks/README.md) | Event-driven hooks: observers, interceptors, approval hooks |
+| [Sensitive Data Filtering](../security/sensitive_data_filtering.md) | Defense-in-depth redaction of exact configured secrets from tool results; not a DLP boundary |
+| [Hook System](../architecture/hooks/) | Event-driven hooks: observers, interceptors, approval hooks |
 | [Steering](../architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](../architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
 | [Context Management](../architecture/agent-refactor/context.md) | Context boundary detection, proactive budget check, compression |

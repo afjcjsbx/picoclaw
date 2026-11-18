@@ -17,6 +17,7 @@
       "context_window": 131072,
       "temperature": 0.7,
       "max_tool_iterations": 20,
+      "max_tool_budget_warning_ratio": 0.75,
       "max_parallel_turns": 5,
       "max_parallel_tool_calls": 4,
       "subturn": {
@@ -524,6 +525,7 @@
     "exec": {
       "enabled": true,
       "enable_deny_patterns": true,
+      "allow_remote": false,
       "custom_deny_patterns": null,
       "custom_allow_patterns": null
     },
@@ -592,9 +594,12 @@
     "message": {
       "enabled": true
     },
+    "reaction": {
+      "enabled": false
+    },
     "read_file": {
       "enabled": true,
-      "mode": "bytes"
+      "mode": "auto"
     },
     "serial": {
       "enabled": false
@@ -603,7 +608,7 @@
       "enabled": false
     },
     "todo": {
-      "enabled": true
+      "enabled": false
     },
     "spawn": {
       "enabled": true

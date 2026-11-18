@@ -52,6 +52,40 @@ func TestBuildRequestBody_KeepsTemperatureForSupportedModel(t *testing.T) {
 	}
 }
 
+func TestBuildRequestBody_AutomaticPromptCaching(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "claude-sonnet-5-5", want: true},
+		{model: "claude-opus-4-6", want: true},
+		{model: "anthropic/claude-haiku-4-5", want: true},
+		{model: "test-model", want: false},
+		{model: "qwen3-coder-plus", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			body, err := buildRequestBody(
+				[]Message{{Role: "user", Content: "hello"}},
+				nil,
+				tt.model,
+				map[string]any{"max_tokens": 1024},
+			)
+			if err != nil {
+				t.Fatalf("buildRequestBody() error = %v", err)
+			}
+			cache, ok := body["cache_control"]
+			if ok != tt.want {
+				t.Fatalf("cache_control present = %v, want %v", ok, tt.want)
+			}
+			if tt.want && !reflect.DeepEqual(cache, map[string]any{"type": "ephemeral"}) {
+				t.Fatalf("cache_control = %#v, want ephemeral", cache)
+			}
+		})
+	}
+}
+
 func TestBuildRequestBody(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -233,6 +267,39 @@ func TestBuildRequestBody(t *testing.T) {
 				t.Errorf("buildRequestBody() mismatch:\ngot:\n%s\nwant:\n%s", gotJSON, wantJSON)
 			}
 		})
+	}
+}
+
+func TestParseResponseBody_CacheUsage(t *testing.T) {
+	body := []byte(`{
+		"id": "msg-cache",
+		"type": "message",
+		"role": "assistant",
+		"content": [{"type": "text", "text": "cached"}],
+		"stop_reason": "end_turn",
+		"model": "claude-sonnet-5-5",
+		"usage": {
+			"input_tokens": 10,
+			"output_tokens": 5,
+			"cache_read_input_tokens": 80,
+			"cache_creation_input_tokens": 20
+		}
+	}`)
+
+	got, err := parseResponseBody(body)
+	if err != nil {
+		t.Fatalf("parseResponseBody() error = %v", err)
+	}
+	if got.Usage == nil {
+		t.Fatal("Usage = nil, want non-nil")
+	}
+	if got.Usage.PromptTokens != 110 || got.Usage.TotalTokens != 115 {
+		t.Fatalf("PromptTokens/TotalTokens = %d/%d, want 110/115",
+			got.Usage.PromptTokens, got.Usage.TotalTokens)
+	}
+	if got.Usage.CacheReadTokens != 80 || got.Usage.CacheCreationTokens != 20 {
+		t.Fatalf("cache read/creation = %d/%d, want 80/20",
+			got.Usage.CacheReadTokens, got.Usage.CacheCreationTokens)
 	}
 }
 

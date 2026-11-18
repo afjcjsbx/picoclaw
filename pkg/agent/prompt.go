@@ -47,6 +47,7 @@ type PromptSourceID string
 const (
 	PromptSourceKernel         PromptSourceID = "runtime.kernel"
 	PromptSourceHierarchy      PromptSourceID = "runtime.hierarchy"
+	PromptSourceIsolation      PromptSourceID = "runtime.isolation"
 	PromptSourceWorkspace      PromptSourceID = "workspace.definition"
 	PromptSourceRuntime        PromptSourceID = "runtime.context"
 	PromptSourceSummary        PromptSourceID = "context.summary"
@@ -93,10 +94,13 @@ type PromptSource struct {
 }
 
 type PromptPart struct {
-	ID      string
-	Layer   PromptLayer
-	Slot    PromptSlot
-	Source  PromptSource
+	ID     string
+	Layer  PromptLayer
+	Slot   PromptSlot
+	Source PromptSource
+	// Order breaks ties within the same layer and slot. Lower values render
+	// first; the zero value keeps the default source-ID ordering.
+	Order   int
 	Title   string
 	Content string
 	Stable  bool
@@ -171,6 +175,13 @@ func builtinPromptSources() []PromptSourceDescriptor {
 			Owner:           "agent",
 			Description:     "Prompt hierarchy rules",
 			Allowed:         []PromptPlacement{{Layer: PromptLayerKernel, Slot: PromptSlotHierarchy}},
+			StableByDefault: true,
+		},
+		{
+			ID:              PromptSourceIsolation,
+			Owner:           "isolation",
+			Description:     "Active subprocess sandbox boundaries",
+			Allowed:         []PromptPlacement{{Layer: PromptLayerKernel, Slot: PromptSlotIdentity}},
 			StableByDefault: true,
 		},
 		{
@@ -452,6 +463,9 @@ func sortPromptParts(parts []PromptPart) []PromptPart {
 		}
 		if d := slotPriority(b.Slot) - slotPriority(a.Slot); d != 0 {
 			return d
+		}
+		if a.Order != b.Order {
+			return a.Order - b.Order
 		}
 		if a.Source.ID != b.Source.ID {
 			return strings.Compare(string(a.Source.ID), string(b.Source.ID))

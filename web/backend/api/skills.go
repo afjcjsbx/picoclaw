@@ -502,7 +502,13 @@ func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 			matchedNonWorkspace = true
 			continue
 		}
-		if err := os.RemoveAll(filepath.Dir(skill.Path)); err != nil {
+		dirPath := filepath.Clean(filepath.Dir(skill.Path))
+		workspaceDir := filepath.Clean(cfg.WorkspacePath())
+		if !isWithinDir(dirPath, workspaceDir) {
+			http.Error(w, "path escapes workspace directory", http.StatusBadRequest)
+			return
+		}
+		if err := os.RemoveAll(dirPath); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to delete skill: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -516,6 +522,27 @@ func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Skill not found", http.StatusNotFound)
+}
+
+// isWithinDir reports whether dirPath is parentDir or a proper subdirectory of
+// it, after resolving symlinks. A skill loader path must never be allowed to
+// point RemoveAll outside the workspace.
+func isWithinDir(dirPath, parentDir string) bool {
+	if !strings.HasPrefix(dirPath, parentDir+string(os.PathSeparator)) && dirPath != parentDir {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(dirPath)
+	if err != nil {
+		// The path does not exist yet or cannot be resolved; the lexical check
+		// above is the only available answer.
+		return true
+	}
+	resolvedParent, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		return true
+	}
+	return strings.HasPrefix(resolved, resolvedParent+string(os.PathSeparator)) ||
+		resolved == resolvedParent
 }
 
 func newSkillsLoader(workspace string) *skills.SkillsLoader {

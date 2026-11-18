@@ -1098,6 +1098,23 @@ func (m *mockPreparedToolFeedbackEditor) PrepareToolFeedbackMessageContent(conte
 	return content
 }
 
+func TestOutboundMessageEditPayloadIncludesFinalFlag(t *testing.T) {
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "final",
+	})
+	if msg.Context.Raw == nil {
+		msg.Context.Raw = make(map[string]string)
+	}
+	msg.Context.Raw["outbound_kind"] = "final"
+
+	payload := outboundMessageEditPayload(msg, "final")
+	if got := payload["final"]; got != true {
+		t.Fatalf("final flag = %#v, want true", got)
+	}
+}
+
 func TestPreSend_PlaceholderEditSuccess(t *testing.T) {
 	m := newTestManager()
 	var sendCalled bool
@@ -2680,11 +2697,67 @@ func TestPreSend_TypingStopCalled(t *testing.T) {
 		stopCalled = true
 	})
 
-	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"})
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
 	m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
 		t.Fatal("expected typing stop func to be called")
+	}
+}
+
+func TestPreSend_AuxiliaryMessageKeepsTyping(t *testing.T) {
+	m := newTestManager()
+	var stopCalled bool
+
+	m.RecordTypingStop("test", "123", func() {
+		stopCalled = true
+	})
+
+	aux := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "reading file",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"message_kind": "tool_feedback",
+			},
+		},
+	})
+	m.preSend(context.Background(), "test", aux, &mockChannel{})
+
+	if stopCalled {
+		t.Fatal("auxiliary messages must not stop typing")
+	}
+
+	finalMsg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "answer",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
+	m.preSend(context.Background(), "test", finalMsg, &mockChannel{})
+
+	if !stopCalled {
+		t.Fatal("final message must stop typing")
 	}
 }
 
@@ -2727,7 +2800,18 @@ func TestPreSend_TypingAndPlaceholder(t *testing.T) {
 	})
 	m.RecordPlaceholder("test", "123", "456")
 
-	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"})
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
 	_, edited := m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
@@ -2791,7 +2875,18 @@ func TestRecordTypingStop_ReplacesExistingStop(t *testing.T) {
 		t.Fatalf("expected replacement typing stop to stay active until preSend, got %d calls", newStopCalls)
 	}
 
-	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"})
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
 	m.preSend(context.Background(), "test", msg, &mockChannel{})
 
 	if newStopCalls != 1 {
@@ -2988,7 +3083,18 @@ func TestPreSendStillWorksWithWrappedTypes(t *testing.T) {
 	})
 	m.RecordPlaceholder("test", "chat1", "ph_id")
 
-	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "chat1", Content: "response"})
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat1",
+		Content: "response",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "chat1",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
 	_, edited := m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
@@ -3477,15 +3583,13 @@ func TestManager_SendPlaceholder(t *testing.T) {
 // SetTurnUsage is not part of the bus.Streamer interface).
 type turnUsageTrackingStreamer struct {
 	mockStreamer
-	inputTokens  int
-	outputTokens int
-	usageCalls   int
+	usage      bus.TokenUsage
+	usageCalls int
 }
 
-func (m *turnUsageTrackingStreamer) SetTurnUsage(inputTokens, outputTokens int) {
+func (m *turnUsageTrackingStreamer) SetTurnUsage(usage bus.TokenUsage) {
 	m.usageCalls++
-	m.inputTokens = inputTokens
-	m.outputTokens = outputTokens
+	m.usage = usage
 }
 
 func TestFinalizeHookStreamerForwardsTurnUsage(t *testing.T) {
@@ -3496,13 +3600,20 @@ func TestFinalizeHookStreamerForwardsTurnUsage(t *testing.T) {
 	if !ok {
 		t.Fatal("finalizeHookStreamer does not satisfy turnUsageStreamer")
 	}
-	setter.SetTurnUsage(1234, 567)
+	setter.SetTurnUsage(bus.TokenUsage{
+		InputTokens:   1234,
+		OutputTokens:  567,
+		TotalTokens:   1801,
+		Requests:      3,
+		ContextTokens: 1200,
+	})
 
 	if inner.usageCalls != 1 {
 		t.Fatalf("inner SetTurnUsage calls = %d, want 1", inner.usageCalls)
 	}
-	if inner.inputTokens != 1234 || inner.outputTokens != 567 {
-		t.Errorf("inner usage = (%d, %d), want (1234, 567)", inner.inputTokens, inner.outputTokens)
+	if inner.usage.InputTokens != 1234 || inner.usage.OutputTokens != 567 ||
+		inner.usage.Requests != 3 || inner.usage.ContextTokens != 1200 {
+		t.Errorf("inner usage = %+v, want input=1234 output=567 requests=3 context=1200", inner.usage)
 	}
 }
 
@@ -3514,13 +3625,20 @@ func TestSplitMarkerStreamerForwardsTurnUsage(t *testing.T) {
 	if !ok {
 		t.Fatal("splitMarkerStreamer does not satisfy turnUsageStreamer")
 	}
-	setter.SetTurnUsage(1234, 567)
+	setter.SetTurnUsage(bus.TokenUsage{
+		InputTokens:   1234,
+		OutputTokens:  567,
+		TotalTokens:   1801,
+		Requests:      3,
+		ContextTokens: 1200,
+	})
 
 	if inner.usageCalls != 1 {
 		t.Fatalf("inner SetTurnUsage calls = %d, want 1", inner.usageCalls)
 	}
-	if inner.inputTokens != 1234 || inner.outputTokens != 567 {
-		t.Errorf("inner usage = (%d, %d), want (1234, 567)", inner.inputTokens, inner.outputTokens)
+	if inner.usage.InputTokens != 1234 || inner.usage.OutputTokens != 567 ||
+		inner.usage.Requests != 3 || inner.usage.ContextTokens != 1200 {
+		t.Errorf("inner usage = %+v, want input=1234 output=567 requests=3 context=1200", inner.usage)
 	}
 }
 

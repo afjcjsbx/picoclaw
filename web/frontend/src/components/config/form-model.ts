@@ -26,13 +26,6 @@ export interface CoreConfigForm {
   heartbeatInterval: string
   devicesEnabled: boolean
   monitorUSB: boolean
-  mcpEnabled: boolean
-  mcpDiscoveryEnabled: boolean
-  mcpDiscoveryTTL: string
-  mcpDiscoveryMaxSearchResults: string
-  mcpDiscoveryUseBM25: boolean
-  mcpDiscoveryUseRegex: boolean
-  mcpServers: MCPServerForm[]
   evolutionEnabled: boolean
   evolutionMode: string
   evolutionStateDir: string
@@ -41,8 +34,6 @@ export interface CoreConfigForm {
   evolutionColdPathTrigger: string
   evolutionColdPathTimesText: string
 }
-
-export type MCPServerType = "http" | "sse" | "stdio"
 
 export type TurnProfileMode = "default" | "off" | "custom"
 
@@ -54,20 +45,6 @@ export interface TurnProfileForm {
   skillsAllowText: string
   toolsMode: TurnProfileMode
   toolsAllowText: string
-}
-
-export interface MCPServerForm {
-  id: string
-  name: string
-  enabled: boolean
-  deferredOverride: boolean | null
-  type: MCPServerType
-  url: string
-  command: string
-  argsText: string
-  envText: string
-  envFile: string
-  headersText: string
 }
 
 export interface LauncherForm {
@@ -145,13 +122,6 @@ export const EMPTY_FORM: CoreConfigForm = {
   heartbeatInterval: "30",
   devicesEnabled: false,
   monitorUSB: true,
-  mcpEnabled: false,
-  mcpDiscoveryEnabled: false,
-  mcpDiscoveryTTL: "5",
-  mcpDiscoveryMaxSearchResults: "5",
-  mcpDiscoveryUseBM25: true,
-  mcpDiscoveryUseRegex: false,
-  mcpServers: [],
   evolutionEnabled: false,
   evolutionMode: "observe",
   evolutionStateDir: "",
@@ -186,10 +156,6 @@ function asBool(value: unknown): boolean {
   return value === true
 }
 
-function asOptionalBool(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null
-}
-
 function asNumberString(value: unknown, fallback: string): string {
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value)
@@ -198,54 +164,6 @@ function asNumberString(value: unknown, fallback: string): string {
     return value
   }
   return fallback
-}
-
-function toMCPServerType(value: unknown): MCPServerType {
-  if (value === "http" || value === "sse") {
-    return value
-  }
-  return "stdio"
-}
-
-function makeMCPServerID(name: string): string {
-  const encoded = encodeURIComponent(name)
-  if (encoded.length > 0) {
-    return `mcp-${encoded}`
-  }
-  return `mcp-${Math.random().toString(36).slice(2, 10)}`
-}
-
-function mapMCPServers(value: unknown): MCPServerForm[] {
-  const servers = asRecord(value)
-  return Object.entries(servers).map(([name, rawConfig]) => {
-    const cfg = asRecord(rawConfig)
-    const argsList = Array.isArray(cfg.args)
-      ? cfg.args.filter((item): item is string => typeof item === "string")
-      : []
-    const url = asString(cfg.url)
-    const type =
-      cfg.type === undefined
-        ? url
-          ? "sse"
-          : "stdio"
-        : toMCPServerType(cfg.type)
-    const env = asRecord(cfg.env)
-    const headers = asRecord(cfg.headers)
-
-    return {
-      id: makeMCPServerID(name),
-      name,
-      enabled: cfg.enabled !== false,
-      deferredOverride: asOptionalBool(cfg.deferred),
-      type,
-      url,
-      command: asString(cfg.command),
-      argsText: argsList.join("\n"),
-      envText: JSON.stringify(env, null, 2),
-      envFile: asString(cfg.env_file),
-      headersText: JSON.stringify(headers, null, 2),
-    }
-  })
 }
 
 function toTurnProfileMode(value: unknown): TurnProfileMode {
@@ -297,8 +215,6 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
   const devices = asRecord(root.devices)
   const evolution = asRecord(root.evolution)
   const tools = asRecord(root.tools)
-  const mcp = asRecord(tools.mcp)
-  const mcpDiscovery = asRecord(mcp.discovery)
   const cron = asRecord(tools.cron)
   const exec = asRecord(tools.exec)
   const toolFeedback = asRecord(defaults.tool_feedback)
@@ -394,29 +310,6 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
       devices.monitor_usb === undefined
         ? EMPTY_FORM.monitorUSB
         : asBool(devices.monitor_usb),
-    mcpEnabled:
-      mcp.enabled === undefined ? EMPTY_FORM.mcpEnabled : asBool(mcp.enabled),
-    mcpDiscoveryEnabled:
-      mcpDiscovery.enabled === undefined
-        ? EMPTY_FORM.mcpDiscoveryEnabled
-        : asBool(mcpDiscovery.enabled),
-    mcpDiscoveryTTL: asNumberString(
-      mcpDiscovery.ttl,
-      EMPTY_FORM.mcpDiscoveryTTL,
-    ),
-    mcpDiscoveryMaxSearchResults: asNumberString(
-      mcpDiscovery.max_search_results,
-      EMPTY_FORM.mcpDiscoveryMaxSearchResults,
-    ),
-    mcpDiscoveryUseBM25:
-      mcpDiscovery.use_bm25 === undefined
-        ? EMPTY_FORM.mcpDiscoveryUseBM25
-        : asBool(mcpDiscovery.use_bm25),
-    mcpDiscoveryUseRegex:
-      mcpDiscovery.use_regex === undefined
-        ? EMPTY_FORM.mcpDiscoveryUseRegex
-        : asBool(mcpDiscovery.use_regex),
-    mcpServers: mapMCPServers(mcp.servers),
     evolutionEnabled:
       evolution.enabled === undefined
         ? EMPTY_FORM.evolutionEnabled

@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "外部参考要点（来自 OpenRouter/LiteLLM/Cloudflare AI Gateway 等官方文档）：参考链接：与本仓库对应的可执行约束：."
+---
 # Issue #783 调研与修复执行文档
 
 ## 1. 问题澄清（已确认）

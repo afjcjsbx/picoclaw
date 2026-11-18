@@ -11,11 +11,12 @@ import (
 )
 
 func TestTodoAgentRegistration(t *testing.T) {
+	defaults := config.DefaultConfig()
+	if defaults.Tools.IsToolEnabled("todo") {
+		t.Fatal("todo should be disabled by default")
+	}
 	for _, enabled := range []bool{true, false} {
 		cfg := config.DefaultConfig()
-		if !cfg.Tools.IsToolEnabled("todo") {
-			t.Fatal("todo should be enabled by default")
-		}
 		cfg.Tools.Todo.Enabled = enabled
 		cfg.Agents.Defaults.Workspace = t.TempDir()
 		instance := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})

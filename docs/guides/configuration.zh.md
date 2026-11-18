@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "配置指南"
+description: "配置文件路径: ~/.picoclaw/config.json 你可以使用环境变量覆盖默认路径。这对于便携安装、容器化部署或将 picoclaw 作为系统服务运行非常有用。这些变量是独立的，控制不同的路径。"
+---
 # ⚙️ 配置指南
 
 > 返回 [README](../project/README.zh.md)
@@ -57,6 +62,7 @@ PicoClaw 将数据存储在您配置的工作区中（默认：`~/.picoclaw/work
 ├── memory/           # 长期记忆 (MEMORY.md)
 ├── state/            # 持久化状态 (最后一次频道等)
 ├── cron/             # 定时任务数据库
+├── commands/         # 自定义提示词命令 (*.md)
 ├── skills/           # 自定义技能
 ├── AGENT.md          # Agent 行为指南
 ├── HEARTBEAT.md      # 周期性任务提示词 (每 30 分钟检查一次)
@@ -190,6 +196,7 @@ dammi le ultime news
 
 - 通用斜杠命令通过 `pkg/agent/loop.go` 中的 `commands.Executor` 统一执行。
 - Channel 适配器不再在本地消费通用命令；它们只负责把入站文本转发到 bus/agent 路径。Telegram 仍会在启动时自动注册其支持的命令菜单，例如 `/start`、`/help`、`/show`、`/list`、`/use`。
+- 来自 `<workspace>/commands/` 和 `<PICOCLAW_HOME>/commands/` 的自定义提示词命令会展开为用户提示词，并继续走正常的 Agent 回合。详见 [Custom Prompt Commands](custom-commands.md)。
 - 未注册的斜杠命令（例如 `/foo`）会透传给 LLM 按普通输入处理。
 - 已注册但当前 channel 不支持的命令（例如 WhatsApp 上的 `/show`）会返回明确的用户可见错误，并停止后续处理。
 
@@ -310,14 +317,14 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 #### 额外的 Exec 保护
 
-即使 `restrict_to_workspace: false`，`exec` 工具也会阻止以下危险命令：
+默认情况下，`exec` 工具会阻止以下危险命令（其中硬性底线规则在 `enable_deny_patterns` 为 `false` 时仍会生效）：
 
 * `rm -rf`、`del /f`、`rmdir /s` — 批量删除
-* `format`、`mkfs`、`diskpart` — 磁盘格式化
-* `dd if=` — 磁盘镜像
-* 写入 `/dev/sd[a-z]` — 直接磁盘写入
-* `shutdown`、`reboot`、`poweroff` — 系统关机
-* Fork bomb `:(){ :|:& };:`
+* `format`、`mkfs`、`diskpart` — 磁盘格式化（磁盘格式化始终生效）
+* `dd if=` — 磁盘镜像（始终生效）
+* 写入 `/dev/sd[a-z]` — 直接磁盘写入（始终生效）
+* `shutdown`、`reboot`、`poweroff` — 系统关机（始终生效）
+* Fork bomb `:(){ :|:& };:` — 始终生效
 
 ### 文件访问控制
 
@@ -330,9 +337,9 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 | 配置键 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道（Telegram/Discord 等）执行 exec 工具 |
-| `tools.exec.enable_deny_patterns` | bool | `true` | 启用危险命令拦截 |
-| `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式 |
+| `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道直接执行 exec 工具；定时任务命令由 `tools.cron.command_allowed_remotes` 独立授权 |
+| `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
+| `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | 自定义允许的正则表达式模式 |
 
 > **安全提示：** Symlink 保护默认启用——所有文件路径在允许列表匹配前都会通过 `filepath.EvalSymlinks` 解析，防止符号链接逃逸攻击。
@@ -931,7 +938,7 @@ PicoClaw 通过 `cron` 工具支持 cron 风格的定时任务。Agent 可以设
 
 | 主题 | 说明 |
 | ---- | ---- |
-| [敏感数据过滤](../security/sensitive_data_filtering.zh.md) | 在发送给 LLM 前，从工具结果中过滤 API 密钥和令牌 |
+| [敏感数据过滤](../security/sensitive_data_filtering.zh.md) | 在发送给 LLM 前，从工具结果中脱敏精确匹配的敏感值；这只是纵深防御，不是 DLP 边界 |
 | [Runtime Events 与事件日志](../architecture/runtime-events.zh.md) | 统一运行时事件、日志过滤和调试配置 |
 | [Hook 系统](../architecture/hooks/README.zh.md) | 事件驱动 Hook：观察者、拦截器、审批 Hook |
 | [Steering](../architecture/steering.md) | 在工具调用间向运行中的 Agent 注入消息 |

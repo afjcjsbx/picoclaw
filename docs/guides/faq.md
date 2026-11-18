@@ -1,3 +1,6 @@
+---
+description: "Short answers to the PicoClaw questions that come up most often, each pointing to the full document when you need the details."
+---
 # FAQ
 
 Short answers to questions that come up often. When an answer points to a full document, start there for details.
@@ -28,7 +31,7 @@ Yes: `picoclaw migrate` imports config and workspace files (`--dry-run` first). 
 In `~/.picoclaw/.security.yml` (set `chmod 600`), referenced from `config.json`, so the main config stays shareable — see the Security Configuration section in the [Configuration Guide](configuration.md) and [Credential Encryption](../security/credential_encryption.md).
 
 **How do I keep secrets out of what the model sees?**
-Sensitive data filtering strips secrets from tool output before it reaches the model — see [Sensitive Data Filtering](../security/sensitive_data_filtering.md).
+Sensitive data filtering redacts exact configured secret values from tool output before it reaches the model, but it is defense in depth and not a DLP boundary: encoded or transformed output can bypass it. See [Sensitive Data Filtering](../security/sensitive_data_filtering.md).
 
 **How do I change the default model?**
 ```bash
@@ -55,7 +58,7 @@ picoclaw gateway --debug --no-truncate
 ```
 
 **How do I connect Telegram, Discord, WhatsApp, or another chat app?**
-Start with [Chat Apps Configuration](chat-apps.md); per-channel guides live under `docs/channels/<name>/README.md` (for example [Telegram](../channels/telegram/README.md)).
+Start with [Chat Apps Configuration](chat-apps.md); per-channel guides live under `docs/channels/<name>/README.md` (for example [Telegram](../channels/telegram/)).
 
 **How do I run PicoClaw at boot?**
 Run it with Docker, or enable **launch at login** in the launcher config page (macOS, Linux, Windows). For the raw Gateway without the launcher, run it under your init system, for example a systemd service.
@@ -89,4 +92,4 @@ The model alias you referenced is not defined in `model_list`, or the alias/prov
 The launcher only auto-starts the Gateway when a usable default model is configured. Add credentials/models first, or use **Start Gateway** manually — see [Web UI & Launcher Guide](webui.md).
 
 **Where do I report bugs or ask questions?**
-Join the [Discord community](https://discord.gg/bEuEDnKpf) or open an issue on [GitHub](https://github.com/afjcjsbx/picoclaw/issues).
+Join the [Discord community](https://discord.gg/XTt5Y6cJfY) or open an issue on [GitHub](https://github.com/afjcjsbx/picoclaw/issues).

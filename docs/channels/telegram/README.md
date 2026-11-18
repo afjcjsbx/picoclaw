@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "The Telegram channel uses long polling via the Telegram Bot API for bot-based communication."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Telegram
 
@@ -39,6 +42,10 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 4. Fill in the Token in the configuration file
 5. (Optional) Configure `allow_from` to restrict which user IDs can interact (you can get IDs via `@userinfobot`)
 
+## Reactions
+
+The Telegram channel supports message reactions. The gateway acknowledges each inbound message with a 👀 reaction and removes it when the reply is sent, and the `reaction` tool can add the same reaction on demand.
+
 ## Built-in Commands
 
 Telegram auto-registers PicoClaw's top-level bot commands at startup, including `/start`, `/help`, `/show`, `/list`, and `/use`.
@@ -63,6 +70,13 @@ Examples:
 /use git
 explain how to squash the last 3 commits
 ```
+
+Model switching:
+
+- `/list models` shows the configured models as a numbered list.
+- `/switch model <index>` switches to the model at that position (for example `/switch model 3`).
+- `/switch model <name>` still accepts the exact model name, an unambiguous prefix, and the legacy `/switch model to <name>` form.
+- `/switch model` on its own prints the numbered list instead of an error.
 
 ## Advanced Formatting
 

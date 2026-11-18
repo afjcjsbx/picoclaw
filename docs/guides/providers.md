@@ -1,6 +1,10 @@
+---
+description: "Configure PicoClaw model providers: OpenAI-compatible endpoints, Anthropic, Gemini, local models, routing, and per-task model choice."
+title: "Providers & Model Configuration"
+---
 # 🔌 Providers & Model Configuration
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ### Providers
 
@@ -130,6 +134,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | `user_agent` | string | No | Custom `User-Agent` header sent with API requests (supported by OpenAI-compatible, Gemini, Anthropic, and Azure providers)                                                                                                                  |
 | `session_header` | string | No | HTTP header name that carries a stable per-conversation session ID. Supported by OpenAI-compatible, OpenAI Responses, Anthropic Messages, and OpenCode Go providers; other providers log a warning and ignore it. Leave empty to disable. |
 | `request_timeout` | int | No | Request timeout in seconds (default varies by provider)                                                                                                                                                                                     |
+| `provider_sort` | string | No | OpenRouter provider routing preference: `price`, `throughput`, or `latency`. Ignored by other providers. Leave empty to use OpenRouter's default routing.                                                                                 |
 | `max_tokens_field` | string | No | Override the max tokens field name in request body (e.g., `max_completion_tokens` for o1 models)                                                                                                                                            |
 | `thinking_level` | string | No | Extended thinking level: `off`, `low`, `medium`, `high`, `xhigh`, or `adaptive`                                                                                                                                                             |
 | `tool_schema_transform` | string | No | Optional compatibility transform for tool parameter schemas. Default: disabled. Supported values: `simple`.                                                                                             |
@@ -144,6 +149,35 @@ When streaming is disabled, omit the `streaming` block. Writing `"streaming": {"
 
 `extra_body` is especially useful for model-specific TTS fields on OpenAI-compatible
 speech routes, for example custom `voice` names or `response_format: "mp3"`.
+
+#### OpenRouter Provider Routing
+
+OpenRouter can route one model to several upstream providers. Set `provider_sort`
+on the model entry to choose how PicoClaw asks OpenRouter to rank those
+providers:
+
+| `provider_sort` | Optimizes |
+|-----------------|-----------|
+| `latency` | Lowest time to first token (TTFT), best for interactive streaming chat |
+| `throughput` | Highest generated tokens per second, best for long generations, coding, and batch work |
+| `price` | Lowest price, best for cost-sensitive workloads |
+
+```json
+{
+  "model_name": "openrouter-fast",
+  "provider": "openrouter",
+  "model": "openai/gpt-5.4",
+  "provider_sort": "throughput",
+  "api_keys": ["sk-or-your-key"]
+}
+```
+
+PicoClaw sends this as `"provider": {"sort": "<value>"}` in the chat
+completions request. The setting only applies to OpenRouter (the `openrouter`
+provider or an `openrouter.ai` API base) and is ignored by other providers. If
+`extra_body` already contains a `provider` object, PicoClaw merges the sort
+value into it and keeps existing routing fields such as `order` or `only`; an
+explicit `extra_body.provider.sort` takes precedence.
 
 #### Tool Schema Compatibility
 
@@ -356,6 +390,8 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 > - The existing `anthropic` protocol returns 404 errors (indicating the endpoint doesn't support OpenAI-compatible format)
 >
 > **Note:** The `anthropic` protocol uses OpenAI-compatible format (`/v1/chat/completions`), while `anthropic-messages` uses Anthropic's native format (`/v1/messages`). Choose based on your endpoint's supported format.
+>
+> Requests to Claude models enable Anthropic automatic prompt caching with a top-level `cache_control: {"type": "ephemeral"}`. The cache covers tool definitions and the system prompt, and the breakpoint advances with the conversation. Anthropic applies its normal minimum-prefix rules, so short prompts are processed uncached without an error.
 
 **OpenCode Go**
 
@@ -377,6 +413,12 @@ picks the endpoint from the model ID prefix, so just name the model:
 }
 ```
 
+> When `provider` is set explicitly, use the bare model ID:
+> `{"provider": "opencode-go", "model": "glm-5.3-flash"}`. A redundant
+> `opencode-go/` prefix is dropped before routing and before the upstream
+> request, so `{"provider": "opencode-go", "model": "opencode-go/glm-5.3-flash"}`
+> keeps working as well.
+>
 > `api_base` is optional and defaults to `https://opencode.ai/inference/go`.
 > OpenCode Go rejects requests without an `x-opencode-session` header, so
 > PicoClaw always sends it: the conversation session key during a chat turn, or
@@ -741,5 +783,5 @@ picoclaw agent -m "Hello"
 ---
 
 <div align="center">
-  <img src="../../assets/logo.jpg" alt="PicoClaw Meme" width="512">
+  <img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/logo.jpg" alt="PicoClaw Meme" width="512">
 </div>

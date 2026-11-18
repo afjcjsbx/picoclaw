@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 里用户能直接感知到的“路由”主要有两部分：这份文档面向真实部署中的配置使用场景。Agent 路由通过下面这个配置项定义：规则从上到下依次检查。"
+---
 # 路由使用指南
 
 > 返回 [README](../project/README.zh.md)

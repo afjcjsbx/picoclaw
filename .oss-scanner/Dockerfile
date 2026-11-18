@@ -5,8 +5,8 @@
 # its tests, and runs the full unit suite once so the log shows the image works.
 # threat_model.md, next to this file, says what matters and how to exercise it.
 
-# Same Go release as go.mod (go 1.27.3). trixie ships the recent git the tests expect.
-FROM golang:1.27.3-trixie
+# Same Go release as go.mod (go 1.27.4). trixie ships the recent git the tests expect.
+FROM golang:1.27.4-trixie
 ENV DEBIAN_FRONTEND=noninteractive
 
 # git for version stamping and for tests that shell out to git; gcc because some tests build helpers.

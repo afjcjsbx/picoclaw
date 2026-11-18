@@ -1,3 +1,6 @@
+---
+description: "Agent self-evolution lets PicoClaw learn from completed turns and turn repeated successful behavior into skill improvements."
+---
 # Agent Self-Evolution
 
 Agent self-evolution lets PicoClaw learn from completed turns and turn repeated successful behavior into skill improvements. The runtime is controlled by the top-level `evolution` config block.

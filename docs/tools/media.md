@@ -1,3 +1,6 @@
+---
+description: "Media tools move images, files, and generated audio between the workspace and the chat."
+---
 # Media tools
 
 Media tools move images, files, and generated audio between the workspace and the chat.

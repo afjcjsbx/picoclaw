@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -883,54 +884,53 @@ func TestSkillInstaller_GetGithubDirAllFiles(t *testing.T) {
 
 func TestSkillInstaller_InstallFromGitHub_WithToken(t *testing.T) {
 	tmpDir := t.TempDir()
-	skillsDir := filepath.Join(tmpDir, "skills")
-	os.MkdirAll(skillsDir, 0o755)
 
-	var serverURL string
+	var (
+		mu          sync.Mutex
+		apiRequests int
+		apiAuth     []string
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Capture the authorization header
-		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
-			tokenReceived := strings.TrimPrefix(authHeader, "Bearer ")
-			t.Fatalf("github token is %s", tokenReceived)
+		if strings.HasPrefix(r.URL.Path, "/api/v3/") {
+			mu.Lock()
+			apiRequests++
+			apiAuth = append(apiAuth, r.Header.Get("Authorization"))
+			mu.Unlock()
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-
-		items := []map[string]any{
-			{
-				"name":         "SKILL.md",
-				"path":         "SKILL.md",
-				"type":         "file",
-				"download_url": serverURL + "/download/SKILL.md",
-			},
-		}
-		json.NewEncoder(w).Encode(items)
+		// Force the install to fail while still exercising the API requests.
+		http.NotFound(w, r)
 	}))
-	serverURL = server.URL
 	defer server.Close()
 
-	installer, err := NewSkillInstaller(tmpDir, "test-github-token", "")
+	installer, err := NewSkillInstallerWithBaseURL(tmpDir, server.URL, "test-github-token", "")
 	if err != nil {
-		t.Fatalf("NewSkillInstaller() error = %v", err)
+		t.Fatalf("NewSkillInstallerWithBaseURL() error = %v", err)
 	}
 
-	// We need to test the token is passed - the actual install will fail
-	// because we're not fully mocking the download, but we can verify
-	// the token is sent in the request
-
-	// Use a simple context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// The install will fail because download URL isn't properly set up,
-	// but the token should be sent in the API request
+	// The fake API returns 404, so the install is expected to fail, but every
+	// GitHub API request must carry the configured token.
 	_ = installer.InstallFromGitHub(ctx, "owner/repo")
 
-	// Note: We can't easily intercept the download request since it's a different URL,
-	// but the fact that the API request was made verifies the token flow
-	// In a real scenario, the token would be sent to both API and raw downloads
+	mu.Lock()
+	defer mu.Unlock()
+
+	if apiRequests == 0 {
+		t.Fatal("expected at least one GitHub API request")
+	}
+	for i, got := range apiAuth {
+		if got != "Bearer test-github-token" {
+			t.Errorf(
+				"API request %d Authorization = %q, want %q",
+				i+1,
+				got,
+				"Bearer test-github-token",
+			)
+		}
+	}
 }
 
 func TestSkillInstaller_ContextCancellation(t *testing.T) {

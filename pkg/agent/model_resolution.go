@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
@@ -44,6 +45,7 @@ func modelConfigResolutionKey(defaultProvider string, mc *config.ModelConfig) st
 		RPM                 int                         `json:"rpm"`
 		RequestTimeout      int                         `json:"request_timeout"`
 		MaxTokensField      string                      `json:"max_tokens_field"`
+		ProviderSort        string                      `json:"provider_sort"`
 		ThinkingLevel       string                      `json:"thinking_level"`
 		ToolSchemaTransform string                      `json:"tool_schema_transform"`
 		Streaming           config.ModelStreamingConfig `json:"streaming"`
@@ -55,6 +57,7 @@ func modelConfigResolutionKey(defaultProvider string, mc *config.ModelConfig) st
 		ConnectMode: mc.ConnectMode, Workspace: mc.Workspace, APIKeys: apiKeys,
 		Enabled: mc.Enabled, UserAgent: mc.UserAgent, RPM: mc.RPM,
 		RequestTimeout: mc.RequestTimeout, MaxTokensField: mc.MaxTokensField,
+		ProviderSort:  mc.ProviderSort,
 		ThinkingLevel: mc.ThinkingLevel, ToolSchemaTransform: mc.ToolSchemaTransform,
 		Streaming: mc.Streaming, ExtraBody: mc.ExtraBody, CustomHeaders: mc.CustomHeaders,
 	})
@@ -213,12 +216,7 @@ func resolveModelCandidates(
 	seen := make(map[string]bool)
 	candidates := make([]providers.FallbackCandidate, 0, 1+len(fallbacks))
 
-	addCandidate := func(raw string) {
-		candidate, ok := resolveModelCandidate(cfg, defaultProvider, raw)
-		if !ok {
-			return
-		}
-
+	addCandidate := func(candidate providers.FallbackCandidate) {
 		key := candidate.StableKey()
 		if seen[key] {
 			return
@@ -227,12 +225,49 @@ func resolveModelCandidates(
 		candidates = append(candidates, candidate)
 	}
 
-	addCandidate(primary)
+	primaryCandidate, ok := resolveModelCandidate(cfg, defaultProvider, primary)
+	if !ok {
+		return candidates
+	}
+	addCandidate(primaryCandidate)
+	primaryProvider := providers.NormalizeProvider(primaryCandidate.Provider)
+
 	for _, fallback := range fallbacks {
-		addCandidate(fallback)
+		candidate, ok := resolveModelCandidate(cfg, defaultProvider, fallback)
+		if !ok {
+			continue
+		}
+		if fallbackNeedsConfiguredProvider(cfg, candidate, primaryProvider) {
+			if _, err := providers.ResolveModelConfig(cfg, fallback); err != nil {
+				logger.WarnCF("agent", "Ignoring fallback model without a configured provider",
+					map[string]any{
+						"fallback": strings.TrimSpace(fallback),
+						"resolved": candidate.Provider + "/" + candidate.Model,
+						"error":    err.Error(),
+					})
+				continue
+			}
+		}
+		addCandidate(candidate)
 	}
 
 	return candidates
+}
+
+// fallbackNeedsConfiguredProvider reports whether a fallback candidate cannot
+// inherit the primary provider and therefore needs its own model_list entry or
+// provider template to be executable. Unresolved bare references otherwise
+// become phantom candidates prefixed with the default provider, which fail
+// before any request is sent.
+func fallbackNeedsConfiguredProvider(
+	cfg *config.Config,
+	candidate providers.FallbackCandidate,
+	primaryProvider string,
+) bool {
+	return cfg != nil &&
+		candidate.ConfigKey == "" &&
+		candidate.ConfigIndex == 0 &&
+		providers.NormalizeProvider(candidate.Provider) != primaryProvider
 }
 
 func resolvedCandidateModel(candidates []providers.FallbackCandidate, fallback string) string {

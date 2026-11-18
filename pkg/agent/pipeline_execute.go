@@ -228,7 +228,9 @@ toolLoop:
 		summaryMsg := providers.Message{
 			Role:        "assistant",
 			Content:     handledToolResponseSummary,
+			ModelName:   exec.llmModelName,
 			Attachments: append([]providers.Attachment(nil), handledAttachments...),
+			Usage:       ts.GetTurnUsage(),
 		}
 		if !ts.opts.NoHistory {
 			warnSessionStoreError(
@@ -250,7 +252,7 @@ toolLoop:
 			al.contextManager.Compact(turnCtx, &CompactRequest{
 				SessionKey: ts.sessionKey,
 				Reason:     ContextCompressReasonSummarize,
-				Budget:     ts.agent.ContextWindow,
+				Budget:     usableContextTokens(ts.agent),
 			})
 		}
 		ts.setPhase(TurnPhaseCompleted)

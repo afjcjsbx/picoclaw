@@ -1,6 +1,9 @@
+---
+description: "Why the PicoClaw gateway can stay unresponsive for minutes after a restart on slow boards, how session files are loaded, and how automatic pruning bounds the cost."
+---
 # Session Startup Cost and Automatic Pruning
 
-> Back to [README](../README.md) · Related: [Session System](session-system.md),
+> Back to [Architecture](./) · Related: [Session System](session-system.md),
 > [Seahorse Memory](seahorse-memory.md)
 
 ## Symptom

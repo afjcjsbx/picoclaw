@@ -1,3 +1,6 @@
+---
+description: "This document makes explicit the boundaries of context management in the agent loop."
+---
 # Context
 
 ## What this document covers
@@ -123,12 +126,12 @@ This is the fallback for when the token estimate undershoots reality.
 
 ### 4. Manual compaction (`/compact`)
 
-`/compact [focus]` calls `ContextManager.Compact` with `Reason: ContextCompressReasonManual`. Unlike the automatic paths it runs synchronously inside the command turn, so the reply can report the outcome. The optional `focus` text travels in `CompactRequest.Instructions` and is added to the summarizer prompts as a priority hint.
+`/compact [--force] [focus]` calls `ContextManager.Compact` with `Reason: ContextCompressReasonManual`. Unlike the automatic paths it runs synchronously inside the command turn, so the reply can report the outcome. The optional `focus` text travels in `CompactRequest.Instructions` and is added to the summarizer prompts as a priority hint. `--force` sets `CompactRequest.Force`, which makes Seahorse ignore its budget target and run the condensed loop until no further progress is possible.
 
-When nothing was summarized (history too short, or already compacted), `Compact` returns `ErrNothingToCompact` and the command replies "Nothing to compact yet." Other errors are reported as "Failed to compact context: ...".
+Manual requests receive a `CompactOutcome` with a reason (`compacted`, `below_target`, `too_short`, `no_candidates`, `in_progress`), before/after history tokens, the target, and created summary counts. When nothing was summarized, the command explains the specific reason and the measured tokens; it suggests `/compact --force` for an already-fitting session instead of replying with a generic "Nothing to compact yet." Other errors are reported as "Failed to compact context: ...".
 
 - **legacy**: runs `summarizeSession` directly, so the cut point, the last-four-messages tail and the `agent.session.summarize` event match threshold compaction. It takes the same per-session dedup key; if a summarization is already in flight the command fails with "a summarization is already in progress" instead of racing it.
-- **seahorse**: calls `Engine.CompactNow`, which runs one leaf pass followed by the condensed loop synchronously (the automatic path runs the condensed loop in a background goroutine). The fresh tail stays protected. It shares the `condensing` dedup map with the async loop.
+- **seahorse**: calls `Engine.CompactNowWithBudget` by default, or `Engine.CompactNow` with `--force`, which runs one leaf pass followed by the condensed loop synchronously (the automatic path runs the condensed loop in a background goroutine). The fresh tail stays protected. It shares the `condensing` dedup map with the async loop and reports `in_progress` when that slot is busy.
 
 Both implementations leave the automatic prompts unchanged when no focus is given.
 

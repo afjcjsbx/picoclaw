@@ -1263,6 +1263,12 @@ func TestShouldReconnectCallError(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
+		{
+			"typed ErrConnectionClosed",
+			fmt.Errorf(`calling "tools/call": %w: client is closing: EOF`, sdkmcp.ErrConnectionClosed),
+			true,
+		},
+		{"ErrConnectionClosed text only", fmt.Errorf(`calling "tools/call": connection closed`), true},
 		{"typed ErrSessionMissing", fmt.Errorf("sending: %w", sdkmcp.ErrSessionMissing), true},
 		{"ErrSessionMissing text only", fmt.Errorf("failed to connect: session not found"), true},
 		{
@@ -1276,6 +1282,21 @@ func TestShouldReconnectCallError(t *testing.T) {
 			"404 with other JSON-RPC error body",
 			fmt.Errorf(`sending "tools/call": Session terminated: rejected by transport: Not Found`),
 			true,
+		},
+		{
+			"400 with plain-text invalid session",
+			fmt.Errorf(`calling "tools/call": sending "tools/call": Bad Request`),
+			true,
+		},
+		{
+			"400 with JSON-RPC invalid session",
+			fmt.Errorf(`calling "tools/call": Invalid session: rejected by transport: Bad Request`),
+			true,
+		},
+		{
+			"400 with unrelated JSON-RPC error body",
+			fmt.Errorf(`calling "tools/call": Invalid params: rejected by transport: Bad Request`),
+			false,
 		},
 		{"transient 503", fmt.Errorf(`rejected by transport: sending "tools/call": Service Unavailable`), false},
 		{
@@ -1321,6 +1342,82 @@ func TestCallTool_ReconnectsWhenServerExpiresSessionWith404JSONRPCBody(t *testin
 				w,
 				`{"jsonrpc":"2.0","error":{"code":-32000,"message":"Unknown mcp-session-id"},"id":1}`,
 			)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	conn, err := connectServer(context.Background(), "expiring", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "streamable-http",
+		URL:     httpServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("connectServer() error = %v", err)
+	}
+	oldID := conn.Session.ID()
+	if oldID == "" {
+		t.Fatal("expected non-empty streamable session ID")
+	}
+
+	mgr := NewManager()
+	mgr.servers["expiring"] = conn
+	t.Cleanup(func() {
+		if current, ok := mgr.GetServer("expiring"); ok {
+			_ = current.Session.Close()
+		}
+	})
+
+	mu.Lock()
+	expired = oldID
+	mu.Unlock()
+
+	result, err := mgr.CallTool(context.Background(), "expiring", "echo", map[string]any{})
+	if err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if result == nil || len(result.Content) != 1 {
+		t.Fatalf("CallTool() returned unexpected content: %#v", result)
+	}
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok || text.Text != "ok" {
+		t.Fatalf("CallTool() content = %#v, want text %q", result.Content[0], "ok")
+	}
+
+	current, ok := mgr.GetServer("expiring")
+	if !ok {
+		t.Fatal("expected server to remain registered after reconnect")
+	}
+	if newID := current.Session.ID(); newID == "" || newID == oldID {
+		t.Fatalf("Session.ID() = %q, want a fresh ID different from %q", newID, oldID)
+	}
+}
+
+// GitHub answers a stale Mcp-Session-Id with HTTP 400 and the plain-text body
+// "invalid session". The SDK cannot decode the body, so it reports only
+// "Bad Request" and permanently fails the connection; CallTool must recognize
+// that terminal error and negotiate a fresh session.
+func TestCallTool_ReconnectsWhenServerExpiresSessionWith400PlainTextBody(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "expiring-server", Version: "1.0.0"}, nil)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo test tool",
+	}, func(context.Context, *sdkmcp.CallToolRequest, map[string]any) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "ok"}}}, nil, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+
+	var (
+		mu      sync.Mutex
+		expired string
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		isExpired := expired != "" && r.Header.Get("Mcp-Session-Id") == expired
+		mu.Unlock()
+		if isExpired {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, "invalid session")
 			return
 		}
 		handler.ServeHTTP(w, r)

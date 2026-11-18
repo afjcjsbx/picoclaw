@@ -139,11 +139,12 @@ func (p *ClaudeCliProvider) parseClaudeCliResponse(output string) (*LLMResponse,
 	}
 
 	var usage *UsageInfo
-	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 || resp.TotalCostUSD > 0 {
 		usage = &UsageInfo{
 			PromptTokens:     resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.OutputTokens,
+			CostUSD:          resp.TotalCostUSD,
 		}
 	}
 

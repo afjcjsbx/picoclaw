@@ -275,6 +275,14 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 			len(longContent),
 		)
 	}
+	// ...and it forces persistence even when the full page would fit under
+	// max_inline_result_chars, because the preview was explicitly cut.
+	if !result.ForceArtifact {
+		t.Fatal("expected ForceArtifact for a truncated preview")
+	}
+	if result.ArtifactMaxRunes != maxArtifactChars {
+		t.Fatalf("ArtifactMaxRunes = %d, want %d", result.ArtifactMaxRunes, maxArtifactChars)
+	}
 }
 
 // TestWebTool_WebFetch_DefaultKeepsLargeContentIntact verifies the default cap
@@ -318,6 +326,45 @@ func TestWebTool_WebFetch_DefaultKeepsLargeContentIntact(t *testing.T) {
 	}
 	if result.FullText != "" {
 		t.Fatalf("expected no FullText for untruncated content, got %d chars", len(result.FullText))
+	}
+	if result.ForceArtifact {
+		t.Fatal("expected ForceArtifact=false for untruncated content")
+	}
+	if result.ArtifactMaxRunes != maxArtifactChars {
+		t.Fatalf("ArtifactMaxRunes = %d, want %d", result.ArtifactMaxRunes, maxArtifactChars)
+	}
+}
+
+// TestWebFetchTool_PromptStaysConcise verifies the tool schema stays minimal:
+// maxChars keeps only a functional description, while preview-size and
+// source-selection advice live in the docs and recovery is driven by the
+// runtime result warning.
+func TestWebFetchTool_PromptStaysConcise(t *testing.T) {
+	tool, err := NewWebFetchTool(0, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("NewWebFetchTool() error: %v", err)
+	}
+
+	const wantDescription = "Fetch a URL and extract readable content (HTML to text). " +
+		"Use this to get weather info, news, articles, or any web content."
+	if got := tool.Description(); got != wantDescription {
+		t.Fatalf("Description() = %q, want %q", got, wantDescription)
+	}
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("Parameters() has no properties map")
+	}
+	maxChars, ok := properties["maxChars"].(map[string]any)
+	if !ok {
+		t.Fatal("Parameters() has no maxChars property")
+	}
+	const wantParamDescription = "Maximum characters to extract"
+	if got, _ := maxChars["description"].(string); got != wantParamDescription {
+		t.Fatalf("maxChars description = %q, want %q", got, wantParamDescription)
+	}
+	if got, ok := maxChars["minimum"].(float64); !ok || got != float64(minMaxChars) {
+		t.Fatalf("maxChars minimum = %v, want %d", maxChars["minimum"], minMaxChars)
 	}
 }
 
@@ -972,18 +1019,9 @@ func TestWebFetch_BlocksISATAPWithPrivateEmbed(t *testing.T) {
 
 // TestWebFetch_Allows6to4WithPublicEmbed verifies 6to4 with public embedded IPv4 is NOT blocked
 func TestWebFetch_Allows6to4WithPublicEmbed(t *testing.T) {
-	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
-	if err != nil {
-		t.Fatalf("Failed to create web fetch tool: %v", err)
-	}
-	// 2002:0801:0101::1 embeds 8.1.1.1 (public) — pre-flight should pass,
-	// connection will fail (no listener) but that's after the SSRF check.
-	result := tool.Execute(context.Background(), map[string]any{
-		"url": "http://[2002:0801:0101::1]:0",
-	})
-
-	// Should NOT be blocked by SSRF check — error should be connection failure, not "private"
-	if result.IsError && strings.Contains(result.ForLLM, "private") {
+	// 2002:0801:0101::1 embeds 8.1.1.1 (public). Assert the pre-flight guard
+	// accepts it without opening a real connection to the 6to4 address.
+	if utils.IsObviousPrivateHost("2002:0801:0101::1", nil, nil) {
 		t.Error("6to4 with public embedded IPv4 should not be blocked as private")
 	}
 }
@@ -1356,6 +1394,75 @@ func TestWebTool_TavilySearch_Success(t *testing.T) {
 	// Should mention via Tavily
 	if !strings.Contains(result.ForUser, "via Tavily") {
 		t.Errorf("Expected 'via Tavily' in output, got: %s", result.ForUser)
+	}
+}
+
+func TestNormalizeSearchSnippet(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"whitespace only", " \t\n\n ", ""},
+		{"plain", "plain text", "plain text"},
+		{"single newline preserved", "a\nb", "a\nb"},
+		{"repeated newlines collapsed", "a\n\nb\n\n\nc", "a\nb\nc"},
+		{"blank lines with spaces and tabs", "a\n \n\t\nb", "a\nb"},
+		{"internal spaces preserved", "a   b", "a   b"},
+		{"tabs preserved", "a\tb\t\tc", "a\tb\t\tc"},
+		{"markdown list preserved", "- one\n- two\n\n\n- three", "- one\n- two\n- three"},
+		{"crlf normalized", "a\r\n\r\nb", "a\nb"},
+		{"leading and trailing blank lines trimmed", "\n\na\n\nb\n\n", "a\nb"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSearchSnippet(tt.input); got != tt.want {
+				t.Fatalf("normalizeSearchSnippet(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWebTool_TavilySearch_CollapsesBlankLines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{
+				{
+					"title":   "Test\nResult 1",
+					"url":     "https://example.com/1",
+					"content": "First passage.\n\nSecond\tpassage.\n\n\nThird passage.",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		TavilyEnabled:    true,
+		TavilyAPIKeys:    []string{"test-key"},
+		TavilyBaseURL:    server.URL,
+		TavilyMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"query": "test query"})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	want := "Results for: test query (via Tavily)\n" +
+		"1. Test Result 1\n" +
+		"   https://example.com/1\n" +
+		"   First passage.\n" +
+		"Second\tpassage.\n" +
+		"Third passage."
+	if result.ForUser != want {
+		t.Fatalf("ForUser = %q, want %q", result.ForUser, want)
 	}
 }
 
@@ -2703,7 +2810,7 @@ func TestWebTool_KeenableSearch_Endpoints(t *testing.T) {
 				"Snippet for result 1",
 				"Test Result 2",
 				"Description for result 2",
-				"3. Test Result 3\n   https://example.com/3\n   First passage. Second passage.",
+				"3. Test Result 3\n   https://example.com/3\n   First passage.\nSecond   passage.",
 			} {
 				if !strings.Contains(result.ForUser, want) {
 					t.Errorf("output missing %q:\n%s", want, result.ForUser)
@@ -2895,13 +3002,73 @@ func TestWebTool_WebFetch_PerCallMaxCharsCannotDisableFloodGuard(t *testing.T) {
 		t.Error("expected truncated=true in result")
 	}
 
-	// A smaller per-call value is still honored.
+	// A per-call value is still capped by the configured budget.
 	smaller := tool.Execute(context.Background(), map[string]any{
 		"url":      server.URL,
 		"maxChars": float64(200),
 	})
 	if smaller.IsError {
 		t.Fatalf("unexpected error: %s", smaller.ForLLM)
+	}
+}
+
+// TestWebTool_WebFetch_PerCallMaxCharsFloor verifies the 1500-character floor:
+// a smaller request is raised to the floor, while the configured budget still
+// wins when it is below the floor.
+func TestWebTool_WebFetch_PerCallMaxCharsFloor(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	body := strings.Repeat("a", 3000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	fetch := func(t *testing.T, configured int, requested float64) string {
+		t.Helper()
+		tool, err := NewWebFetchTool(configured, "plaintext", testFetchLimit)
+		if err != nil {
+			t.Fatalf("NewWebFetchTool() error: %v", err)
+		}
+		result := tool.Execute(context.Background(), map[string]any{
+			"url":      server.URL,
+			"maxChars": requested,
+		})
+		if result.IsError {
+			t.Fatalf("unexpected error: %s", result.ForLLM)
+		}
+		var resultMap map[string]any
+		if err := json.Unmarshal([]byte(result.ForLLM), &resultMap); err != nil {
+			t.Fatalf("failed to unmarshal result JSON: %v", err)
+		}
+		text, _ := resultMap["text"].(string)
+		return text
+	}
+
+	// A request below the floor is raised to the floor.
+	text := fetch(t, 5000, 100)
+	if !strings.Contains(text, "[CONTENT TRUNCATED - ") {
+		t.Fatalf("expected the floor to truncate the page, got %q", text)
+	}
+	if len(text) > minMaxChars+100 {
+		t.Fatalf("expected ~%d chars plus the notice, got %d", minMaxChars, len(text))
+	}
+
+	// The floor itself is accepted.
+	if text = fetch(t, 5000, float64(minMaxChars)); len(text) > minMaxChars+100 {
+		t.Fatalf("expected ~%d chars plus the notice, got %d", minMaxChars, len(text))
+	}
+
+	// A value above the floor is honored.
+	if text = fetch(t, 5000, 2000); len(text) < 2000 {
+		t.Fatalf("expected the requested 2000 chars, got %d", len(text))
+	}
+
+	// A configured budget below the floor still wins: maxChars may only lower it.
+	if text = fetch(t, 1000, 100); len(text) > 1100 {
+		t.Fatalf("expected the configured 1000-char cap, got %d", len(text))
 	}
 }
 

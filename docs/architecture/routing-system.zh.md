@@ -1,6 +1,10 @@
+---
+lang: zh
+description: "在 PicoClaw 里，“路由系统”不是单一判断。 它实际上是组合起来的一条运行时决策链，负责决定：Pkg/routing 及其在 pkg/agent 中的集成方式。 它不讨论 web/ 目录下 launcher 的 HTTP ServeMux 路由，也不讨论前端 TanStack Router 文件路由。"
+---
 # 路由系统
 
-> 返回 [README](../README.md)
+> 返回 [README](../)
 
 在 PicoClaw 里，“路由系统”不是单一判断。
 它实际上是组合起来的一条运行时决策链，负责决定：

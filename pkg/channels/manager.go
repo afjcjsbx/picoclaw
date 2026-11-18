@@ -240,6 +240,9 @@ func outboundMessageEditPayload(msg bus.OutboundMessage, content string) map[str
 	if modelName := strings.TrimSpace(msg.Context.Raw["model_name"]); modelName != "" {
 		payload["model_name"] = modelName
 	}
+	if outboundMessageIsFinal(msg) {
+		payload["final"] = true
+	}
 	return payload
 }
 
@@ -407,10 +410,20 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	key := name + ":" + chatID
 	streamKey := streamSuppressionKey(name, chatID, msg.SessionKey)
 
-	// 1. Stop typing
-	if v, loaded := m.typingStops.LoadAndDelete(key); loaded {
-		if entry, ok := v.(typingEntry); ok {
-			entry.stop() // idempotent, safe
+	isToolFeedback := outboundMessageIsToolFeedback(msg)
+	isToolCalls := outboundMessageIsToolCalls(msg)
+	isAuxiliaryMessage := outboundMessageHasAuxiliaryKind(msg)
+	isFinalMessage := outboundMessageIsFinal(msg)
+	separateToolFeedbackMessages := m.toolFeedbackSeparateMessagesEnabled()
+
+	// 1. Stop typing only when the final response is delivered. Auxiliary
+	// messages (thoughts, tool calls, progress) keep the indicator alive for
+	// the rest of the turn, including background conversations.
+	if isFinalMessage {
+		if v, loaded := m.typingStops.LoadAndDelete(key); loaded {
+			if entry, ok := v.(typingEntry); ok {
+				entry.stop() // idempotent, safe
+			}
 		}
 	}
 
@@ -420,12 +433,6 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 			entry.undo() // idempotent, safe
 		}
 	}
-
-	isToolFeedback := outboundMessageIsToolFeedback(msg)
-	isToolCalls := outboundMessageIsToolCalls(msg)
-	isAuxiliaryMessage := outboundMessageHasAuxiliaryKind(msg)
-	isFinalMessage := outboundMessageIsFinal(msg)
-	separateToolFeedbackMessages := m.toolFeedbackSeparateMessagesEnabled()
 
 	// 3. If a stream already finalized this chat, stale auxiliary messages must
 	// be dropped without consuming the final-response marker. Streaming
@@ -558,30 +565,25 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	return nil, false
 }
 
-// preSendMedia handles typing stop, reaction undo, and placeholder cleanup
-// before sending media attachments. Unlike preSend for text messages, media
-// delivery never edits the placeholder because there is no text payload to
-// replace it with; it only attempts to delete the placeholder when possible.
+// preSendMedia handles reaction undo and placeholder cleanup before sending
+// media attachments. Unlike preSend for text messages, media delivery never
+// edits the placeholder because there is no text payload to replace it with;
+// it only attempts to delete the placeholder when possible. Typing stops at
+// the end of the turn, not on intermediate media.
 func (m *Manager) preSendMedia(ctx context.Context, name string, msg bus.OutboundMediaMessage, ch Channel) {
 	chatID := outboundMediaChatID(msg)
 	key := name + ":" + chatID
 	streamKey := streamSuppressionKey(name, chatID, msg.SessionKey)
 
-	// 1. Stop typing
-	if v, loaded := m.typingStops.LoadAndDelete(key); loaded {
-		if entry, ok := v.(typingEntry); ok {
-			entry.stop() // idempotent, safe
-		}
-	}
-
-	// 2. Undo reaction
+	// 1. Undo reaction. Typing stops when the turn ends so intermediate media
+	// does not hide the running indicator.
 	if v, loaded := m.reactionUndos.LoadAndDelete(key); loaded {
 		if entry, ok := v.(reactionEntry); ok {
 			entry.undo() // idempotent, safe
 		}
 	}
 
-	// 3. Clear any finalized stream markers for this chat before media delivery.
+	// 2. Clear any finalized stream markers for this chat before media delivery.
 	m.streamActive.LoadAndDelete(streamKey)
 	m.streamAuxiliaryTombstones.Delete(streamKey)
 
@@ -589,7 +591,7 @@ func (m *Manager) preSendMedia(ctx context.Context, name string, msg bus.Outboun
 		clearTrackedToolFeedbackMessage(ch, chatID, &msg.Context)
 	}
 
-	// 4. Delete placeholder if present.
+	// 3. Delete placeholder if present.
 	if v, loaded := m.placeholders.LoadAndDelete(key); loaded {
 		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 			if deleter, ok := ch.(MessageDeleter); ok {
@@ -751,33 +753,32 @@ func setStreamerModelName(streamer any, modelName string) {
 }
 
 type turnUsageStreamer interface {
-	SetTurnUsage(inputTokens, outputTokens int)
+	SetTurnUsage(usage bus.TokenUsage)
 }
 
 // setStreamerTurnUsage forwards real per-turn token usage to a streamer that
 // supports it, transparently unwrapping the manager's streamer wrappers.
-func setStreamerTurnUsage(streamer any, inputTokens, outputTokens int) {
+func setStreamerTurnUsage(streamer any, usage bus.TokenUsage) {
 	setter, ok := streamer.(turnUsageStreamer)
 	if !ok {
 		return
 	}
-	setter.SetTurnUsage(inputTokens, outputTokens)
+	setter.SetTurnUsage(usage)
 }
 
 // splitMarkerStreamer turns accumulated streaming text containing
 // MessageSplitMarker into separate channel stream messages.
 type splitMarkerStreamer struct {
-	mu               sync.Mutex
-	current          bus.Streamer
-	reasoning        bus.ReasoningStreamer
-	begin            func(context.Context) (bus.Streamer, error)
-	completedParts   int
-	finalized        bool
-	onFinalize       func(context.Context, string)
-	clearMarker      func()
-	modelName        string
-	turnInputTokens  int
-	turnOutputTokens int
+	mu             sync.Mutex
+	current        bus.Streamer
+	reasoning      bus.ReasoningStreamer
+	begin          func(context.Context) (bus.Streamer, error)
+	completedParts int
+	finalized      bool
+	onFinalize     func(context.Context, string)
+	clearMarker    func()
+	modelName      string
+	turnUsage      bus.TokenUsage
 }
 
 func (s *splitMarkerStreamer) Update(ctx context.Context, content string) error {
@@ -828,12 +829,11 @@ func (s *splitMarkerStreamer) SetModelName(modelName string) {
 	setStreamerModelName(s.reasoning, s.modelName)
 }
 
-func (s *splitMarkerStreamer) SetTurnUsage(inputTokens, outputTokens int) {
+func (s *splitMarkerStreamer) SetTurnUsage(usage bus.TokenUsage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.turnInputTokens = inputTokens
-	s.turnOutputTokens = outputTokens
-	setStreamerTurnUsage(s.current, s.turnInputTokens, s.turnOutputTokens)
+	s.turnUsage = usage
+	setStreamerTurnUsage(s.current, s.turnUsage)
 }
 
 func (s *splitMarkerStreamer) Cancel(ctx context.Context) {
@@ -915,7 +915,7 @@ func (s *splitMarkerStreamer) ensureCurrentLocked(ctx context.Context) error {
 	}
 	s.current = streamer
 	setStreamerModelName(s.current, s.modelName)
-	setStreamerTurnUsage(s.current, s.turnInputTokens, s.turnOutputTokens)
+	setStreamerTurnUsage(s.current, s.turnUsage)
 	return nil
 }
 
@@ -1004,8 +1004,8 @@ func (s *finalizeHookStreamer) SetModelName(modelName string) {
 	setStreamerModelName(s.Streamer, strings.TrimSpace(modelName))
 }
 
-func (s *finalizeHookStreamer) SetTurnUsage(inputTokens, outputTokens int) {
-	setStreamerTurnUsage(s.Streamer, inputTokens, outputTokens)
+func (s *finalizeHookStreamer) SetTurnUsage(usage bus.TokenUsage) {
+	setStreamerTurnUsage(s.Streamer, usage)
 }
 
 func (s *finalizeHookStreamer) runFinalizeHook(ctx context.Context, content string) {
@@ -2063,7 +2063,16 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	for _, name := range added {
-		channel := m.channels[name]
+		// An enabled channel can have a config hash without an instance when it
+		// failed its readiness check or its factory: initChannels skips it. A
+		// config-changing reload must not dereference that missing instance.
+		channel, ok := m.channels[name]
+		if !ok || channel == nil {
+			logger.WarnCF("channels", "Channel not initialized, skipping start", map[string]any{
+				"channel": name,
+			})
+			continue
+		}
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": name,
 		})

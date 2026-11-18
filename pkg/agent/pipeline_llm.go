@@ -287,6 +287,11 @@ func (p *Pipeline) CallLLM(
 			applyThinkingOption(callOpts, candidateProvider, candidateThinking, true, ts.agent.ID)
 			exec.suppressReasoning = shouldSuppressReasoningFor(candidateThinking)
 
+			if d := ts.implicitCallTimeout(candidateCfg); d > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, d)
+				defer cancel()
+			}
 			resp, err := candidateProvider.Chat(
 				ctx, messagesForCall, candidateTools, candidate.Model, callOpts,
 			)
@@ -491,9 +496,10 @@ func (p *Pipeline) CallLLM(
 				}
 
 				if compactErr := p.ContextManager.Compact(ctx, &CompactRequest{
-					SessionKey: ts.sessionKey,
-					Reason:     ContextCompressReasonRetry,
-					Budget:     ts.agent.ContextWindow,
+					SessionKey:         ts.sessionKey,
+					Reason:             ContextCompressReasonRetry,
+					Budget:             usableContextTokens(ts.agent),
+					ActiveTurnMessages: activeTurnMessageCount(ts, exec),
 				}); compactErr != nil {
 					logger.WarnCF("agent", "Context overflow compact failed", map[string]any{
 						"session_key": ts.sessionKey,
@@ -503,9 +509,14 @@ func (p *Pipeline) CallLLM(
 				rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerContextRetryRebuild)
 				stableHistory, protectedTurnTail, buildMessages := rebuilt.stable, rebuilt.protected, rebuilt.build
 				originalHistoryCount := len(exec.history)
+				trimProvider := exec.activeProvider
+				if trimProvider == nil {
+					trimProvider = ts.agent.Provider
+				}
 				var fit bool
 				var trimmedStableHistory []providers.Message //nolint:prealloc // Replaced by the slice returned from trimming below.
-				trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindow(
+				trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindowForProvider(
+					trimProvider,
 					stableHistory,
 					func(trimmedHistory []providers.Message) []providers.Message {
 						rebuilt := buildMessages(trimmedHistory)
@@ -561,12 +572,23 @@ func (p *Pipeline) CallLLM(
 			break
 		}
 
-		if err == nil || skipPrimaryFallback || !exec.usedLight {
+		if err == nil || skipPrimaryFallback {
 			break
 		}
-		// A canceled call or turn is not a light-model failure; the primary
+		// A canceled call or turn is not a model failure; the next model
 		// would be canceled too.
 		if turnCtx.Err() != nil || errors.Is(err, context.Canceled) {
+			break
+		}
+		if baseModelName := p.degradeFromImageModel(ts, exec, err); baseModelName != "" {
+			exec.llmModel = exec.activeModel
+			exec.llmModelName = baseModelName
+			applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
+			refreshNativeSearch()
+			err = nil
+			continue
+		}
+		if !exec.usedLight {
 			break
 		}
 		if !p.promoteToPrimary(ts, exec, "light model candidates failed: "+err.Error()) {
@@ -628,17 +650,15 @@ func (p *Pipeline) CallLLM(
 		}
 	}
 
-	// Save finishReason and usage on the turn state. Use ts directly (the
-	// authoritative turn state for this call) rather than a context lookup:
+	// Save finishReason and accumulate usage on the turn state. Use ts directly
+	// (the authoritative turn state for this call) rather than a context lookup:
 	// the raw ctx passed to CallLLM is not seeded with turnState (only turnCtx
 	// is), so turnStateFromContext(ctx) returns nil here and silently dropped
 	// both the finish reason and the per-turn token usage. ts is also exactly
-	// what the streaming publisher reads via GetLastUsage at finalize.
+	// what the streaming publisher reads via GetTurnUsage at finalize.
 	if ts != nil {
 		ts.SetLastFinishReason(exec.response.FinishReason)
-		if exec.response.Usage != nil {
-			ts.SetLastUsage(exec.response.Usage)
-		}
+		ts.AddUsage(exec.llmModelName, exec.response.Usage)
 	}
 
 	// Mid-turn routing guard: a light-model turn that grows too large or keeps
@@ -678,14 +698,20 @@ func (p *Pipeline) CallLLM(
 			al.targetReasoningChannelID(ts.channel),
 		)
 	}
+	llmResponsePayload := LLMResponsePayload{
+		ContentLen:   len(exec.response.Content),
+		ToolCalls:    len(exec.response.ToolCalls),
+		HasReasoning: exec.response.Reasoning != "" || exec.response.ReasoningContent != "",
+	}
+	if exec.response.Usage != nil {
+		llmResponsePayload.InputTokens = exec.response.Usage.PromptTokens
+		llmResponsePayload.OutputTokens = exec.response.Usage.CompletionTokens
+		llmResponsePayload.TotalTokens = exec.response.Usage.TotalTokens
+	}
 	al.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
 		ts.eventMeta("runTurn", "turn.llm.response"),
-		LLMResponsePayload{
-			ContentLen:   len(exec.response.Content),
-			ToolCalls:    len(exec.response.ToolCalls),
-			HasReasoning: exec.response.Reasoning != "" || exec.response.ReasoningContent != "",
-		},
+		llmResponsePayload,
 	)
 
 	llmResponseFields := map[string]any{
@@ -724,9 +750,10 @@ func (p *Pipeline) CallLLM(
 			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 			return ControlContinue, nil
 		}
-		// A SubTurn may not finish before its async children: let the model
-		// react to their results instead of orphaning them.
-		if ts.parentTurnState != nil && !exec.gracefulTerminal {
+		// A SubTurn (and a CLI root turn) may not finish before its async
+		// children: let the model react to their results instead of orphaning
+		// them.
+		if (ts.parentTurnState != nil || ts.joinSubTurns) && !exec.gracefulTerminal {
 			if msgs := ts.joinChildren(turnCtx, al.cfg.FilterSensitiveData); len(msgs) > 0 {
 				cancelConfiguredStreamingLLM(turnCtx, exec)
 				logger.InfoCF("agent", "Joined async children after direct LLM response; continuing turn",

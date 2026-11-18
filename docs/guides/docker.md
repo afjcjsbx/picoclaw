@@ -1,6 +1,10 @@
+---
+description: "Run PicoClaw with Docker Compose or the launcher: image tags, volumes, workspace layout, and a first working configuration."
+title: "Docker & Quick Start Guide"
+---
 # 🐳 Docker & Quick Start Guide
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ## 🐳 Docker Compose
 

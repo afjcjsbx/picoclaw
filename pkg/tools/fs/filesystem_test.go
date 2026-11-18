@@ -2,13 +2,17 @@ package fstools
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -393,6 +397,396 @@ func TestFilesystemTool_WriteFile_OverwriteFalseExplicitBlocked(t *testing.T) {
 	assert.Equal(t, "original", string(data))
 }
 
+// TestFilesystemTool_WriteFile_IdenticalContentIsNoOp verifies that writing
+// bytes identical to the existing file succeeds without rewriting it, whether
+// or not overwrite is set.
+func TestFilesystemTool_WriteFile_IdenticalContentIsNoOp(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "state.json")
+	original := `{"items":[1,2]}`
+	assert.NoError(t, os.WriteFile(testFile, []byte(original), 0o644))
+	before, err := os.Stat(testFile)
+	assert.NoError(t, err)
+
+	tool := NewWriteFileTool("", false)
+	for _, overwrite := range []bool{false, true} {
+		result := tool.Execute(context.Background(), map[string]any{
+			"path":      testFile,
+			"content":   original,
+			"overwrite": overwrite,
+		})
+		assert.False(t, result.IsError, "overwrite=%v: %s", overwrite, result.ForLLM)
+		payload := writeFileResultPayload(t, result.ForLLM)
+		assert.True(t, payload.Success)
+		assert.Equal(t, writeActionUnchanged, payload.Action)
+		assert.Equal(t, 0, payload.BytesWritten)
+		assert.True(t, payload.Verified)
+		assert.Equal(t, testFile, payload.ResolvedPath)
+		assert.Equal(t, syntaxStatusOK, payload.Syntax)
+	}
+
+	data, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+	assert.Equal(t, original, string(data))
+
+	after, err := os.Stat(testFile)
+	assert.NoError(t, err)
+	assert.True(t, os.SameFile(before, after), "identical writes must not replace the file")
+	assert.Equal(t, before.ModTime(), after.ModTime(), "identical writes must not rewrite the file")
+}
+
+// TestFilesystemTool_WriteFile_AppendShapedContentAccepted verifies that a
+// write whose content is the existing file plus a suffix is applied as an
+// append instead of consuming a retry with overwrite=true.
+func TestFilesystemTool_WriteFile_AppendShapedContentAccepted(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "todos.json")
+	original := "line one\n"
+	appended := "line two\n"
+	assert.NoError(t, os.WriteFile(testFile, []byte(original), 0o644))
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": original + appended,
+	})
+
+	assert.False(t, result.IsError, "append-shaped write must not need overwrite: %s", result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.True(t, payload.Success)
+	assert.Equal(t, writeActionAppended, payload.Action)
+	assert.Equal(t, len(appended), payload.BytesWritten)
+	assert.True(t, payload.Verified)
+	assert.Equal(t, testFile, payload.ResolvedPath)
+
+	data, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+	assert.Equal(t, original+appended, string(data))
+}
+
+// TestFilesystemTool_WriteFile_ResultReportsVerification verifies the success
+// payload carries the resolved path, byte count, read-back verdict, and the
+// quick syntax check for a known extension.
+func TestFilesystemTool_WriteFile_ResultReportsVerification(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewWriteFileTool(workspace, true)
+	content := "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n"
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    "nested/main.go",
+		"content": content,
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.True(t, payload.Success)
+	assert.Equal(t, writeActionCreated, payload.Action)
+	assert.Equal(t, filepath.Join(workspace, "nested", "main.go"), payload.ResolvedPath)
+	assert.Equal(t, len(content), payload.BytesWritten)
+	assert.True(t, payload.Verified)
+	assert.Equal(t, syntaxStatusOK, payload.Syntax)
+}
+
+// TestFilesystemTool_WriteFile_ResolvedPathIsReadable verifies the returned
+// absolute path can be fed straight back into read_file in sandbox mode.
+func TestFilesystemTool_WriteFile_ResolvedPathIsReadable(t *testing.T) {
+	workspace := t.TempDir()
+	write := NewWriteFileTool(workspace, true)
+
+	result := write.Execute(context.Background(), map[string]any{
+		"path":    "nested/note.txt",
+		"content": "hello",
+	})
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+
+	read := NewReadFileTool(workspace, true, MaxReadFileSize)
+	readResult := read.Execute(context.Background(), map[string]any{"path": payload.ResolvedPath})
+	assert.False(t, readResult.IsError, readResult.ForLLM)
+	assert.Contains(t, readResult.ForLLM, "hello")
+}
+
+// TestFilesystemTool_WriteFile_ResultReportsOverwritten verifies the action
+// distinguishes a replacement from a new file.
+func TestFilesystemTool_WriteFile_ResultReportsOverwritten(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "note.txt")
+	assert.NoError(t, os.WriteFile(testFile, []byte("old"), 0o644))
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":      testFile,
+		"content":   "new",
+		"overwrite": true,
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, writeActionOverwritten, payload.Action)
+	assert.Equal(t, len("new"), payload.BytesWritten)
+	assert.True(t, payload.Verified)
+}
+
+// TestFilesystemTool_WriteFile_BytesWrittenCountsBytes verifies the reported
+// count is bytes, not runes.
+func TestFilesystemTool_WriteFile_BytesWrittenCountsBytes(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "utf8.txt")
+	content := "héllo\n"
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": content,
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, len(content), payload.BytesWritten)
+	assert.True(t, payload.Verified)
+}
+
+// TestFilesystemTool_WriteFile_EmptyContent verifies the zero-length read-back
+// path succeeds without inventing extra bytes.
+func TestFilesystemTool_WriteFile_EmptyContent(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "empty.txt")
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": "",
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, 0, payload.BytesWritten)
+	assert.True(t, payload.Verified)
+}
+
+// TestFilesystemTool_WriteFile_SyntaxErrorIsAdvisory verifies a syntax problem
+// is reported without failing a write that landed and verified correctly.
+func TestFilesystemTool_WriteFile_SyntaxErrorIsAdvisory(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "broken.json")
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": `{"a":}`,
+	})
+
+	assert.False(t, result.IsError, "syntax problems must not fail the write: %s", result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.True(t, payload.Success)
+	assert.True(t, payload.Verified)
+	assert.Empty(t, payload.Syntax)
+	assert.Equal(t, "not strict JSON", payload.SyntaxError)
+
+	data, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+	assert.Equal(t, `{"a":}`, string(data))
+}
+
+// TestFilesystemTool_WriteFile_SkippedSyntaxCheckOmitsField verifies a check
+// that bails out at the nesting cap is not reported as a passing check.
+func TestFilesystemTool_WriteFile_SkippedSyntaxCheckOmitsField(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "deep.go")
+
+	tool := NewWriteFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": strings.Repeat("(", maxSyntaxDepth+1),
+	})
+
+	assert.False(t, result.IsError, result.ForLLM)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.True(t, payload.Success)
+	assert.Empty(t, payload.Syntax)
+	assert.Empty(t, payload.SyntaxError)
+}
+
+// TestFilesystemTool_WriteFile_ReadBackMismatchIsError verifies that a write
+// whose read-back differs is reported as an error instead of a silent success.
+func TestFilesystemTool_WriteFile_ReadBackMismatchIsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "note.txt")
+	other, err := fstest.MapFS{"other": &fstest.MapFile{Data: []byte("different")}}.Open("other")
+	assert.NoError(t, err)
+
+	tool := &WriteFileTool{
+		fs: writeVerifyFs{fileSystem: &hostFs{}, file: other},
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": "hello",
+	})
+
+	assert.True(t, result.IsError, "a read-back mismatch must be an error")
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.False(t, payload.Success)
+	assert.False(t, payload.Verified)
+	assert.Equal(t, writeErrorReadBackMismatch, payload.Error)
+	assert.Equal(t, len("hello"), payload.BytesWritten)
+
+	// The write itself still landed; the error only reports the failed check.
+	data, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+	assert.Equal(t, "hello", string(data))
+}
+
+// TestFilesystemTool_WriteFile_ReadBackFailureIsError verifies that a read-back
+// that cannot open the file is surfaced with its detail.
+func TestFilesystemTool_WriteFile_ReadBackFailureIsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "note.txt")
+
+	tool := &WriteFileTool{
+		fs: writeVerifyFs{fileSystem: &hostFs{}, err: errors.New("open boom")},
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    testFile,
+		"content": "hello",
+	})
+
+	assert.True(t, result.IsError)
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, writeErrorReadBackFailed, payload.Error)
+	assert.Equal(t, writeActionCreated, payload.Action)
+	assert.Equal(t, testFile, payload.ResolvedPath)
+	assert.Equal(t, len("hello"), payload.BytesWritten)
+	assert.NotEmpty(t, payload.Message)
+	assert.Contains(t, payload.Detail, "open boom")
+	assert.Empty(t, payload.Syntax)
+	assert.Empty(t, payload.SyntaxError)
+}
+
+// TestVerifyWrittenFile verifies suffix comparison at an offset and the
+// contract that append read-backs require a seekable backend.
+func TestVerifyWrittenFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.txt")
+	assert.NoError(t, os.WriteFile(path, []byte("0123456789"), 0o600))
+
+	verified, err := verifyWrittenFile(&hostFs{}, path, []byte("789"), 7)
+	assert.NoError(t, err)
+	assert.True(t, verified)
+
+	verified, err = verifyWrittenFile(&hostFs{}, path, []byte("788"), 7)
+	assert.NoError(t, err)
+	assert.False(t, verified)
+
+	nonSeeker, err := fstest.MapFS{
+		"data": &fstest.MapFile{Data: []byte("0123456789")},
+	}.Open("data")
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = nonSeeker.Close() })
+
+	verified, err = verifyWrittenFile(
+		writeVerifyFs{fileSystem: &hostFs{}, file: nonSeekerOnly{File: nonSeeker}},
+		path,
+		[]byte("789"),
+		7,
+	)
+	assert.Error(t, err)
+	assert.False(t, verified)
+}
+
+// nonSeekerOnly hides the Seek method of an fs.File to exercise the backend
+// contract check.
+type nonSeekerOnly struct {
+	fs.File
+}
+
+// writeVerifyFs replaces the read-back with a fixed file or error so the
+// verification failure paths can be exercised deterministically.
+type writeVerifyFs struct {
+	fileSystem
+	file fs.File
+	err  error
+}
+
+func (f writeVerifyFs) Open(string) (fs.File, error) {
+	return f.file, f.err
+}
+
+func writeFileResultPayload(t *testing.T, forLLM string) writeFileResult {
+	t.Helper()
+	var payload writeFileResult
+	if err := json.Unmarshal([]byte(forLLM), &payload); err != nil {
+		t.Fatalf("invalid write_file result: %v (%q)", err, forLLM)
+	}
+	return payload
+}
+
+// TestFilesystemTool_WriteFile_ConflictReturnsStructuredAction verifies that a
+// destructive replacement returns a machine-readable action and path next to
+// the human-readable error.
+func TestFilesystemTool_WriteFile_ConflictReturnsStructuredAction(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "todos.json")
+	existing := "alpha\n"
+	newContent := "beta\nalpha\n"
+	assert.NoError(t, os.WriteFile(testFile, []byte(existing), 0o644))
+
+	execute := func(t *testing.T, tool *WriteFileTool) writeFileConflict {
+		t.Helper()
+		result := tool.Execute(context.Background(), map[string]any{
+			"path":    testFile,
+			"content": newContent,
+		})
+		assert.True(t, result.IsError, "non-append replacement must be refused")
+		assert.Contains(t, result.ForLLM, "already exists")
+		return writeFileConflictPayload(t, result.ForLLM)
+	}
+
+	t.Run("edit_file preferred when available", func(t *testing.T) {
+		tool := NewWriteFileTool("", false)
+		payload := execute(t, tool)
+		assert.Equal(t, writeErrorFileExists, payload.Error)
+		assert.Equal(t, testFile, payload.Path)
+		assert.Equal(t, testFile, payload.ResolvedPath)
+		assert.Equal(t, "edit_file", payload.RecommendedAction)
+		assert.Equal(t, []string{"append_file", "edit_file", "overwrite"}, payload.AvailableActions)
+		assert.Equal(t, int64(len(existing)), payload.ExistingBytes)
+		assert.Equal(t, len(newContent), payload.NewBytes)
+		assert.True(t, payload.OverwriteRequired)
+	})
+
+	t.Run("append_file is the only alternative", func(t *testing.T) {
+		tool := NewWriteFileTool("", false)
+		tool.SetAlternativeTools([]string{"append_file"})
+		payload := execute(t, tool)
+		assert.Equal(t, "append_file", payload.RecommendedAction)
+		assert.Equal(t, []string{"append_file", "overwrite"}, payload.AvailableActions)
+	})
+
+	t.Run("overwrite when no alternatives are registered", func(t *testing.T) {
+		tool := NewWriteFileTool("", false)
+		tool.SetAlternativeTools(nil)
+		payload := execute(t, tool)
+		assert.Equal(t, "overwrite", payload.RecommendedAction)
+		assert.Equal(t, []string{"overwrite"}, payload.AvailableActions)
+	})
+}
+
+func writeFileConflictPayload(t *testing.T, forLLM string) writeFileConflict {
+	t.Helper()
+	const marker = "\nstructured: "
+	index := strings.LastIndex(forLLM, marker)
+	if index < 0 {
+		t.Fatalf("missing structured payload in %q", forLLM)
+	}
+	var payload writeFileConflict
+	if err := json.Unmarshal([]byte(forLLM[index+len(marker):]), &payload); err != nil {
+		t.Fatalf("invalid structured payload: %v (%q)", err, forLLM)
+	}
+	return payload
+}
+
 // TestFilesystemTool_WriteFile_OverwriteSandboxed verifies the overwrite guard
 // works correctly in restricted (sandbox) mode.
 func TestFilesystemTool_WriteFile_OverwriteSandboxed(t *testing.T) {
@@ -409,6 +803,8 @@ func TestFilesystemTool_WriteFile_OverwriteSandboxed(t *testing.T) {
 	})
 	assert.True(t, result.IsError, "expected error in sandbox mode without overwrite=true")
 	assert.Contains(t, result.ForLLM, "already exists")
+	conflict := writeFileConflictPayload(t, result.ForLLM)
+	assert.Equal(t, filepath.Join(workspace, testFile), conflict.ResolvedPath)
 
 	// With overwrite=true → allowed
 	result = tool.Execute(context.Background(), map[string]any{
@@ -827,6 +1223,9 @@ func TestWhitelistFs_WriteAllowsNewFileUnderAllowedDir(t *testing.T) {
 	if string(data) != "outside write" {
 		t.Fatalf("target file content = %q, want %q", string(data), "outside write")
 	}
+
+	payload := writeFileResultPayload(t, result.ForLLM)
+	assert.Equal(t, targetFile, payload.ResolvedPath)
 }
 
 func TestWhitelistFs_AllowsResolvedAllowedRootAlias(t *testing.T) {
@@ -971,6 +1370,138 @@ func TestReadFileTool_OffsetBeyondEOF(t *testing.T) {
 	expectedMsg := "[END OF FILE - no content at this offset]"
 	if result.ForLLM != expectedMsg {
 		t.Errorf("The message %q was expected, obtained: %q", expectedMsg, result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_HeaderReportsFirstLineByteOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "offset_header.txt")
+	content := "line one\nline two\nline three\n"
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	fromStart := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if fromStart.IsError {
+		t.Fatalf("Execute(start_line=1) error = %s", fromStart.ForLLM)
+	}
+	if !strings.Contains(fromStart.ForLLM, "first_line_byte_offset: 0") {
+		t.Fatalf("expected offset 0 for start_line=1, got: %s", fromStart.ForLLM)
+	}
+
+	fromSecond := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+	})
+	if fromSecond.IsError {
+		t.Fatalf("Execute(start_line=2) error = %s", fromSecond.ForLLM)
+	}
+	wantOffset := len("line one\n")
+	if !strings.Contains(fromSecond.ForLLM, "first_line_byte_offset: "+strconv.Itoa(wantOffset)) {
+		t.Fatalf(
+			"expected first_line_byte_offset=%d for start_line=2, got: %s",
+			wantOffset, fromSecond.ForLLM,
+		)
+	}
+}
+
+func TestReadFileLinesTool_TruncationHintReportsRawOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "long_line.txt")
+	content := "short\n" + strings.Repeat("x", 100) + "\n"
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, 4096, DefaultReadFileMaxLines, 20)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	want := "[LINE TRUNCATED - line 2 was cut after 20 characters; its raw bytes start at offset 6. Call read_file with offset=6 and length=4096 to page the full line; repeat with the offset from the next header until EOF.]"
+	if !strings.Contains(result.ForLLM, want) {
+		t.Fatalf("expected truncation hint %q, got: %s", want, result.ForLLM)
+	}
+
+	fromSecond := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+	})
+	if fromSecond.IsError {
+		t.Fatalf("Execute(start_line=2) error = %s", fromSecond.ForLLM)
+	}
+	if !strings.Contains(fromSecond.ForLLM, "line 2 was cut after 20 characters; its raw bytes start at offset 6") {
+		t.Fatalf("expected truncation hint with the first line offset, got: %s", fromSecond.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_TruncationHintUsesInlineBudget(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "long_line.txt")
+	if err := os.WriteFile(testFile, []byte(strings.Repeat("z", 100)+"\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, 20,
+	)
+	tool.SetMaxInlineResultChars(16384)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "offset=0 and length=15360") {
+		t.Fatalf(
+			"expected page size 15360 from the inline budget, got: %s",
+			result.ForLLM,
+		)
+	}
+}
+
+func TestReadFileLinesTool_ByteBudgetHintPointsAtContinuation(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "budget_line.txt")
+	if err := os.WriteFile(testFile, []byte(strings.Repeat("y", 200)+"\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(tmpDir, false, 50, DefaultReadFileMaxLines, 2000)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	want := "[LINE TRUNCATED - line 1 was cut at the 50-byte budget; its raw bytes start at offset 0 and the returned prefix ends at offset 48. Call read_file with offset=48 and length=50 to continue; repeat with the next offset until EOF.]"
+	if !strings.Contains(result.ForLLM, want) {
+		t.Fatalf("expected continuation hint %q, got: %s", want, result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_NoTruncationHintOnNormalFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "normal.txt")
+	if err := os.WriteFile(testFile, []byte("line one\nline two\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "[LINE TRUNCATED") {
+		t.Fatalf("normal file must not include a truncation hint, got: %s", result.ForLLM)
 	}
 }
 
@@ -1423,5 +1954,197 @@ func TestReadFileLinesTool_ExactByteBudgetBoundaryIncludesPrefix(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "start_line=2") {
 		t.Fatalf("expected continuation at line 2, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileEmptyFileMessageIsExplicit(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "empty.txt")
+	if err := os.WriteFile(testFile, nil, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	const want = "[file is empty (0 bytes); do not retry]"
+
+	bytesTool := NewReadFileTool(tmpDir, false, MaxReadFileSize)
+	if got := bytesTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("byte mode empty result = %q, want %q", got, want)
+	}
+
+	linesTool := NewReadFileLinesTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	if got := linesTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("line mode empty result = %q, want %q", got, want)
+	}
+
+	autoTool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	if got := autoTool.Execute(context.Background(), map[string]any{"path": testFile}).ForLLM; got != want {
+		t.Fatalf("auto mode empty result = %q, want %q", got, want)
+	}
+}
+
+func TestReadFileAutoTool_DescriptionMentionsBinaryDefaultRange(t *testing.T) {
+	tool := NewReadFileAutoTool(
+		t.TempDir(), false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	desc := strings.ToLower(tool.Description())
+	if !strings.Contains(desc, "omit `offset` and `length`") ||
+		!strings.Contains(desc, "default byte range") {
+		t.Fatalf("auto description must explain the binary default range, got: %s", tool.Description())
+	}
+
+	props, _ := tool.Parameters()["properties"].(map[string]any)
+	length, _ := props["length"].(map[string]any)
+	lengthDesc, _ := length["description"].(string)
+	if !strings.Contains(strings.ToLower(lengthDesc), "omit to use the default") {
+		t.Fatalf("length description must explain the default range, got: %s", lengthDesc)
+	}
+}
+
+func TestReadFileAutoTool_TextDefaultsToLineMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 2,
+		"max_lines":  1,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "2|beta\n") {
+		t.Fatalf("expected line-numbered output, got: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "1|alpha") {
+		t.Fatalf("expected start_line to be honored, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "read: lines 2-2") {
+		t.Fatalf("expected line range header, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_BinaryFallsBackToByteMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "binary.dat")
+	data := []byte{0x00, 0x01, 'A', 'B', 'C', 'D'}
+	if err := os.WriteFile(testFile, data, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("expected binary fallback to succeed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 0-5") {
+		t.Fatalf("expected raw byte range header, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, string(data)) {
+		t.Fatalf("expected raw bytes in the result, got: %q", result.ForLLM)
+	}
+
+	result = tool.Execute(context.Background(), map[string]any{
+		"path":   testFile,
+		"offset": 2,
+		"length": 2,
+	})
+	if result.IsError {
+		t.Fatalf("expected binary byte pagination to succeed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 2-3") || !strings.Contains(result.ForLLM, "AB") {
+		t.Fatalf("expected the requested byte range, got: %q", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_ByteArgsForceRawModeOnText(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("abcdef\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":   testFile,
+		"offset": 0,
+		"length": 3,
+	})
+	if result.IsError {
+		t.Fatalf("Execute() error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "bytes 0-2") || !strings.Contains(result.ForLLM, "abc") {
+		t.Fatalf("expected raw byte output, got: %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "1|") {
+		t.Fatalf("expected byte mode to omit line numbers, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_RejectsLineArgsForBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "binary.dat")
+	if err := os.WriteFile(testFile, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+	})
+	if !result.IsError {
+		t.Fatalf("expected line args on a binary file to fail, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "use offset/length") {
+		t.Fatalf("expected byte pagination guidance, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileAutoTool_RejectsMixedPaginationArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "text.txt")
+	if err := os.WriteFile(testFile, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileAutoTool(
+		tmpDir, false, MaxReadFileSize,
+		DefaultReadFileMaxLines, DefaultReadFileMaxLineLength,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":       testFile,
+		"start_line": 1,
+		"offset":     0,
+	})
+	if !result.IsError {
+		t.Fatalf("expected mixed pagination args to fail, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "not both") {
+		t.Fatalf("expected mixed-args guidance, got: %s", result.ForLLM)
 	}
 }

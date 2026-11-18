@@ -87,6 +87,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Session history
 	h.registerSessionRoutes(mux)
+	h.registerFileRoutes(mux)
 
 	// OAuth login and credential management
 	h.registerOAuthRoutes(mux)
@@ -101,6 +102,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	h.registerSkillRoutes(mux)
 	h.registerToolRoutes(mux)
 	h.registerMCPRoutes(mux)
+	h.registerSubagentRoutes(mux)
+
+	// Cron job management (proxied to the gateway scheduler)
+	h.registerCronRoutes(mux)
+
+	// Slash command metadata for the chat composer palette
+	h.registerCommandRoutes(mux)
 
 	// OS startup / launch-at-login
 	h.registerStartupRoutes(mux)

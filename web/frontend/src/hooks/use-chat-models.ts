@@ -1,3 +1,4 @@
+import { useAtomValue } from "jotai"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -5,6 +6,7 @@ import { toast } from "sonner"
 import { type ModelInfo, getModels, setDefaultModel } from "@/api/models"
 import { showSaveSuccessOrRestartToast } from "@/lib/restart-required"
 import { refreshGatewayState } from "@/store/gateway"
+import { modelsRevisionAtom } from "@/store/models"
 
 interface UseChatModelsOptions {
   isConnected: boolean
@@ -29,6 +31,7 @@ export function useChatModels({ isConnected }: UseChatModelsOptions) {
   const setDefaultRequestIdRef = useRef(0)
   const loadModelsRequestIdRef = useRef(0)
   const setDefaultQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const modelsRevision = useAtomValue(modelsRevisionAtom)
 
   const syncDefaultModelName = useCallback((defaultModel: string) => {
     setDefaultModelName(defaultModel.trim())
@@ -54,7 +57,7 @@ export function useChatModels({ isConnected }: UseChatModelsOptions) {
     }, 0)
 
     return () => clearTimeout(timerId)
-  }, [isConnected, loadModels])
+  }, [isConnected, loadModels, modelsRevision])
 
   const handleSetDefault = useCallback(
     async (modelName: string) => {

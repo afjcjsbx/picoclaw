@@ -97,7 +97,7 @@ func messagesContainCurrentTurnMediaTurn(messages []providers.Message) bool {
 }
 
 func (p *Pipeline) routeMediaTurn(ts *turnState, exec *turnExecution) error {
-	if p == nil || ts == nil || ts.agent == nil || exec == nil ||
+	if p == nil || ts == nil || ts.agent == nil || exec == nil || exec.imageRouteDisabled ||
 		!messagesContainCurrentTurnMediaTurn(currentTurnMessages(exec.callMessages, exec.currentTurnStart)) {
 		return nil
 	}
@@ -167,4 +167,49 @@ func (p *Pipeline) routeMediaTurn(ts *turnState, exec *turnExecution) error {
 	})
 
 	return nil
+}
+
+const imageUnavailableNote = "[Image omitted: the image model is unavailable]"
+
+// degradeFromImageModel moves a turn whose image-model call failed back to the
+// base model, so one flaky vision backend does not abort the turn. Inline image
+// data is dropped (path tags stay in the text) and image routing stays off for
+// the rest of the turn. It returns the resolved base model name, or "" when the
+// turn is not on the image model or there is no distinct base model to use.
+func (p *Pipeline) degradeFromImageModel(ts *turnState, exec *turnExecution, cause error) string {
+	if p == nil || ts == nil || ts.agent == nil || exec == nil || exec.imageRouteDisabled ||
+		len(ts.agent.ImageCandidates) == 0 || len(ts.agent.Candidates) == 0 || ts.agent.Provider == nil ||
+		!sameCandidateSet(exec.activeCandidates, ts.agent.ImageCandidates) ||
+		sameCandidateSet(ts.agent.Candidates, ts.agent.ImageCandidates) {
+		return ""
+	}
+
+	imageModel := exec.llmModelName
+	baseModelName := p.useBaseCandidates(ts, exec)
+	exec.imageRouteDisabled = true
+	exec.messages = dropInlineMedia(exec.messages)
+	exec.callMessages = dropInlineMedia(exec.callMessages)
+
+	logger.WarnCF("agent", "Image model failed; falling back to base model without inline media", map[string]any{
+		"agent_id":   ts.agent.ID,
+		"from_model": imageModel,
+		"to_model":   baseModelName,
+		"error":      cause.Error(),
+	})
+	return baseModelName
+}
+
+// dropInlineMedia returns a copy of messages with inline media removed.
+func dropInlineMedia(messages []providers.Message) []providers.Message {
+	out := make([]providers.Message, len(messages))
+	for i, msg := range messages {
+		if len(msg.Media) > 0 {
+			msg.Media = nil
+			if msg.Content == toolImageFollowUpContent {
+				msg.Content = imageUnavailableNote
+			}
+		}
+		out[i] = msg
+	}
+	return out
 }

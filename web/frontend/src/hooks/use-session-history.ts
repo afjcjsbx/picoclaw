@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 
 import { type SessionSummary, deleteSession, getSessions } from "@/api/sessions"
 
@@ -16,52 +17,50 @@ export function useSessionHistory({
 }: UseSessionHistoryOptions) {
   const { t } = useTranslation()
   const observerRef = useRef<HTMLDivElement>(null)
+  const offsetRef = useRef(0)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
-  const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(true)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [loadError, setLoadError] = useState(false)
 
-  const loadSessions = useCallback(
-    async (reset = true) => {
-      try {
-        const currentOffset = reset ? 0 : offset
-        if (reset) {
-          setLoadError(false)
-          setHasMore(true)
-          setOffset(0)
-        }
-
-        const data = await getSessions(currentOffset, LIMIT)
+  const loadSessions = useCallback(async (reset = true) => {
+    try {
+      const currentOffset = reset ? 0 : offsetRef.current
+      if (reset) {
         setLoadError(false)
-
-        if (data.length < LIMIT) {
-          setHasMore(false)
-        }
-
-        if (reset) {
-          setSessions(data)
-        } else {
-          setSessions((prev) => {
-            const existingIds = new Set(prev.map((s) => s.id))
-            const newItems = data.filter((s) => !existingIds.has(s.id))
-            return [...prev, ...newItems]
-          })
-        }
-
-        setOffset(currentOffset + data.length)
-      } catch (err) {
-        console.error("Failed to fetch session history:", err)
-        setLoadError(true)
-        if (!reset) {
-          setHasMore(false)
-        }
-      } finally {
-        setIsLoadingMore(false)
+        setHasMore(true)
+        offsetRef.current = 0
       }
-    },
-    [offset],
-  )
+      setIsLoadingMore(true)
+
+      const data = await getSessions(currentOffset, LIMIT)
+      setLoadError(false)
+
+      if (data.length < LIMIT) {
+        setHasMore(false)
+      }
+
+      if (reset) {
+        setSessions(data)
+      } else {
+        setSessions((prev) => {
+          const existingIds = new Set(prev.map((s) => s.id))
+          const newItems = data.filter((s) => !existingIds.has(s.id))
+          return [...prev, ...newItems]
+        })
+      }
+
+      offsetRef.current = currentOffset + data.length
+    } catch (err) {
+      console.error("Failed to fetch session history:", err)
+      setLoadError(true)
+      if (!reset) {
+        setHasMore(false)
+      }
+    } finally {
+      setIsLoadingMore(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!observerRef.current || !hasMore || isLoadingMore || loadError) return
@@ -86,7 +85,7 @@ export function useSessionHistory({
   }, [hasMore, isLoadingMore, loadError, loadSessions])
 
   const handleDeleteSession = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<boolean> => {
       try {
         const deletedLoadedSession = sessions.some(
           (session) => session.id === id,
@@ -94,21 +93,27 @@ export function useSessionHistory({
         await deleteSession(id)
         setSessions((prev) => prev.filter((s) => s.id !== id))
         if (deletedLoadedSession) {
-          setOffset((prev) => Math.max(prev - 1, 0))
+          offsetRef.current = Math.max(offsetRef.current - 1, 0)
         }
         if (id === activeSessionId) {
           onDeletedActiveSession()
         }
+        return true
       } catch (err) {
         console.error("Failed to delete session:", err)
+        toast.error(t("chat.deleteSessionFailed"), {
+          description: err instanceof Error ? err.message : undefined,
+        })
+        return false
       }
     },
-    [activeSessionId, onDeletedActiveSession, sessions],
+    [activeSessionId, onDeletedActiveSession, sessions, t],
   )
 
   return {
     sessions,
     hasMore,
+    isLoadingMore,
     loadError,
     loadErrorMessage: t("chat.historyLoadFailed"),
     observerRef,

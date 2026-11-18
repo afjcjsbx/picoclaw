@@ -1,3 +1,6 @@
+---
+description: "The pkg/agent/loop.go file (originally 4384 lines) has been split into 12 focused source files. This is a pure refactoring with no behavioral changes."
+---
 # AgentLoop File Split
 
 > **Note:** This document describes the file split that was completed in a previous phase. The `loop_*` naming has since been renamed to `agent_*` and `turn_*`. See [agent-rename-plan.md](./agent-rename-plan.md) for the current file structure.

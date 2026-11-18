@@ -22,6 +22,8 @@ func TestToolResultJSONShape(t *testing.T) {
 		ResponseHandled:    true,
 		LargeResultSpilled: true,
 		FullText:           "the full text",
+		ForceArtifact:      true,
+		ArtifactMaxRunes:   2048,
 	}
 
 	payload, err := json.Marshal(result)
@@ -43,7 +45,10 @@ func TestToolResultJSONShape(t *testing.T) {
 		}
 	}
 
-	for _, key := range []string{"Err", "err", "Messages", "LargeResultSpilled", "FullText"} {
+	for _, key := range []string{
+		"Err", "err", "Messages", "LargeResultSpilled", "FullText",
+		"ForceArtifact", "ArtifactMaxRunes",
+	} {
 		if _, ok := decoded[key]; ok {
 			t.Errorf("serialized result must not contain %q: %s", key, payload)
 		}

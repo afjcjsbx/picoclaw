@@ -65,11 +65,16 @@ type LLMRequestPayload struct {
 	Temperature   float64
 }
 
-// LLMResponsePayload describes an inbound LLM response.
+// LLMResponsePayload describes an inbound LLM response. Token counts are
+// populated from the provider usage report and stay zero when the provider
+// does not return usage information.
 type LLMResponsePayload struct {
 	ContentLen   int
 	ToolCalls    int
 	HasReasoning bool
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
 }
 
 // LLMDeltaPayload describes a streamed LLM delta.

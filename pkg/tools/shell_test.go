@@ -16,9 +16,67 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
+// newTestExecTool builds an exec tool with remote access enabled so tests that
+// exercise command execution can keep using a bare context. The default
+// fail-closed behavior is pinned separately.
+func newTestExecTool(workingDir string, restrict bool) (*ExecTool, error) {
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.AllowRemote = true
+	return NewExecToolWithConfig(workingDir, restrict, cfg)
+}
+
+func parseExecRunMeta(t *testing.T, forLLM string) map[string]any {
+	t.Helper()
+	line, _, ok := strings.Cut(forLLM, "\n")
+	require.True(t, ok, "expected a metadata header and an output body")
+	require.True(t, strings.HasPrefix(line, execRunMetaPrefix), "unexpected exec header: %q", line)
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, execRunMetaPrefix)), &meta))
+	return meta
+}
+
+func TestExecParametersDeclareBooleanFlags(t *testing.T) {
+	props, ok := (&ExecTool{}).Parameters()["properties"].(map[string]any)
+	require.True(t, ok, "properties must be a map")
+	for _, name := range []string{"background", "pty", "notify"} {
+		prop, ok := props[name].(map[string]any)
+		require.True(t, ok, "%s must be an object", name)
+		require.Equal(t, "boolean", prop["type"], "%s must be declared as boolean", name)
+	}
+}
+
+func TestBoolArgAcceptsLegacyStrings(t *testing.T) {
+	require.True(t, boolArg(map[string]any{"flag": true}, "flag"))
+	require.True(t, boolArg(map[string]any{"flag": "true"}, "flag"))
+	require.False(t, boolArg(map[string]any{"flag": false}, "flag"))
+	require.False(t, boolArg(map[string]any{"flag": "false"}, "flag"))
+	require.False(t, boolArg(map[string]any{}, "flag"))
+}
+
 // TestShellTool_Success verifies successful command execution
+func TestFindShellExecutableReturnsAbsoluteExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell lookup is not used on Windows")
+	}
+	path, err := findShellExecutable()
+	if err != nil {
+		t.Fatalf("findShellExecutable() error = %v", err)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("shell path %q is not absolute", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat shell path: %v", err)
+	}
+	if info.IsDir() || info.Mode()&0o111 == 0 {
+		t.Fatalf("shell path %q is not an executable file", path)
+	}
+}
+
 func TestShellTool_Success(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -47,9 +105,123 @@ func TestShellTool_Success(t *testing.T) {
 	}
 }
 
+func TestShellTool_ForegroundResultHeader(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	t.Run("success", func(t *testing.T) {
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "echo 'hello world'",
+		})
+		require.False(t, result.IsError, result.ForLLM)
+
+		meta := parseExecRunMeta(t, result.ForLLM)
+		require.Equal(t, float64(0), meta["exitCode"])
+		require.Equal(t, false, meta["timedOut"])
+		require.Equal(t, false, meta["truncated"])
+		require.Contains(t, meta, "durationMs")
+
+		// The body stays raw: no JSON escaping of newlines.
+		_, body, ok := strings.Cut(result.ForLLM, "\n")
+		require.True(t, ok)
+		require.Contains(t, body, "hello world")
+		require.NotContains(t, body, `\n`)
+		require.Contains(t, result.ForUser, "hello world")
+	})
+
+	t.Run("non-zero exit", func(t *testing.T) {
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "sh -c 'exit 7'",
+		})
+		require.True(t, result.IsError)
+
+		meta := parseExecRunMeta(t, result.ForLLM)
+		require.Equal(t, float64(7), meta["exitCode"])
+		require.NotContains(t, meta, "error")
+		require.Contains(t, result.ForUser, "[Command exited with code 7]")
+	})
+
+	t.Run("empty output", func(t *testing.T) {
+		result := tool.Execute(context.Background(), map[string]any{
+			"action":  "run",
+			"command": "true",
+		})
+		require.False(t, result.IsError, result.ForLLM)
+
+		meta := parseExecRunMeta(t, result.ForLLM)
+		require.Equal(t, float64(0), meta["exitCode"])
+		require.Contains(t, result.ForLLM, "(no output)")
+		require.Equal(t, "(no output)", result.ForUser)
+	})
+}
+
+func TestShellTool_StripsANSIFromForegroundOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX printf")
+	}
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": `printf '\033[31mred\033[0m plain\n'`,
+	})
+
+	require.False(t, result.IsError, result.ForLLM)
+	require.NotContains(t, result.ForLLM, "\x1b")
+	require.NotContains(t, result.ForUser, "\x1b")
+	require.Contains(t, result.ForLLM, "red plain")
+}
+
+func TestShellTool_StripsANSIFromBackgroundOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX printf")
+	}
+	tool, ctx, id := startBackgroundSession(t, `printf '\033[32mgreen\033[0m\n'; sleep 5`)
+	time.Sleep(200 * time.Millisecond)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+
+	require.NotContains(t, resp.Output, "\x1b")
+	require.Contains(t, resp.Output, "green")
+}
+
+func TestShellTool_StripsANSIFromSpilledOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX cat")
+	}
+
+	workspace := t.TempDir()
+	content := strings.Repeat("\x1b[31mred\x1b[0m\n", 2000)
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "ansi.txt"), []byte(content), 0o600))
+
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 100
+	tool, err := NewExecToolWithConfig(workspace, false, cfg)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "cat ansi.txt",
+	})
+
+	require.False(t, result.IsError, result.ForLLM)
+	require.NotContains(t, result.ForLLM, "\x1b")
+	require.Len(t, result.ArtifactTags, 1)
+
+	artifact := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(artifact)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "\x1b")
+	require.Contains(t, string(data), "red")
+}
+
 // TestShellTool_Failure verifies failed command execution
 func TestShellTool_Failure(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -72,15 +244,16 @@ func TestShellTool_Failure(t *testing.T) {
 		t.Errorf("Expected ForUser to contain error info, got empty string")
 	}
 
-	// ForLLM should contain exit code or error
-	if !strings.Contains(result.ForLLM, "Exit code") && result.ForUser == "" {
-		t.Errorf("Expected ForLLM to contain exit code or error, got: %s", result.ForLLM)
+	// ForLLM carries the exit status in the metadata header.
+	meta := parseExecRunMeta(t, result.ForLLM)
+	if code, ok := meta["exitCode"].(float64); !ok || code == 0 {
+		t.Errorf("Expected a non-zero exitCode in metadata, got: %v", meta["exitCode"])
 	}
 }
 
 // TestShellTool_Timeout verifies command timeout handling
 func TestShellTool_Timeout(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -100,9 +273,14 @@ func TestShellTool_Timeout(t *testing.T) {
 		t.Errorf("Expected error for timeout, got IsError=false")
 	}
 
+	meta := parseExecRunMeta(t, result.ForLLM)
+	require.Equal(t, true, meta["timedOut"])
+	require.Nil(t, meta["exitCode"])
+	require.Contains(t, meta["error"], "timed out")
+
 	// Should mention timeout
-	if !strings.Contains(result.ForLLM, "timed out") && !strings.Contains(result.ForUser, "timed out") {
-		t.Errorf("Expected timeout message, got ForLLM: %s, ForUser: %s", result.ForLLM, result.ForUser)
+	if !strings.Contains(result.ForUser, "timed out") {
+		t.Errorf("Expected timeout message, got ForUser: %s", result.ForUser)
 	}
 }
 
@@ -121,7 +299,7 @@ func TestShellTool_TimeoutArg_Invalid(t *testing.T) {
 		{"bool", true},
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	for _, tt := range tests {
@@ -145,7 +323,7 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 		t.Skip("sleep with fractional seconds is not portable to PowerShell")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 	tool.SetTimeout(100 * time.Millisecond)
 
@@ -172,7 +350,7 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 	})
 
 	t.Run("shorter timeout kills command", func(t *testing.T) {
-		tool, err := NewExecTool("", false)
+		tool, err := newTestExecTool("", false)
 		require.NoError(t, err)
 
 		start := time.Now()
@@ -190,7 +368,7 @@ func TestShellTool_TimeoutArg_OverridesConfigured(t *testing.T) {
 
 // TestShellTool_TimeoutArg_Background verifies timeout only conflicts with background when non-zero
 func TestShellTool_TimeoutArg_Background(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -247,7 +425,7 @@ func TestShellTool_WorkingDir(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test content"), 0o644)
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -272,7 +450,7 @@ func TestShellTool_WorkingDir(t *testing.T) {
 
 // TestShellTool_DangerousCommand verifies safety guard blocks dangerous commands
 func TestShellTool_DangerousCommand(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -296,7 +474,7 @@ func TestShellTool_DangerousCommand(t *testing.T) {
 }
 
 func TestShellTool_DangerousCommand_KillBlocked(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -318,7 +496,7 @@ func TestShellTool_DangerousCommand_KillBlocked(t *testing.T) {
 
 // TestShellTool_MissingCommand verifies error handling for missing command
 func TestShellTool_MissingCommand(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -336,7 +514,7 @@ func TestShellTool_MissingCommand(t *testing.T) {
 
 // TestShellTool_StderrCapture verifies stderr is captured and included
 func TestShellTool_StderrCapture(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -358,10 +536,87 @@ func TestShellTool_StderrCapture(t *testing.T) {
 	}
 }
 
+// TestShellTool_ForegroundMergesStdoutStderrInOrder verifies stdout and stderr
+// share one stream, so their relative write order is preserved.
+func TestShellTool_ForegroundMergesStdoutStderrInOrder(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "sh -c 'echo one; echo two >&2; echo three'",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.Equal(t, []string{"one", "two", "three"}, strings.Split(strings.TrimSpace(result.ForUser), "\n"))
+	meta := parseExecRunMeta(t, result.ForLLM)
+	require.Equal(t, float64(0), meta["exitCode"])
+}
+
+// TestShellTool_BackgroundMergesStderrWithoutBlocking reproduces the old
+// deadlock: stderr was read only after stdout reached EOF, so a child that
+// filled the stderr pipe blocked forever while no stdout was produced.
+func TestShellTool_BackgroundMergesStderrWithoutBlocking(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX yes/head")
+	}
+
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	runResult := tool.Execute(context.Background(), map[string]any{
+		"action":     "run",
+		"command":    "yes errline | head -20000 >&2; sleep 0.2; echo done",
+		"background": true,
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+	require.NotEmpty(t, started.SessionID)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pollResult := tool.Execute(context.Background(), map[string]any{
+			"action":    "poll",
+			"sessionId": started.SessionID,
+		})
+		require.False(t, pollResult.IsError, pollResult.ForLLM)
+
+		var pollResp ExecResponse
+		require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+		if pollResp.Status == "done" {
+			require.NotNil(t, pollResp.ExitCode)
+			require.Equal(t, 0, *pollResp.ExitCode)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background process did not finish; stderr pipe likely blocked")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	readResult := tool.Execute(context.Background(), map[string]any{
+		"action":    "read",
+		"sessionId": started.SessionID,
+	})
+	require.False(t, readResult.IsError, readResult.ForLLM)
+
+	var readResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(readResult.ForLLM), &readResp))
+	require.Contains(t, readResp.Output, "errline")
+	require.Contains(t, readResp.Output, "done")
+	require.NotNil(t, readResp.ExitCode)
+	require.Equal(t, 0, *readResp.ExitCode)
+}
+
 // TestShellTool_OutputTruncation verifies foreground output is bounded by the
 // configured cap and keeps a head+tail window around the omission notice.
 func TestShellTool_OutputTruncation(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -397,21 +652,25 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 	if !strings.Contains(capped.ForLLM, "[OUTPUT TRUNCATED") {
 		t.Fatalf("expected truncation notice, got length: %d", len(capped.ForLLM))
 	}
-	if !strings.HasPrefix(capped.ForLLM, strings.Repeat("x", 400)) {
+	if !strings.HasPrefix(capped.ForUser, strings.Repeat("x", 400)) {
 		t.Fatal("expected the first 40% of the output to be kept")
 	}
-	if !strings.HasSuffix(capped.ForLLM, strings.Repeat("x", 599)+"\n") {
+	if !strings.HasSuffix(capped.ForUser, strings.Repeat("x", 599)+"\n") {
 		t.Fatal("expected the last 60% of the output to be kept")
 	}
+	meta := parseExecRunMeta(t, capped.ForLLM)
+	require.Equal(t, true, meta["truncated"])
 }
 
 // TestShellTool_TruncatedOutputSpillsFullText verifies that foreground output
-// beyond the configured cap stays recoverable: the large-result spill saves the
-// pre-truncation output, so the omitted middle is readable from the artifact.
+// beyond the configured cap stays recoverable and that the inline view honors
+// the global max_inline_result_chars cap: the artifact keeps the full stream,
+// so the omitted middle remains readable without expanding model context.
 func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Tools.Exec.AllowRemote = true
 	cfg.Tools.Exec.MaxOutputChars = 1000
+	cfg.Tools.MaxInlineResultChars = 512
 
 	tool, err := NewExecToolWithConfig("", false, cfg)
 	if err != nil {
@@ -445,12 +704,81 @@ func TestShellTool_TruncatedOutputSpillsFullText(t *testing.T) {
 		t.Fatalf("expected the artifact to hold the full output, got %d chars (want %d)", len(got), len(full))
 	}
 	// Inline stays bounded and keeps the real head and tail of the full output.
+	if got := len([]rune(result.ForLLM)); got > cfg.Tools.MaxInlineResultChars+200 {
+		t.Fatalf("inline output has %d runes, want at most %d plus the truncation notice",
+			got, cfg.Tools.MaxInlineResultChars)
+	}
 	if !strings.Contains(result.ForLLM, strings.Repeat("A", 100)) {
 		t.Fatal("expected the real output head in the preview")
 	}
 	if !strings.Contains(result.ForLLM, strings.Repeat("Z", 100)) {
 		t.Fatal("expected the real output tail in the preview")
 	}
+}
+
+func TestShellTool_HeaderDoesNotTriggerGenericSpill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX yes/head")
+	}
+
+	workspace := t.TempDir()
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 4096
+	cfg.Tools.MaxInlineResultChars = 1024
+
+	tool, err := NewExecToolWithConfig(workspace, false, cfg)
+	require.NoError(t, err)
+
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(1024)
+	reg.Register(tool)
+
+	// The body fits the inline cap, but the metadata header pushes the total
+	// over it. The result is already bounded, so the generic spill must not
+	// replace the header with a large-result preview.
+	result := reg.Execute(context.Background(), "exec", map[string]any{
+		"action":  "run",
+		"command": "yes x | head -c 1000",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.True(t, strings.HasPrefix(result.ForLLM, execRunMetaPrefix), result.ForLLM)
+	require.True(t, result.LargeResultSpilled)
+	require.Empty(t, result.ArtifactTags)
+	require.Contains(t, result.ForLLM, "x\nx")
+}
+
+// TestShellTool_ForegroundSpillUsesWorkspaceArtifact verifies that an oversized
+// foreground stream is spilled into the workspace artifact directory instead of
+// being retained in memory.
+func TestShellTool_ForegroundSpillUsesWorkspaceArtifact(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX yes/head")
+	}
+
+	workspace := t.TempDir()
+	cfg := &config.Config{}
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.MaxOutputChars = 100
+
+	tool, err := NewExecToolWithConfig(workspace, false, cfg)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "yes x | head -1000",
+	})
+	require.False(t, result.IsError, result.ForLLM)
+	require.True(t, result.LargeResultSpilled)
+	require.Len(t, result.ArtifactTags, 1)
+
+	path := strings.TrimSuffix(strings.TrimPrefix(result.ArtifactTags[0], "[file:"), "]")
+	require.Contains(t, path, filepath.Join(workspace, ".artifacts", "tool"))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Greater(t, len(data), cfg.Tools.Exec.MaxOutputChars)
 }
 
 // TestShellTool_WorkingDir_OutsideWorkspace verifies that working_dir cannot escape the workspace directly
@@ -465,7 +793,7 @@ func TestShellTool_WorkingDir_OutsideWorkspace(t *testing.T) {
 		t.Fatalf("failed to create outside dir: %v", err)
 	}
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -504,7 +832,7 @@ func TestShellTool_WorkingDir_SymlinkEscape(t *testing.T) {
 		t.Skipf("symlinks not supported in this environment: %v", err)
 	}
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -521,6 +849,21 @@ func TestShellTool_WorkingDir_SymlinkEscape(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "blocked") {
 		t.Errorf("expected 'blocked' in error, got: %s", result.ForLLM)
 	}
+}
+
+// TestNewExecToolDefaultsToRemoteBlocked pins the fail-closed constructor
+// default for callers that build the tool without a config.
+func TestNewExecToolDefaultsToRemoteBlocked(t *testing.T) {
+	tool, err := NewExecTool(t.TempDir(), false)
+	require.NoError(t, err)
+	require.False(t, tool.allowRemote)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo should-not-run",
+	})
+	require.True(t, result.IsError)
+	require.Contains(t, result.ForLLM, "restricted to internal channels")
 }
 
 // TestShellTool_RemoteChannelBlockedByDefault verifies exec is blocked for remote channels
@@ -605,7 +948,7 @@ func TestShellTool_AllowRemoteBypassesChannelCheck(t *testing.T) {
 // TestShellTool_RestrictToWorkspace verifies workspace restriction
 func TestShellTool_RestrictToWorkspace(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, false)
+	tool, err := newTestExecTool(tmpDir, false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
@@ -647,7 +990,7 @@ func TestShellTool_RelativePathWithSlashAllowed(t *testing.T) {
 		t.Fatalf("failed to create script: %v", err)
 	}
 
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -665,9 +1008,47 @@ func TestShellTool_RelativePathWithSlashAllowed(t *testing.T) {
 	}
 }
 
+// TestShellTool_SymlinkedWorkspaceRelativePathAllowed verifies that a
+// workspace reached through a symlink does not make ordinary workspace-relative
+// paths look like escapes. Candidate paths are resolved with EvalSymlinks, so
+// the workspace root must be resolved before the containment check.
+func TestShellTool_SymlinkedWorkspaceRelativePathAllowed(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	target := filepath.Join(workspace, "pkg", "textutil", "parse.go")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("package textutil\n"), 0o644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	linkedWorkspace := filepath.Join(root, "linked-workspace")
+	if err := os.Symlink(workspace, linkedWorkspace); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool, err := newTestExecTool(linkedWorkspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "cat pkg/textutil/parse.go",
+	})
+
+	if result.IsError {
+		t.Fatalf("relative path under a symlinked workspace should be allowed, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "package textutil") {
+		t.Fatalf("expected file output, got: %s", result.ForLLM)
+	}
+}
+
 func TestShellTool_AttachedAbsolutePathsStillBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -703,7 +1084,7 @@ func TestShellTool_OptionValueRelativeSymlinkEscapeBlocked(t *testing.T) {
 		t.Skipf("symlinks not supported in this environment: %v", err)
 	}
 
-	tool, err := NewExecTool(workspace, true)
+	tool, err := newTestExecTool(workspace, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -718,10 +1099,82 @@ func TestShellTool_OptionValueRelativeSymlinkEscapeBlocked(t *testing.T) {
 	}
 }
 
+// TestShellTool_NewFileThroughSymlinkedDirBlocked verifies that a redirection
+// target that does not exist yet cannot escape the workspace through a
+// symlinked directory. EvalSymlinks fails on a missing final component, so the
+// candidate must be resolved against its nearest existing ancestor.
+func TestShellTool_NewFileThroughSymlinkedDirBlocked(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outsideDir := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("failed to create outside dir: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(workspace, "link")); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool, err := newTestExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo pwn > link/newfile",
+	})
+
+	if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
+		t.Fatalf("new file through symlinked directory should be blocked, got: %s", result.ForLLM)
+	}
+	if _, statErr := os.Stat(filepath.Join(outsideDir, "newfile")); !os.IsNotExist(statErr) {
+		t.Fatalf("blocked command created a file outside the workspace")
+	}
+}
+
+// TestShellTool_NewFileThroughWorkspaceSymlinkedDirAllowed verifies that the
+// ancestor fallback does not reject a new file created through a symlink that
+// still points inside the workspace.
+func TestShellTool_NewFileThroughWorkspaceSymlinkedDirAllowed(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	realDir := filepath.Join(workspace, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(workspace, "alias")); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool, err := newTestExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo hello > alias/newfile",
+	})
+
+	if result.IsError {
+		t.Fatalf("new file through workspace symlink should be allowed, got: %s", result.ForLLM)
+	}
+	data, err := os.ReadFile(filepath.Join(realDir, "newfile"))
+	if err != nil {
+		t.Fatalf("expected file to be created through symlink: %v", err)
+	}
+	if string(data) != "hello\n" {
+		t.Fatalf("unexpected file content: %q", string(data))
+	}
+}
+
 // TestShellTool_DevNullAllowed verifies that /dev/null redirections are not blocked (issue #964).
 func TestShellTool_DevNullAllowed(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -749,7 +1202,7 @@ func TestShellTool_DevNullAllowed(t *testing.T) {
 // swallow the separator and produce a bogus path such as "/dev/null;".
 func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -783,7 +1236,7 @@ func TestShellTool_DevNullAllowedWithSeparator(t *testing.T) {
 // containment check, whether the real path comes before or after the separator.
 func TestShellTool_SeparatorKeepsRealPathsBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -853,7 +1306,7 @@ func TestSplitShellPathMatch(t *testing.T) {
 
 // TestShellTool_BlockDevices verifies that writes to block devices are blocked (issue #965).
 func TestShellTool_BlockDevices(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -884,7 +1337,7 @@ func TestShellTool_BlockDevices(t *testing.T) {
 // are allowed even when workspace restriction is active.
 func TestShellTool_SafePathsInWorkspaceRestriction(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -906,7 +1359,7 @@ func TestShellTool_SafePathsInWorkspaceRestriction(t *testing.T) {
 
 // TestShellTool_ExitCodeDetails verifies that exit codes are captured with details
 func TestShellTool_ExitCodeDetails(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -923,14 +1376,14 @@ func TestShellTool_ExitCodeDetails(t *testing.T) {
 		t.Error("expected error for non-zero exit code")
 	}
 
-	// Should contain the exit code in the message (new format: "exited with code 42")
-	if !strings.Contains(result.ForLLM, "42") {
-		t.Errorf("expected exit code 42 in error message, got: %s", result.ForLLM)
+	meta := parseExecRunMeta(t, result.ForLLM)
+	if got := meta["exitCode"]; got != float64(42) {
+		t.Errorf("expected exitCode 42 in metadata, got: %v", got)
 	}
 
-	// Verify the new detailed message format
-	if !strings.Contains(result.ForLLM, "exited with code") {
-		t.Errorf("expected 'exited with code' in message, got: %s", result.ForLLM)
+	// The human-readable result keeps the detailed exit message.
+	if !strings.Contains(result.ForUser, "exited with code 42") {
+		t.Errorf("expected 'exited with code 42' in user message, got: %s", result.ForUser)
 	}
 
 	// Err field is set by the exec system (may or may not be set depending on implementation)
@@ -940,7 +1393,7 @@ func TestShellTool_ExitCodeDetails(t *testing.T) {
 
 // TestShellTool_TimeoutWithPartialOutput verifies timeout includes partial output
 func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -970,7 +1423,7 @@ func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
 }
 
 // TestShellTool_CustomAllowPatterns verifies that custom allow patterns exempt
-// commands from deny pattern checks.
+// commands from default deny pattern checks.
 func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
@@ -986,8 +1439,12 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
 
+	ctx := WithToolContext(context.Background(), "cli", "test")
+
 	// "git push origin main" should be allowed by custom allow pattern.
-	result := tool.Execute(context.Background(), map[string]any{
+	// It may fail for other reasons (no git repo), but the error should not be a guard block.
+	result := tool.Execute(ctx, map[string]any{
+		"action":  "run",
 		"command": "git push origin main",
 	})
 	if result.IsError && strings.Contains(result.ForLLM, "blocked") {
@@ -995,11 +1452,32 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	}
 
 	// "git push upstream main" should still be blocked (does not match allow pattern).
-	result = tool.Execute(context.Background(), map[string]any{
+	result = tool.Execute(ctx, map[string]any{
+		"action":  "run",
 		"command": "git push upstream main",
 	})
-	if !result.IsError {
-		t.Errorf("'git push upstream main' should still be blocked by deny pattern")
+	if !result.IsError || !strings.Contains(result.ForLLM, "blocked") {
+		t.Errorf("'git push upstream main' should still be blocked by deny pattern, got: %s", result.ForLLM)
+	}
+
+	// Without any custom allow pattern, "git push origin main" should be blocked.
+	cfgNoAllow := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: true,
+			},
+		},
+	}
+	toolNoAllow, err := NewExecToolWithConfig("", false, cfgNoAllow)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+	result = toolNoAllow.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "git push origin main",
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "blocked") {
+		t.Errorf("'git push origin main' should be blocked without custom allow pattern, got: %s", result.ForLLM)
 	}
 }
 
@@ -1007,7 +1485,7 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 // incorrectly blocked by the workspace restriction safety guard (issue #1203).
 func TestShellTool_URLsNotBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1038,7 +1516,7 @@ func TestShellTool_URLsNotBlocked(t *testing.T) {
 // workspace are still blocked, even though other URLs are allowed (issue #1254).
 func TestShellTool_FileURISandboxing(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1082,7 +1560,7 @@ func TestShellTool_FileURISandboxing(t *testing.T) {
 // e.g. "echo https://etc/passwd && cat //etc/passwd" must still be blocked.
 func TestShellTool_URLBypassPrevented(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1111,7 +1589,7 @@ func TestWindows_TildeBypassPrevented(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1145,7 +1623,7 @@ func TestWindows_TildeBypassPrevented(t *testing.T) {
 // path traversal variants are blocked.
 func TestShellTool_PathTraversalVariants(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1190,7 +1668,7 @@ func TestWindows_SymlinkBypassPrevented(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -1211,7 +1689,7 @@ func TestWindows_PowerShellEncodingBypass(t *testing.T) {
 		t.Skip("Windows-only test")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -1283,7 +1761,7 @@ func TestWindows_PowerShellEncodingBypass(t *testing.T) {
 }
 
 func TestShellTool_Background_ReturnsImmediately(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -1307,7 +1785,7 @@ func TestShellTool_Background_ReturnsImmediately(t *testing.T) {
 // output buffer must be initialized before the session is published, otherwise
 // ProcessSession.Read would dereference a nil buffer.
 func TestShellTool_BackgroundSessionReadableImmediately(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1334,7 +1812,7 @@ func TestShellTool_BackgroundSessionReadableImmediately(t *testing.T) {
 }
 
 func TestShellTool_List_Empty(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1350,7 +1828,7 @@ func TestShellTool_List_Empty(t *testing.T) {
 }
 
 func TestShellTool_RunBackground_List(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1390,7 +1868,7 @@ func TestShellTool_RunBackground_List(t *testing.T) {
 }
 
 func TestShellTool_Read_Output(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1425,7 +1903,7 @@ func TestShellTool_Read_Output(t *testing.T) {
 }
 
 func TestShellTool_Kill(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1457,7 +1935,8 @@ func TestShellTool_Kill(t *testing.T) {
 	var listResp ExecResponse
 	err = json.Unmarshal([]byte(listResult.ForLLM), &listResp)
 	require.NoError(t, err)
-	require.Len(t, listResp.Sessions, 0)
+	require.Len(t, listResp.Sessions, 1)
+	require.Equal(t, "done", listResp.Sessions[0].Status)
 }
 
 func TestShellTool_PTY_AllowedCommands(t *testing.T) {
@@ -1465,7 +1944,7 @@ func TestShellTool_PTY_AllowedCommands(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1501,7 +1980,7 @@ func TestShellTool_PTY_WriteRead(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1561,7 +2040,7 @@ func TestShellTool_PTY_Poll(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1615,7 +2094,7 @@ func TestShellTool_PTY_Kill(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1650,18 +2129,19 @@ func TestShellTool_PTY_Kill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	// Session is removed after kill, so poll returns error with "session not found"
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_Write_Read_NonPTY(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1715,7 +2195,7 @@ func TestShellTool_Write_Read_NonPTY(t *testing.T) {
 }
 
 func TestShellTool_Read_NonPTY_Running(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1784,7 +2264,7 @@ func TestShellTool_ProcessGroupKill(t *testing.T) {
 	// must be run through an interpreter (sh, bash) which is blocked for PTY.
 	// Instead, we test with non-PTY mode which also uses Setsid for background processes.
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1823,13 +2303,15 @@ func TestShellTool_ProcessGroupKill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
@@ -1845,7 +2327,7 @@ func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
 		t.Skip("Test binary /tmp/test_pgroup not found - run: gcc -o /tmp/test_pgroup /tmp/test_pgroup.c")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1884,13 +2366,15 @@ func TestShellTool_PTY_ProcessGroupKill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", killResp.Status)
 
-	// Poll should return error since session is removed after kill
+	// The session is retained after kill so its final output stays readable.
 	pollResult := tool.Execute(ctx, map[string]any{
 		"action":    "poll",
 		"sessionId": resp.SessionID,
 	})
-	require.True(t, pollResult.IsError, "poll should error after kill (session removed)")
-	require.Contains(t, pollResult.ForLLM, "session not found")
+	require.False(t, pollResult.IsError, "poll should still find the retained session: %s", pollResult.ForLLM)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollResult.ForLLM), &pollResp))
+	require.Equal(t, "done", pollResp.Status)
 }
 
 func TestShellTool_PTY_Background_Read(t *testing.T) {
@@ -1898,7 +2382,7 @@ func TestShellTool_PTY_Background_Read(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1939,7 +2423,7 @@ func TestShellTool_PTY_Background_ReadNoBlock(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -1984,7 +2468,7 @@ func TestShellTool_PTY_Background_ReadNoBlock(t *testing.T) {
 }
 
 func TestShellTool_Poll_Status(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2029,7 +2513,7 @@ func TestShellTool_Poll_Status(t *testing.T) {
 }
 
 func TestShellTool_Action_Run_Sync(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -2046,7 +2530,7 @@ func TestShellTool_Action_Run_Sync(t *testing.T) {
 // TestShellTool_Background_ReadAfterExit verifies that we can read
 // buffered output even after the background process has exited.
 func TestShellTool_Background_ReadAfterExit(t *testing.T) {
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -2246,7 +2730,7 @@ func TestEncodeKeyTokenWithPtyKeyMode(t *testing.T) {
 // recognized web scheme are still blocked.
 func TestShellTool_SchemelessURLDetection(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool, err := NewExecTool(tmpDir, true)
+	tool, err := newTestExecTool(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
@@ -2343,7 +2827,7 @@ func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
 		t.Skip("PTY not supported on Windows")
 	}
 
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2389,7 +2873,7 @@ func TestShellTool_PTY_ReaderStopsAfterExit(t *testing.T) {
 
 func startBackgroundSession(t *testing.T, command string) (*ExecTool, context.Context, string) {
 	t.Helper()
-	tool, err := NewExecTool("", false)
+	tool, err := newTestExecTool("", false)
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -2497,4 +2981,348 @@ func TestShellTool_Poll_NewOutputResetsIdleCount(t *testing.T) {
 	require.Empty(t, poll().Note) // sees "second": output changed again
 	require.Empty(t, poll().Note) // first silent check
 	require.Contains(t, poll().Note, "action=wait")
+}
+
+func TestShellTool_ExecuteAsync_NotifiesOnCompletion(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	done := make(chan *ToolResult, 1)
+	runResult := tool.ExecuteAsync(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sh -c 'sleep 0.1; echo background-done'",
+		"background": true,
+		"notify":     true,
+	}, func(_ context.Context, result *ToolResult) {
+		done <- result
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+	require.Equal(t, notifyEnabledNote, started.Note)
+
+	select {
+	case result := <-done:
+		require.Contains(t, result.ForLLM, "background-done")
+		require.Contains(t, result.ForLLM, "exitCode: 0")
+	case <-time.After(3 * time.Second):
+		t.Fatal("completion notification did not arrive")
+	}
+}
+
+func TestShellTool_AutoNotifyAfterSilentPolls(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	done := make(chan *ToolResult, 1)
+	runResult := tool.ExecuteAsync(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sh -c 'sleep 1; echo auto-done'",
+		"background": true,
+	}, func(_ context.Context, result *ToolResult) {
+		done <- result
+	})
+	require.False(t, runResult.IsError, runResult.ForLLM)
+
+	var started ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(runResult.ForLLM), &started))
+
+	first := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": started.SessionID}))
+	require.Empty(t, first.Note)
+
+	second := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": started.SessionID}))
+	require.Contains(t, second.Note, "completion notification")
+	require.Contains(t, second.Note, "follow-up message")
+
+	select {
+	case result := <-done:
+		require.Contains(t, result.ForLLM, "auto-done")
+	case <-time.After(4 * time.Second):
+		t.Fatal("auto-enabled completion notification did not arrive")
+	}
+}
+
+func TestShellTool_NotifyRequiresBackground(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":  "run",
+		"command": "echo foreground",
+		"notify":  true,
+	})
+	require.True(t, result.IsError)
+	require.Contains(t, result.ForLLM, "background=true")
+}
+
+func TestShellTool_NotifyNoteRequiresAsyncCallback(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action":     "run",
+		"command":    "sleep 5",
+		"background": true,
+		"notify":     true,
+	})
+	require.False(t, result.IsError, result.ForLLM)
+
+	var resp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
+	t.Cleanup(func() {
+		tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": resp.SessionID})
+	})
+	require.Empty(t, resp.Note, "direct Execute cannot deliver a completion callback")
+
+	session, err := sm.Get(resp.SessionID)
+	require.NoError(t, err)
+	require.False(t, session.NotifyEnabled())
+}
+
+func TestShellTool_ReadIsPagedAndNonDestructive(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'printf abcdefghij; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	first := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(0), "limit": float64(3),
+	}))
+	require.Equal(t, "abc", first.Output)
+	require.Equal(t, int64(3), first.NextOffset)
+	require.True(t, first.HasMore)
+
+	second := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(3), "limit": float64(4),
+	}))
+	require.Equal(t, "defg", second.Output)
+	require.Equal(t, int64(7), second.NextOffset)
+
+	again := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "read", "sessionId": id, "offset": float64(0), "limit": float64(3),
+	}))
+	require.Equal(t, "abc", again.Output)
+}
+
+func TestShellTool_ReadReportsCumulativeDroppedBytes(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	sm := NewSessionManager()
+	t.Cleanup(sm.Stop)
+	tool.sessionManager = sm
+
+	session := &ProcessSession{ID: "paged", Status: "running"}
+	payload := strings.Repeat("x", maxOutputBufferSize+100)
+	session.appendOutput([]byte(payload))
+	sm.Add(session)
+
+	resp := execResp(t, tool.Execute(context.Background(), map[string]any{
+		"action": "read", "sessionId": "paged",
+	}))
+	require.Equal(t, int64(len(payload)), resp.TotalBytes)
+	require.Equal(t, int64(100), resp.DroppedBytes)
+	require.Zero(t, resp.SkippedBytes)
+	require.Equal(t, resp.TotalBytes-int64(len(resp.Output)), resp.Offset)
+
+	resp = execResp(t, tool.Execute(context.Background(), map[string]any{
+		"action": "read", "sessionId": "paged", "offset": float64(0),
+	}))
+	require.Equal(t, int64(100), resp.DroppedBytes)
+	require.Equal(t, int64(100), resp.SkippedBytes)
+	require.Equal(t, int64(100), resp.Offset)
+	require.Equal(t, int64(100+len(resp.Output)), resp.NextOffset)
+	require.True(t, resp.HasMore)
+	require.Contains(t, resp.Note, "skipped 100 bytes")
+}
+
+func TestShellTool_PollReturnsOutputPreview(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo preview-line; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{"action": "poll", "sessionId": id}))
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Output, "preview-line")
+	require.Positive(t, resp.TotalBytes)
+}
+
+func TestShellTool_WaitReturnsPartialOutputOnTimeout(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo before-timeout; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	resp := execResp(t, tool.Execute(ctx, map[string]any{
+		"action": "wait", "sessionId": id, "timeout": float64(1),
+	}))
+	require.Equal(t, "running", resp.Status)
+	require.Contains(t, resp.Output, "before-timeout")
+	require.Contains(t, resp.Note, "not an error")
+}
+
+func TestShellTool_KillRetainsOutput(t *testing.T) {
+	tool, ctx, id := startBackgroundSession(t, "sh -c 'echo before-stop; sleep 5'")
+	time.Sleep(200 * time.Millisecond)
+
+	killResp := execResp(t, tool.Execute(ctx, map[string]any{"action": "kill", "sessionId": id}))
+	require.Equal(t, "done", killResp.Status)
+	require.Contains(t, killResp.Output, "before-stop")
+
+	readResp := execResp(t, tool.Execute(ctx, map[string]any{"action": "read", "sessionId": id}))
+	require.Contains(t, readResp.Output, "before-stop")
+}
+
+func TestShellTool_CustomDenyCannotBeOverriddenByCustomAllow(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns:  true,
+				CustomAllowPatterns: []string{`\bgit\s+push\b`},
+				CustomDenyPatterns:  []string{`\bgit\s+push\b`},
+			},
+		},
+	}
+
+	tool, err := NewExecToolWithConfig("", false, cfg)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	result := tool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "git push origin main",
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "dangerous pattern") {
+		t.Fatalf("custom deny pattern must win over custom allow, got: %s", result.ForLLM)
+	}
+}
+
+func TestShellTool_CustomDenyPatternsApplyWhenDefaultsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: false,
+				CustomDenyPatterns: []string{`\bgit\s+push\b`},
+			},
+		},
+	}
+
+	tool, err := NewExecToolWithConfig("", false, cfg)
+	require.NoError(t, err)
+
+	if got := tool.guardCommand("git push origin main", ""); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("custom deny pattern must apply when default patterns are disabled, got: %q", got)
+	}
+	if got := tool.guardCommand("echo safely", ""); got != "" {
+		t.Fatalf("unrelated command should pass the guard, got: %q", got)
+	}
+}
+
+func TestShellTool_InvalidCustomDenyPatternRejectedWhenDefaultsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns: false,
+				CustomDenyPatterns: []string{"[invalid-regex"},
+			},
+		},
+	}
+
+	_, err := NewExecToolWithConfig("", false, cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid custom deny pattern")
+}
+
+func TestShellTool_DefaultDenyPatternsCanBeDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{EnableDenyPatterns: false},
+		},
+	}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	if got := tool.guardCommand("rm -rf ./build", t.TempDir()); got != "" {
+		t.Fatalf("default deny patterns should remain optional, got: %q", got)
+	}
+}
+
+func TestShellTool_HardlinePatternsAlwaysApply(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				EnableDenyPatterns:  false,
+				CustomAllowPatterns: []string{`.*`},
+			},
+		},
+	}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
+	require.NoError(t, err)
+
+	blocked := []string{
+		"rm -rf /",
+		"rm -rf /*",
+		"rm -r -f /",
+		"rm -rf -- /",
+		"mkfs.ext4 /dev/sda1",
+		"format /q c:",
+		"dd if=/dev/zero of=/dev/sda",
+		"echo x > /dev/sda",
+		"shutdown -h now",
+		":(){ :|:& };:",
+	}
+	for _, command := range blocked {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+			t.Errorf("hardline command %q should be blocked, got: %q", command, got)
+		}
+	}
+}
+
+func TestShellTool_BackticksInsideQuotedHeredocAreAllowed(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	command := "gh pr comment 2763 --body-file - <<'TXT'\n" +
+		"Fixed `pkg/tools/integration/web_test.go` and `brave` is now expected.\n" +
+		"TXT"
+	if got := tool.guardCommand(command, ""); got != "" {
+		t.Fatalf("quoted heredoc body should not be blocked, got: %s", got)
+	}
+}
+
+func TestShellTool_QuotedHeredocDoesNotHideDangerousHeader(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	command := "rm -rf /tmp/x <<'TXT'\n" + "markdown `body`\n" + "TXT"
+	if got := tool.guardCommand(command, ""); got == "" {
+		t.Fatal("dangerous command before a quoted heredoc should stay blocked")
+	}
+}
+
+func TestShellTool_BackticksOutsideQuotedHeredocRemainBlocked(t *testing.T) {
+	tool, err := newTestExecTool("", false)
+	require.NoError(t, err)
+
+	if got := tool.guardCommand("echo `whoami`", ""); got == "" {
+		t.Fatal("raw backtick command substitution should be blocked")
+	}
+	if got := tool.guardCommand("echo hi <<TXT\n`whoami`\nTXT", ""); got == "" {
+		t.Fatal("unquoted heredoc body can still substitute commands and should be blocked")
+	}
 }

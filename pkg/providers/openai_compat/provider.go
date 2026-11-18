@@ -43,6 +43,7 @@ type Provider struct {
 	maxTokensField string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
 	httpClient     *http.Client
 	extraBody      map[string]any // Additional fields to inject into request body
+	providerSort   string         // OpenRouter provider routing sort: price|throughput|latency
 	customHeaders  map[string]string
 	userAgent      string
 	session        common.SessionHeader
@@ -60,7 +61,6 @@ var stripModelPrefixProviders = map[string]struct{}{
 	"nearai":      {},
 	"venice":      {},
 	"moonshot":    {},
-	"nvidia":      {},
 	"groq":        {},
 	"ollama":      {},
 	"deepseek":    {},
@@ -98,6 +98,14 @@ func WithRequestTimeout(timeout time.Duration) Option {
 func WithExtraBody(extraBody map[string]any) Option {
 	return func(p *Provider) {
 		p.extraBody = extraBody
+	}
+}
+
+// WithProviderSort sets the OpenRouter provider routing sort order.
+// Supported values are "price", "throughput", and "latency".
+func WithProviderSort(providerSort string) Option {
+	return func(p *Provider) {
+		p.providerSort = strings.TrimSpace(providerSort)
 	}
 }
 
@@ -175,8 +183,13 @@ func (p *Provider) buildRequestBody(
 	model = normalizeModel(model, p.apiBase)
 
 	requestBody := map[string]any{
-		"model":    model,
-		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
+		"model": model,
+		"messages": common.SerializeMessagesWithOptions(
+			p.prepareMessagesForRequest(messages),
+			common.SerializeOptions{
+				GeminiThoughtSignatureFallback: isGeminiHost(p.apiBase),
+			},
+		),
 	}
 
 	nativeSearch := p.nativeSearchEnabled(options)
@@ -231,7 +244,46 @@ func (p *Provider) buildRequestBody(
 	// These are injected last so they take precedence over defaults.
 	maps.Copy(requestBody, p.extraBody)
 
+	p.applyProviderSort(requestBody)
+
 	return requestBody
+}
+
+// applyProviderSort injects OpenRouter's provider routing preference. It is
+// applied after extra_body so an explicitly configured provider.sort always
+// wins, while other provider routing fields (for example order or only) are
+// preserved.
+func (p *Provider) applyProviderSort(requestBody map[string]any) {
+	if !p.supportsProviderSort() {
+		return
+	}
+
+	providerSort, err := common.NormalizeProviderSort(p.providerSort)
+	if err != nil || providerSort == "" {
+		return
+	}
+
+	providerConfig := map[string]any{}
+	if raw, exists := requestBody["provider"]; exists {
+		existing, ok := raw.(map[string]any)
+		if !ok {
+			return
+		}
+		if _, hasSort := existing["sort"]; hasSort {
+			return
+		}
+		// Copy the extra_body map so concurrent requests do not write to
+		// shared configuration state.
+		providerConfig = make(map[string]any, len(existing)+1)
+		maps.Copy(providerConfig, existing)
+	}
+
+	providerConfig["sort"] = providerSort
+	requestBody["provider"] = providerConfig
+}
+
+func (p *Provider) supportsProviderSort() bool {
+	return p.providerName == "openrouter" || isOpenRouterHost(p.apiBase)
 }
 
 func (p *Provider) applyThinkingControl(requestBody map[string]any, model string, options map[string]any) {
@@ -344,6 +396,15 @@ func isDashScopeHost(apiBase string) bool {
 	return host == "dashscope.aliyuncs.com" || strings.HasSuffix(host, ".dashscope.aliyuncs.com")
 }
 
+// isGeminiHost reports whether the endpoint is Google's Gemini API (native or
+// OpenAI-compatible). Gemini 3 requires every functionCall part to carry a
+// thought_signature; requests with unsigned parts are rejected with HTTP 400.
+func isGeminiHost(apiBase string) bool {
+	host := normalizedHostname(apiBase)
+	return host == "generativelanguage.googleapis.com" ||
+		strings.HasSuffix(host, ".generativelanguage.googleapis.com")
+}
+
 func normalizedHostname(rawURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -372,6 +433,11 @@ func (p *Provider) SetProviderName(providerName string) {
 	p.providerName = strings.ToLower(strings.TrimSpace(providerName))
 }
 
+// SetProviderSort sets the OpenRouter provider routing sort order.
+func (p *Provider) SetProviderSort(providerSort string) {
+	p.providerSort = strings.TrimSpace(providerSort)
+}
+
 // SetSessionHeader makes every request carry options["session_key"] (or
 // fallback when absent) in the named header; an explicit custom header wins.
 func (p *Provider) SetSessionHeader(name, fallback string) {
@@ -380,6 +446,16 @@ func (p *Provider) SetSessionHeader(name, fallback string) {
 
 func (p *Provider) SupportsThinking() bool {
 	return strings.EqualFold(strings.TrimSpace(p.providerName), "deepseek") || isDeepSeekHost(p.apiBase)
+}
+
+// ReplaysReasoningContent reports whether assistant reasoning_content is sent
+// back in later requests. DeepSeek and MiMo keep it for tool rounds; every
+// other OpenAI-compatible provider gets it stripped by prepareMessagesForRequest.
+func (p *Provider) ReplaysReasoningContent() bool {
+	if p == nil {
+		return true
+	}
+	return p.requiresToolRoundReasoningReplay()
 }
 
 func (p *Provider) prepareMessagesForRequest(messages []Message) []Message {
@@ -844,9 +920,10 @@ func parseStreamResponse(
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
 	type toolAccum struct {
-		id       string
-		name     string
-		argsJSON strings.Builder
+		id               string
+		name             string
+		argsJSON         strings.Builder
+		thoughtSignature string
 	}
 	activeTools := map[int]*toolAccum{}
 
@@ -869,9 +946,15 @@ func parseStreamResponse(
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Function *struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
+							Name             string `json:"name"`
+							Arguments        string `json:"arguments"`
+							ThoughtSignature string `json:"thought_signature"`
 						} `json:"function"`
+						ExtraContent *struct {
+							Google *struct {
+								ThoughtSignature string `json:"thought_signature"`
+							} `json:"google"`
+						} `json:"extra_content"`
 					} `json:"tool_calls"`
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
@@ -933,6 +1016,14 @@ func parseStreamResponse(
 				}
 				if tc.Function.Arguments != "" {
 					acc.argsJSON.WriteString(tc.Function.Arguments)
+				}
+				if tc.Function.ThoughtSignature != "" {
+					acc.thoughtSignature = tc.Function.ThoughtSignature
+				}
+			}
+			if ec := tc.ExtraContent; ec != nil && ec.Google != nil {
+				if ec.Google.ThoughtSignature != "" {
+					acc.thoughtSignature = ec.Google.ThoughtSignature
 				}
 			}
 		}
@@ -1008,11 +1099,18 @@ func parseStreamResponse(
 				args["raw"] = raw
 			}
 		}
-		toolCalls = append(toolCalls, ToolCall{
-			ID:        acc.id,
-			Name:      acc.name,
-			Arguments: args,
-		})
+		toolCall := ToolCall{
+			ID:               acc.id,
+			Name:             acc.name,
+			Arguments:        args,
+			ThoughtSignature: acc.thoughtSignature,
+		}
+		if acc.thoughtSignature != "" {
+			toolCall.ExtraContent = &ExtraContent{
+				Google: &GoogleExtra{ThoughtSignature: acc.thoughtSignature},
+			}
+		}
+		toolCalls = append(toolCalls, toolCall)
 	}
 
 	if finishReason == "" {

@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type OAuthProviderConfig struct {
@@ -37,6 +39,15 @@ type LoginBrowserOptions struct {
 var (
 	openBrowserFunc             = OpenBrowser
 	browserLoginInput io.Reader = os.Stdin
+
+	// oauthRefreshGroup collapses concurrent refreshes of the same rotating
+	// refresh token into one token-endpoint request.
+	oauthRefreshGroup singleflight.Group
+
+	// oauthHTTPClient bounds all OAuth token requests; the default client
+	// has no timeout and can hang device-code polling and token refresh
+	// indefinitely.
+	oauthHTTPClient = &http.Client{Timeout: 30 * time.Second}
 )
 
 func OpenAIOAuthConfig() OAuthProviderConfig {
@@ -105,7 +116,7 @@ func LoginBrowserWithOptions(cfg OAuthProviderConfig, opts LoginBrowserOptions) 
 
 	if !opts.NoBrowser {
 		callbackResultCh := make(chan callbackResult, 1)
-		listener, actualPort, err := listenOAuthCallback(cfg.Port)
+		listeners, actualPort, err := listenOAuthCallback(cfg.Port)
 		if err != nil {
 			return nil, fmt.Errorf("starting callback server on port %d: %w", cfg.Port, err)
 		}
@@ -114,10 +125,14 @@ func LoginBrowserWithOptions(cfg OAuthProviderConfig, opts LoginBrowserOptions) 
 		callbackPort = actualPort
 		resultCh = callbackResultCh
 
+		// Serve on every bound address (IPv4 and IPv6 loopback) so the callback
+		// works regardless of how the browser resolves "localhost".
 		server := &http.Server{Handler: oauthCallbackHandler(state, callbackResultCh)}
-		go func() {
-			_ = server.Serve(listener)
-		}()
+		for _, listener := range listeners {
+			go func(l net.Listener) {
+				_ = server.Serve(l)
+			}(listener)
+		}
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -151,6 +166,13 @@ func LoginBrowserWithOptions(cfg OAuthProviderConfig, opts LoginBrowserOptions) 
 	go func() {
 		reader := bufio.NewReader(browserLoginInput)
 		input, _ := reader.ReadString('\n')
+		// When stdin is not a terminal (systemd unit, piped command, nohup),
+		// the read returns EOF immediately. Treating that as "canceled" used to
+		// kill the browser flow before the user could even open the URL, so an
+		// empty read is ignored and the callback server keeps waiting.
+		if strings.TrimSpace(input) == "" {
+			return
+		}
 		select {
 		case manualCh <- strings.TrimSpace(input):
 		case <-manualDone:
@@ -179,9 +201,22 @@ func LoginBrowserWithOptions(cfg OAuthProviderConfig, opts LoginBrowserOptions) 
 			return nil, fmt.Errorf("could not find authorization code in input")
 		}
 		return ExchangeCodeForTokens(cfg, code, pkce.CodeVerifier, redirectURI)
-	case <-time.After(5 * time.Minute):
-		return nil, fmt.Errorf("authentication timed out after 5 minutes")
+	case <-time.After(browserLoginTimeout()):
+		return nil, fmt.Errorf("authentication timed out after %s", browserLoginTimeout())
 	}
+}
+
+// browserLoginTimeout returns how long to wait for the OAuth callback.
+// Headless setups need time to move the URL to another machine and set up a
+// tunnel, so the default is generous; PICOCLAW_OAUTH_TIMEOUT overrides it
+// (any duration Go can parse, e.g. "5m", "30m").
+func browserLoginTimeout() time.Duration {
+	if raw := os.Getenv("PICOCLAW_OAUTH_TIMEOUT"); raw != "" {
+		if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
+			return duration
+		}
+	}
+	return 15 * time.Minute
 }
 
 func oauthCallbackRedirectURI(port int) string {
@@ -191,9 +226,11 @@ func oauthCallbackRedirectURI(port int) string {
 func oauthCallbackHandler(state string, resultCh chan<- callbackResult) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
+		// A stale browser tab replaying an older callback, a prefetch, or any
+		// other unrelated request must not abort the login that is currently in
+		// flight. Reject it locally and keep waiting for the real callback.
 		if r.URL.Query().Get("state") != state {
-			resultCh <- callbackResult{err: fmt.Errorf("state mismatch")}
-			http.Error(w, "State mismatch", http.StatusBadRequest)
+			http.Error(w, "State mismatch (stale or unrelated callback ignored)", http.StatusBadRequest)
 			return
 		}
 
@@ -212,19 +249,30 @@ func oauthCallbackHandler(state string, resultCh chan<- callbackResult) http.Han
 	return mux
 }
 
-func listenOAuthCallback(port int) (net.Listener, int, error) {
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+// listenOAuthCallback binds the callback port on both IPv4 and IPv6 loopback.
+// Browsers differ in how they resolve "localhost" (macOS Safari prefers ::1),
+// and an IPv4-only listener makes the callback fail with "cannot connect to
+// server" even though the login itself succeeded. IPv6 is best-effort: hosts
+// without it still get a working IPv4 listener.
+func listenOAuthCallback(port int) ([]net.Listener, int, error) {
+	v4, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return nil, 0, err
 	}
 
-	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	tcpAddr, ok := v4.Addr().(*net.TCPAddr)
 	if !ok {
-		_ = listener.Close()
-		return nil, 0, fmt.Errorf("unexpected listener address type %T", listener.Addr())
+		_ = v4.Close()
+		return nil, 0, fmt.Errorf("unexpected listener address type %T", v4.Addr())
+	}
+	actualPort := tcpAddr.Port
+
+	listeners := []net.Listener{v4}
+	if v6, err := net.Listen("tcp6", fmt.Sprintf("[::1]:%d", actualPort)); err == nil {
+		listeners = append(listeners, v6)
 	}
 
-	return listener, tcpAddr.Port, nil
+	return listeners, actualPort, nil
 }
 
 type callbackResult struct {
@@ -253,7 +301,7 @@ func RequestDeviceCode(cfg OAuthProviderConfig) (*DeviceCodeInfo, error) {
 		"client_id": cfg.ClientID,
 	})
 
-	resp, err := http.Post(
+	resp, err := oauthHTTPClient.Post(
 		cfg.Issuer+"/api/accounts/deviceauth/usercode",
 		"application/json",
 		strings.NewReader(string(reqBody)),
@@ -344,7 +392,7 @@ func LoginDeviceCode(cfg OAuthProviderConfig) (*AuthCredential, error) {
 		"client_id": cfg.ClientID,
 	})
 
-	resp, err := http.Post(
+	resp, err := oauthHTTPClient.Post(
 		cfg.Issuer+"/api/accounts/deviceauth/usercode",
 		"application/json",
 		strings.NewReader(string(reqBody)),
@@ -403,7 +451,7 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 		"user_code":      userCode,
 	})
 
-	resp, err := http.Post(
+	resp, err := oauthHTTPClient.Post(
 		cfg.Issuer+"/api/accounts/deviceauth/token",
 		"application/json",
 		strings.NewReader(string(reqBody)),
@@ -436,6 +484,25 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 }
 
 func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
+	key := strings.Join(
+		[]string{cfg.Issuer, cfg.TokenURL, cfg.ClientID, cred.Provider, cred.RefreshToken},
+		"\x00",
+	)
+	value, err, _ := oauthRefreshGroup.Do(key, func() (any, error) {
+		return refreshAccessToken(cred, cfg)
+	})
+	if err != nil {
+		return nil, err
+	}
+	refreshed, ok := value.(*AuthCredential)
+	if !ok {
+		return nil, fmt.Errorf("unexpected token refresh result")
+	}
+	clone := *refreshed
+	return &clone, nil
+}
+
+func refreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
 	if cred.RefreshToken == "" {
 		return nil, fmt.Errorf("no refresh token available")
 	}
@@ -444,7 +511,6 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		"client_id":     {cfg.ClientID},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {cred.RefreshToken},
-		"scope":         {cfg.Scopes},
 	}
 	if cfg.ClientSecret != "" {
 		data.Set("client_secret", cfg.ClientSecret)
@@ -455,7 +521,31 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		tokenURL = cfg.TokenURL
 	}
 
-	resp, err := http.PostForm(tokenURL, data)
+	var resp *http.Response
+	var err error
+	if strings.Contains(strings.ToLower(cfg.Issuer), "auth.openai.com") {
+		body, marshalErr := json.Marshal(map[string]string{
+			"client_id":     cfg.ClientID,
+			"grant_type":    "refresh_token",
+			"refresh_token": cred.RefreshToken,
+		})
+		if marshalErr != nil {
+			return nil, fmt.Errorf("encoding token refresh request: %w", marshalErr)
+		}
+		req, requestErr := http.NewRequest(
+			http.MethodPost,
+			tokenURL,
+			strings.NewReader(string(body)),
+		)
+		if requestErr != nil {
+			return nil, fmt.Errorf("creating token refresh request: %w", requestErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		resp, err = oauthHTTPClient.Do(req)
+	} else {
+		resp, err = oauthHTTPClient.PostForm(tokenURL, data)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
 	}
@@ -551,7 +641,7 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 		provider = "google-antigravity"
 	}
 
-	resp, err := http.PostForm(tokenURL, data)
+	resp, err := oauthHTTPClient.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
 	}

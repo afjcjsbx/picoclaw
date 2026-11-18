@@ -136,6 +136,68 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 	}
 }
 
+func TestResolveModelCandidatesDropsFallbackWithoutConfiguredProvider(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{Provider: "openai"}},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "gemini-primary",
+			Provider:  "gemini",
+			Model:     "gemini-3.5-flash",
+			APIKeys:   config.SimpleSecureStrings("test-key"),
+		}},
+	}
+
+	candidates := resolveModelCandidates(cfg, "openai", "gemini-primary", []string{"gemini-3.5-flash"})
+	if len(candidates) != 1 {
+		t.Fatalf("len(candidates) = %d, want 1: %#v", len(candidates), candidates)
+	}
+	if candidates[0].Provider != "gemini" {
+		t.Fatalf("primary provider = %q, want gemini", candidates[0].Provider)
+	}
+}
+
+func TestResolveModelCandidatesKeepsSameProviderBareFallback(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{Provider: "openai"}},
+	}
+
+	candidates := resolveModelCandidates(cfg, "openai", "openai/gpt-4o", []string{"o3-mini"})
+	if len(candidates) != 2 {
+		t.Fatalf("len(candidates) = %d, want 2: %#v", len(candidates), candidates)
+	}
+	if candidates[1].Provider != "openai" || candidates[1].Model != "o3-mini" {
+		t.Fatalf("fallback = %s/%s, want openai/o3-mini", candidates[1].Provider, candidates[1].Model)
+	}
+}
+
+func TestResolveModelCandidatesKeepsFallbackResolvedByProviderTemplate(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{Provider: "openai"}},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "gemini-primary",
+				Provider:  "gemini",
+				Model:     "gemini-3.5-flash",
+				APIKeys:   config.SimpleSecureStrings("gemini-key"),
+			},
+			{
+				ModelName: "openai-template",
+				Provider:  "openai",
+				Model:     "gpt-4o",
+				APIKeys:   config.SimpleSecureStrings("openai-key"),
+			},
+		},
+	}
+
+	candidates := resolveModelCandidates(cfg, "openai", "gemini-primary", []string{"gpt-4o-mini"})
+	if len(candidates) != 2 {
+		t.Fatalf("len(candidates) = %d, want 2: %#v", len(candidates), candidates)
+	}
+	if candidates[1].Provider != "openai" || candidates[1].Model != "gpt-4o-mini" {
+		t.Fatalf("fallback = %s/%s, want openai/gpt-4o-mini", candidates[1].Provider, candidates[1].Model)
+	}
+}
+
 func TestResolveActiveModelConfig_DoesNotFallbackToOpenAIForDefaultProviderCandidate(t *testing.T) {
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{

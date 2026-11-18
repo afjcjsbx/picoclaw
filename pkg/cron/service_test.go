@@ -783,6 +783,93 @@ func waitIdle(t *testing.T, cs *CronService, jobID string) {
 	t.Fatal("job never finished")
 }
 
+func TestCronService_RunJobRecordsHistory(t *testing.T) {
+	cs, _ := setupService(t, func(job *CronJob) (string, error) {
+		return "ok", nil
+	})
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	everyMS := time.Hour.Milliseconds()
+	job, err := cs.AddJob(
+		"History",
+		CronSchedule{Kind: "every", EveryMS: &everyMS},
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	for range cronRunHistoryLimit + 2 {
+		if err := cs.RunJob(job.ID); err != nil {
+			t.Fatalf("RunJob failed: %v", err)
+		}
+		waitIdle(t, cs, job.ID)
+	}
+
+	got, ok := cs.GetJob(job.ID)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if len(got.State.RunHistory) != cronRunHistoryLimit {
+		t.Fatalf("history length = %d, want %d", len(got.State.RunHistory), cronRunHistoryLimit)
+	}
+	for i, record := range got.State.RunHistory {
+		if record.Status != "ok" {
+			t.Fatalf("history[%d].status = %q, want ok", i, record.Status)
+		}
+		if record.RunAtMS <= 0 {
+			t.Fatalf("history[%d].runAtMs = %d, want positive", i, record.RunAtMS)
+		}
+		if record.DurationMS < 0 {
+			t.Fatalf("history[%d].durationMs = %d, want non-negative", i, record.DurationMS)
+		}
+	}
+}
+
+func TestCronService_RunJobRecordsErrorHistory(t *testing.T) {
+	cs, _ := setupService(t, func(job *CronJob) (string, error) {
+		return "", errors.New("boom")
+	})
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	everyMS := time.Hour.Milliseconds()
+	job, err := cs.AddJob(
+		"Failing",
+		CronSchedule{Kind: "every", EveryMS: &everyMS},
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("RunJob failed: %v", err)
+	}
+	waitIdle(t, cs, job.ID)
+
+	got, ok := cs.GetJob(job.ID)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if len(got.State.RunHistory) != 1 {
+		t.Fatalf("history length = %d, want 1", len(got.State.RunHistory))
+	}
+	record := got.State.RunHistory[0]
+	if record.Status != "error" || record.Error != "boom" {
+		t.Fatalf("history record = %+v, want error/boom", record)
+	}
+}
+
 func TestCronService_RunJobExecutesWithoutTouchingSchedule(t *testing.T) {
 	ran := make(chan string, 1)
 	cs, _ := setupService(t, func(job *CronJob) (string, error) {

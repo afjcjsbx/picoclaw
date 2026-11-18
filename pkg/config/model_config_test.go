@@ -201,6 +201,24 @@ func TestModelConfig_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid provider sort",
+			config: ModelConfig{
+				ModelName:    "test",
+				Model:        "openrouter/openai/gpt-4o",
+				ProviderSort: "throughput",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid provider sort",
+			config: ModelConfig{
+				ModelName:    "test",
+				Model:        "openrouter/openai/gpt-4o",
+				ProviderSort: "fastest",
+			},
+			wantErr: true,
+		},
+		{
 			name: "valid tool schema transform",
 			config: ModelConfig{
 				ModelName:           "test",

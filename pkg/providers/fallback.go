@@ -276,7 +276,11 @@ func (fc *FallbackChain) ExecuteCandidate(
 		// we can use, so it is not put into cooldown: the next request should
 		// try it again instead of silently skipping it for a while.
 		if failErr.Reason != FailoverUnusable {
-			fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+			if failErr.Reason == FailoverBilling && failErr.BillingUnverified {
+				fc.cooldown.MarkFailureWithoutBillingCooldown(cooldownKey, failErr.Reason)
+			} else {
+				fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+			}
 		}
 		result.Attempts = append(result.Attempts, FallbackAttempt{
 			Provider: candidate.Provider,

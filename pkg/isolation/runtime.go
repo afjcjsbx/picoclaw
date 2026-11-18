@@ -358,13 +358,21 @@ func validateWindowsExposePaths(items []config.ExposePath) error {
 	return fmt.Errorf("windows isolation does not yet support expose_paths filesystem rules")
 }
 
-func validateDarwinExposePaths(items []config.ExposePath) error {
+func validateDarwinExposePaths(items []config.ExposePath, root string) error {
 	for _, item := range items {
 		path := NormalizeExposePath(item)
 		if path.Source != path.Target {
 			return fmt.Errorf(
 				"macOS Seatbelt does not support expose_paths remapping: %s -> %s",
 				path.Source,
+				path.Target,
+			)
+		}
+		if path.Mode == "ro" && boundaryPathWithin(root, path.Target) {
+			return fmt.Errorf(
+				"macOS Seatbelt cannot enforce read-only expose_paths under the instance root %s: %s; "+
+					"the instance root is always writable",
+				root,
 				path.Target,
 			)
 		}
@@ -447,7 +455,7 @@ func preflight(isolation config.IsolationConfig) error {
 		}
 	}
 	if runtime.GOOS == "darwin" {
-		if err := validateDarwinExposePaths(isolation.ExposePaths); err != nil {
+		if err := validateDarwinExposePaths(isolation.ExposePaths, root); err != nil {
 			return err
 		}
 	}

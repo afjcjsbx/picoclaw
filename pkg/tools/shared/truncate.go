@@ -38,28 +38,39 @@ func TruncateHeadTail(text string, maxRunes int, label string) (string, bool) {
 
 // RunePrefix returns the first n runes of s, cut on a rune boundary.
 func RunePrefix(s string, n int) string {
+	return s[:runePrefixBytes(s, n)]
+}
+
+// RuneSuffix returns the last n runes of s, cut on a rune boundary.
+func RuneSuffix(s string, n int) string {
+	return s[runeSuffixStart(s, n):]
+}
+
+// runePrefixBytes returns the byte length of the first n runes of s. It lets
+// callers slice the source string without materializing a prefix copy.
+func runePrefixBytes(s string, n int) int {
 	if n <= 0 {
-		return ""
+		return 0
 	}
 	end := 0
 	for i := 0; i < n && end < len(s); i++ {
 		_, width := utf8.DecodeRuneInString(s[end:])
 		end += width
 	}
-	return s[:end]
+	return end
 }
 
-// RuneSuffix returns the last n runes of s, cut on a rune boundary.
-func RuneSuffix(s string, n int) string {
+// runeSuffixStart returns the byte offset where the last n runes of s begin.
+func runeSuffixStart(s string, n int) int {
 	if n <= 0 {
-		return ""
+		return len(s)
 	}
 	start := len(s)
 	for i := 0; i < n && start > 0; i++ {
 		_, width := utf8.DecodeLastRuneInString(s[:start])
 		start -= width
 	}
-	return s[start:]
+	return start
 }
 
 // formatCount renders a non-negative count with thousands separators, matching

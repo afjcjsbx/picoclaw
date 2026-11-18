@@ -1,6 +1,10 @@
+---
+description: "Connect PicoClaw to chat apps: Telegram, Discord, Slack, Matrix, Feishu, WeCom, Weixin, QQ, LINE, MQTT, and more."
+title: "Chat Apps Configuration"
+---
 # 💬 Chat Apps Configuration
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ## 💬 Chat Apps
 
@@ -10,21 +14,21 @@ Talk to your picoclaw through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk,
 
 | Channel              | Difficulty         | Description                                           | Documentation                                                                                                    |
 | -------------------- | ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Telegram**         | ⭐ Easy            | Recommended, voice-to-text, long polling (no public IP needed) | [Docs](../channels/telegram/README.md)                                                                  |
-| **Discord**          | ⭐ Easy            | Socket Mode, group/DM support, rich bot ecosystem     | [Docs](../channels/discord/README.md)                                                                           |
+| **Telegram**         | ⭐ Easy            | Recommended, voice-to-text, long polling (no public IP needed) | [Docs](../channels/telegram/)                                                                  |
+| **Discord**          | ⭐ Easy            | Socket Mode, group/DM support, rich bot ecosystem     | [Docs](../channels/discord/)                                                                           |
 | **WhatsApp**         | ⭐ Easy            | Native (QR scan) or Bridge URL                        | [Docs](#whatsapp)                                                                                                |
 | **Weixin**           | ⭐ Easy            | Native QR scan (Tencent iLink API)                    | [Docs](#weixin)                                                                            |
-| **Slack**            | ⭐ Easy            | **Socket Mode** (no public IP needed), enterprise     | [Docs](../channels/slack/README.md)                                                                             |
-| **Matrix**           | ⭐⭐ Medium        | Federated protocol, self-hosting supported            | [Docs](../channels/matrix/README.md)                                                                            |
-| **QQ**               | ⭐⭐ Medium        | Official bot API, Chinese community                   | [Docs](../channels/qq/README.md)                                                                                |
-| **DingTalk**         | ⭐⭐ Medium        | Stream mode (no public IP needed), enterprise         | [Docs](../channels/dingtalk/README.md)                                                                          |
-| **LINE**             | ⭐⭐⭐ Advanced    | HTTPS Webhook required                                | [Docs](../channels/line/README.md)                                                                              |
-| **WeCom (企业微信)** | ⭐⭐⭐ Advanced    | Official AI Bot over WebSocket, streaming + media     | [Docs](../channels/wecom/README.md) |
-| **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](../channels/feishu/README.md)                                                                            |
+| **Slack**            | ⭐ Easy            | **Socket Mode** (no public IP needed), enterprise     | [Docs](../channels/slack/)                                                                             |
+| **Matrix**           | ⭐⭐ Medium        | Federated protocol, self-hosting supported            | [Docs](../channels/matrix/)                                                                            |
+| **QQ**               | ⭐⭐ Medium        | Official bot API, Chinese community                   | [Docs](../channels/qq/)                                                                                |
+| **DingTalk**         | ⭐⭐ Medium        | Stream mode (no public IP needed), enterprise         | [Docs](../channels/dingtalk/)                                                                          |
+| **LINE**             | ⭐⭐⭐ Advanced    | HTTPS Webhook required                                | [Docs](../channels/line/)                                                                              |
+| **WeCom (企业微信)** | ⭐⭐⭐ Advanced    | Official AI Bot over WebSocket, streaming + media     | [Docs](../channels/wecom/) |
+| **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](../channels/feishu/)                                                                            |
 | **IRC**              | ⭐⭐ Medium        | Server + TLS configuration                            | [Docs](#irc)                                                                                                     |
-| **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](../channels/onebot/README.md)                                                                            |
-| **MQTT**             | ⭐ Easy            | Any MQTT client via broker pub/sub                    | [Docs](../channels/mqtt/README.md)                                                                              |
-| **MaixCam**          | ⭐ Easy            | Hardware integration channel for Sipeed AI cameras    | [Docs](../channels/maixcam/README.md)                                                                           |
+| **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](../channels/onebot/)                                                                            |
+| **MQTT**             | ⭐ Easy            | Any MQTT client via broker pub/sub                    | [Docs](../channels/mqtt/)                                                                              |
+| **MaixCam**          | ⭐ Easy            | Hardware integration channel for Sipeed AI cameras    | [Docs](../channels/maixcam/)                                                                           |
 | **Pico**             | ⭐ Easy            | Native PicoClaw protocol channel                      |                                                                                                                  |
 
 <a id="telegram"></a>
@@ -333,7 +337,7 @@ picoclaw gateway
 picoclaw gateway
 ```
 
-For full options (`device_id`, `join_on_invite`, `group_trigger`, `placeholder`, `reasoning_channel_id`), see [Matrix Channel Configuration Guide](../channels/matrix/README.md).
+For full options (`device_id`, `join_on_invite`, `group_trigger`, `placeholder`, `reasoning_channel_id`), see [Matrix Channel Configuration Guide](../channels/matrix/).
 
 </details>
 
@@ -394,7 +398,7 @@ picoclaw gateway
 PicoClaw now exposes WeCom as a single AI Bot channel over WebSocket.
 No public webhook callback URL is required.
 
-See [WeCom Configuration Guide](../channels/wecom/README.md) for the full configuration reference and migration notes.
+See [WeCom Configuration Guide](../channels/wecom/) for the full configuration reference and migration notes.
 
 **Quick Setup - Recommended**
 
@@ -474,7 +478,7 @@ picoclaw gateway
 
 Open Feishu, search for your bot name, and start chatting. You can also add the bot to a group — use `group_trigger.mention_only: true` to only respond when @mentioned.
 
-For full options, see [Feishu Channel Configuration Guide](../channels/feishu/README.md).
+For full options, see [Feishu Channel Configuration Guide](../channels/feishu/).
 
 </details>
 
@@ -650,6 +654,6 @@ mosquitto_pub -t "/picoclaw/assistant/device1/request" \
 mosquitto_sub -t "/picoclaw/assistant/device1/response"
 ```
 
-For full configuration options see [MQTT Channel Docs](../channels/mqtt/README.md).
+For full configuration options see [MQTT Channel Docs](../channels/mqtt/).
 
 </details>

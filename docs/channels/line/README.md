@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "PicoClaw supports LINE through the LINE Messaging API with webhook callbacks."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Line
 

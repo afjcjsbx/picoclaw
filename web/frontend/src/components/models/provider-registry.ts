@@ -73,13 +73,31 @@ export function getProviderAliasMap(
   return buildAliasMap(backendOptions)
 }
 
+/**
+ * Resolve a provider id or alias to the canonical key the backend uses.
+ *
+ * Returns undefined when the token is not registered in the backend catalog,
+ * so callers can tell "unknown prefix" apart from "known alias".
+ * getCanonicalProviderKey() deliberately collapses the two cases by falling
+ * back to the input, which is the wrong signal for validation: it makes an
+ * arbitrary prefix look like a resolved alias.
+ */
+export function findProviderAlias(
+  provider?: string,
+  backendOptions?: ModelProviderOption[],
+): string | undefined {
+  const normalized = normalizeProvider(provider)
+  if (!normalized) return undefined
+  return getProviderAliasMap(backendOptions)[normalized]
+}
+
 export function getCanonicalProviderKey(
   provider?: string,
   backendOptions?: ModelProviderOption[],
 ): string {
   const normalized = normalizeProvider(provider)
   if (!normalized) return ""
-  return getProviderAliasMap(backendOptions)[normalized] ?? normalized
+  return findProviderAlias(provider, backendOptions) ?? normalized
 }
 
 export function getKnownProviderKeys(

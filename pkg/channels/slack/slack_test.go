@@ -218,11 +218,12 @@ func TestSendMedia_SendsCaptionFallbackAfterUploads(t *testing.T) {
 	var posted []string
 	ch.uploadFileFn = func(ctx context.Context, params slacksdk.UploadFileParameters) error {
 		uploaded = append(uploaded, slackUploadRecord{
-			Channel: params.Channel,
-			Thread:  params.ThreadTimestamp,
-			File:    params.File,
-			Name:    params.Filename,
-			Title:   params.Title,
+			Channel:  params.Channel,
+			Thread:   params.ThreadTimestamp,
+			File:     params.File,
+			FileSize: params.FileSize,
+			Name:     params.Filename,
+			Title:    params.Title,
 		})
 		return nil
 	}
@@ -250,15 +251,19 @@ func TestSendMedia_SendsCaptionFallbackAfterUploads(t *testing.T) {
 	if uploaded[0].Title != "shared caption" {
 		t.Fatalf("upload title = %q, want shared caption", uploaded[0].Title)
 	}
+	if uploaded[0].FileSize != len("attachment body") {
+		t.Fatalf("upload FileSize = %d, want %d", uploaded[0].FileSize, len("attachment body"))
+	}
 	if len(posted) != 1 || posted[0] != "C123456|1234567890.123456|shared caption" {
 		t.Fatalf("posted = %v, want fallback text in same thread", posted)
 	}
 }
 
 type slackUploadRecord struct {
-	Channel string
-	Thread  string
-	File    string
-	Name    string
-	Title   string
+	Channel  string
+	Thread   string
+	File     string
+	FileSize int
+	Name     string
+	Title    string
 }

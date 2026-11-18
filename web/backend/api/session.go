@@ -25,6 +25,7 @@ import (
 // registerSessionRoutes binds session list and detail endpoints to the ServeMux.
 func (h *Handler) registerSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", h.handleListSessions)
+	mux.HandleFunc("GET /api/sessions/search", h.handleSearchSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", h.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{id}/fork", h.handleForkSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.handleDeleteSession)
@@ -41,6 +42,12 @@ type sessionFile struct {
 	ForkDepth  int                 `json:"fork_depth,omitempty"`
 	Created    time.Time           `json:"created"`
 	Updated    time.Time           `json:"updated"`
+
+	// hasMetadata reports whether the session has persisted metadata on disk.
+	// A session cleared with /clear keeps its metadata while its message
+	// history is empty; unlike an orphaned empty file, it is still a real
+	// conversation the user can return to.
+	hasMetadata bool
 }
 
 // sessionListItem is a lightweight summary returned by GET /api/sessions.
@@ -65,6 +72,37 @@ type sessionChatMessage struct {
 	Media       []string                `json:"media,omitempty"`
 	Attachments []sessionChatAttachment `json:"attachments,omitempty"`
 	ToolCalls   []utils.VisibleToolCall `json:"tool_calls,omitempty"`
+	Usage       *sessionUsage           `json:"usage,omitempty"`
+}
+
+type sessionUsage struct {
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	TotalTokens         int     `json:"total_tokens"`
+	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
+	CostUSD             float64 `json:"cost_usd,omitempty"`
+	Requests            int     `json:"requests,omitempty"`
+	ContextTokens       int     `json:"context_tokens,omitempty"`
+}
+
+func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
+	if usage == nil {
+		return nil
+	}
+	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 && usage.CostUSD <= 0 {
+		return nil
+	}
+	return &sessionUsage{
+		InputTokens:         usage.PromptTokens,
+		OutputTokens:        usage.CompletionTokens,
+		TotalTokens:         usage.TotalTokens,
+		CacheReadTokens:     usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
+		Requests:            usage.Requests,
+		ContextTokens:       usage.ContextTokens,
+	}
 }
 
 type sessionChatAttachment struct {
@@ -125,6 +163,7 @@ func (h *Handler) readLegacySession(path string) (sessionFile, error) {
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return sessionFile{}, err
 	}
+	sess.hasMetadata = true
 	return sess, nil
 }
 
@@ -190,6 +229,9 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 	jsonlPath := base + ".jsonl"
 	metaPath := base + ".meta.json"
 
+	_, metaErr := os.Stat(metaPath)
+	hasMetadata := metaErr == nil
+
 	meta, err := h.readSessionMeta(metaPath, sessionKey)
 	if err != nil {
 		return sessionFile{}, err
@@ -236,6 +278,8 @@ func (h *Handler) readJSONLSession(dir, sessionKey string) (sessionFile, error) 
 		ForkDepth:  meta.ForkDepth,
 		Created:    created,
 		Updated:    updated,
+
+		hasMetadata: hasMetadata,
 	}, nil
 }
 
@@ -399,7 +443,7 @@ func (h *Handler) findLegacyPicoSessions(dir string) ([]picoLegacySessionRef, er
 
 		path := filepath.Join(dir, entry.Name())
 		sess, err := h.readLegacySession(path)
-		if err != nil || isEmptySession(sess) {
+		if err != nil {
 			continue
 		}
 
@@ -512,7 +556,12 @@ func buildSessionListItem(sessionID string, sess sessionFile, toolFeedbackMaxArg
 	preview = truncateRunes(preview, maxSessionTitleRunes)
 
 	if preview == "" {
-		preview = "(empty)"
+		// A cleared session keeps its metadata but has no messages. Leave the
+		// title empty so the UI can label it as a new conversation instead of
+		// showing a stale "(empty)" transcript marker.
+		if !isEmptySession(sess) {
+			preview = "(empty)"
+		}
 	}
 	title := preview
 	if sess.ForkedFrom != "" {
@@ -658,6 +707,7 @@ func sessionTranscriptMessages(
 				CreatedAt:   msg.CreatedAt,
 				Media:       append([]string(nil), msg.Media...),
 				Attachments: attachments,
+				Usage:       sessionMessageUsage(msg.Usage),
 			}
 			if !sessionChatMessageVisible(chatMsg) {
 				if hasToolCallsMsg {
@@ -930,7 +980,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if refs, findErr := h.findPicoJSONLSessions(dir); findErr == nil {
 		for _, ref := range refs {
 			sess, loadErr := h.readJSONLSession(dir, ref.Key)
-			if loadErr != nil || isEmptySession(sess) {
+			if loadErr != nil || (isEmptySession(sess) && !sess.hasMetadata) {
 				continue
 			}
 			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
@@ -949,7 +999,7 @@ func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			sess, loadErr := h.readLegacySession(ref.Path)
-			if loadErr != nil || isEmptySession(sess) {
+			if loadErr != nil || (isEmptySession(sess) && !sess.hasMetadata) {
 				continue
 			}
 			h.hydrateForkDisplay(dir, &sess, toolFeedbackMaxArgsLength)
@@ -1034,7 +1084,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	if refErr == nil {
 		sess, err = h.readJSONLSession(dir, ref.Key)
 	}
-	if err == nil && isEmptySession(sess) {
+	if err == nil && isEmptySession(sess) && !sess.hasMetadata {
 		err = os.ErrNotExist
 	}
 	if err != nil {
@@ -1042,7 +1092,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 			if legacyRef, legacyErr := h.findLegacyPicoSession(dir, sessionID); legacyErr == nil {
 				sess, err = h.readLegacySession(legacyRef.Path)
 			}
-			if err == nil && isEmptySession(sess) {
+			if err == nil && isEmptySession(sess) && !sess.hasMetadata {
 				err = os.ErrNotExist
 			}
 		}

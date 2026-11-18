@@ -3,6 +3,7 @@ package agent
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -55,6 +56,60 @@ func TestGetActiveTurnTree(t *testing.T) {
 
 	if tree := al.GetActiveTurnTree("non-existent-session"); tree != nil {
 		t.Fatalf("expected nil tree for unknown session, got %d entries", len(tree))
+	}
+}
+
+// TestListActiveTurns verifies that the status snapshot includes root turns
+// and nested SubTurns, ordered by start time.
+func TestListActiveTurns(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{ModelName: "gpt-4o-mini", Provider: "mock"},
+		},
+	}
+	al := NewAgentLoop(cfg, nil, &simpleMockProviderAPI{response: "ok"})
+
+	base := time.Now().Add(-time.Minute)
+	al.activeTurnStates.Store("session", &turnState{
+		turnID:    "root",
+		startedAt: base,
+	})
+	al.activeTurnStates.Store("child-2", &turnState{
+		turnID:       "child-2",
+		parentTurnID: "root",
+		depth:        1,
+		startedAt:    base.Add(2 * time.Second),
+	})
+	al.activeTurnStates.Store("child-1", &turnState{
+		turnID:       "child-1",
+		parentTurnID: "root",
+		depth:        1,
+		startedAt:    base.Add(time.Second),
+	})
+	defer func() {
+		for _, key := range []string{"session", "child-1", "child-2"} {
+			al.activeTurnStates.Delete(key)
+		}
+	}()
+
+	turns := al.ListActiveTurns()
+	got := make([]string, 0, len(turns))
+	for _, info := range turns {
+		got = append(got, info.TurnID)
+	}
+	want := []string{"root", "child-1", "child-2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("active turn IDs=%v, want=%v", got, want)
+	}
+
+	subagents := make([]string, 0, len(turns))
+	for _, info := range turns {
+		if info.Depth > 0 {
+			subagents = append(subagents, info.TurnID)
+		}
+	}
+	if want := []string{"child-1", "child-2"}; !reflect.DeepEqual(subagents, want) {
+		t.Fatalf("active subagents=%v, want=%v", subagents, want)
 	}
 }
 

@@ -610,17 +610,33 @@ func shouldReconnectCallError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, mcp.ErrSessionMissing) {
+	msg := strings.ToLower(err.Error())
+	// A terminal transport error permanently poisons the streamable session
+	// (go-sdk#683): every later call fails with ErrConnectionClosed until a
+	// fresh session is dialed.
+	if errors.Is(err, mcp.ErrConnectionClosed) || strings.Contains(msg, mcp.ErrConnectionClosed.Error()) {
 		return true
 	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, mcp.ErrSessionMissing.Error()) {
+	if errors.Is(err, mcp.ErrSessionMissing) || strings.Contains(msg, mcp.ErrSessionMissing.Error()) {
 		return true
 	}
 	// Servers answering a stale Mcp-Session-Id with HTTP 404 plus a JSON-RPC error
 	// body make the SDK return "<rpc error>: rejected by transport: Not Found"
 	// instead of ErrSessionMissing, and keep the dead session bound to the connection.
-	return strings.HasSuffix(msg, "rejected by transport: "+strings.ToLower(http.StatusText(http.StatusNotFound)))
+	if strings.HasSuffix(msg, "rejected by transport: "+strings.ToLower(http.StatusText(http.StatusNotFound))) {
+		return true
+	}
+	// GitHub answers an expired Mcp-Session-Id with HTTP 400 and the plain-text
+	// body "invalid session". The SDK cannot decode that body, so it surfaces only
+	// "Bad Request" and marks the connection terminal. Reconnect so the next
+	// attempt negotiates a fresh session.
+	if strings.HasSuffix(msg, ": "+strings.ToLower(http.StatusText(http.StatusBadRequest))) {
+		// A plain non-JSON 400 is terminal at the transport layer, so a fresh
+		// session is the only recovery. A JSON-RPC 400 is usually a per-call
+		// rejection; reconnect only when it is session-related.
+		return !strings.Contains(msg, "rejected by transport:") || strings.Contains(msg, "session")
+	}
+	return false
 }
 
 func (m *Manager) reconnectServer(

@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "将 PicoClaw 接入 Matrix：homeserver 与 access token 配置、房间邀请、加密数据库与完整字段说明。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # Matrix 通道配置指南

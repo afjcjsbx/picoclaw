@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "Feishu (international name: Lark) is an enterprise collaboration platform by ByteDance."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Feishu
 

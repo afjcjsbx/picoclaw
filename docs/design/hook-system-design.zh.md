@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw hook 系统的早期设计记录：事件来源、观察型与拦截型 hook 的边界，以及迁移到 pkg/events 与进程 hook 的背景。"
+---
 # PicoClaw Hook 系统设计（基于 `refactor/agent`）
 
 > 当前状态：本文是 hook 系统的早期设计记录。事件系统升级后，观察型 hook 的主路径已经切到

@@ -116,6 +116,7 @@ type processOptions struct {
 	SuppressToolFeedback    bool                   // Whether to suppress inline tool feedback messages
 	NoHistory               bool                   // If true, don't load session history (for heartbeat)
 	SkipInitialSteeringPoll bool                   // If true, skip the steering poll at loop start (used by Continue)
+	JoinSubTurns            bool                   // Root turn waits for spawned children before answering (CLI)
 	InboundContext          *bus.InboundContext    // Normalized inbound facts for events/hooks
 	RouteResult             *routing.ResolvedRoute // Route decision snapshot for events/hooks
 	SessionScope            *session.SessionScope  // Session scope snapshot for events/hooks
@@ -129,6 +130,7 @@ type continuationTarget struct {
 
 const (
 	defaultResponse            = "The model returned an empty response. This may indicate a provider error or token limit."
+	panicNoticeMessage         = "I hit an internal error while processing your message and could not finish. Please send it again."
 	truncatedResponse          = "The model hit the token limit (`max_tokens`) and the response was truncated before any final text. Increase `max_tokens` in config.json or shorten the request, then try again."
 	toolLimitResponse          = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
 	loopDetectionResponse      = "I stopped because the same tool call was repeated too many times without making progress. Try refining the request or adjusting `loop_detection` in config.json."
@@ -151,6 +153,24 @@ const (
 	metadataKeyParentPeerID    = "parent_peer_id"
 	metadataKeyInputAudio      = "voice_input_audio"
 )
+
+// budgetNoticePrefix opens the iteration-budget checkpoint notice. The pruner
+// recognizes it to keep the notice from inflating a result's size.
+const budgetNoticePrefix = "[SYSTEM NOTICE — iteration budget checkpoint]"
+
+// iterationBudgetWarningTemplate is appended (as plain text, not a system
+// message) to the last tool result of the iteration that crosses the
+// max_tool_budget_warning_ratio threshold. Args: iterations used, maximum.
+const iterationBudgetWarningTemplate = budgetNoticePrefix + " You have used %d of %d iterations. Checkpoint durable progress now, then continue the task; do not stop solely because of this warning."
+
+// runBudgetNotice is appended (as plain text, not a system message) to the last
+// tool result of the first batch that finishes after run_budget_warning_threshold
+// of the wall-clock run budget has elapsed. Nothing is interrupted.
+const runBudgetNotice = "SYSTEM NOTICE — Run time budget nearly exhausted. Stop new discovery/verification work now. Produce the required final answer from the state you already have, completing only mandatory writes."
+
+// maxIterationsSummaryRequest is the user message sent on the one tool-less
+// grace call granted when the iteration budget runs out.
+const maxIterationsSummaryRequest = "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools."
 
 // emptyResponseFallback selects the user-facing content used when a turn ends
 // without any assistant text or tool calls. When the model was cut off by the
@@ -187,7 +207,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		return err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return err
+		al.warnMCPInitFailure(err)
 	}
 
 	for {
@@ -236,6 +256,15 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				// A pending ask_user interaction consumes the next user message
 				// for this conversation instead of starting/steering another turn.
 				if al.deliverAskUserReply(sessionKey, msg) {
+					continue
+				}
+
+				// Custom prompt commands become expanded steering text so the
+				// running turn sees the prompt template, not the slash syntax.
+				var customReply string
+				msg.Content, customReply = al.expandCustomCommandContent(msg.Content, agentID)
+				if customReply != "" {
+					al.publishActiveTurnCommandReply(ctx, msg, sessionKey, customReply)
 					continue
 				}
 
@@ -307,6 +336,9 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 								"chat_id":     m.ChatID,
 								"panic":       fmt.Sprintf("%v", r),
 							})
+						// The turn died without producing a reply. Tell the user
+						// instead of leaving the chat waiting on a silent failure.
+						al.publishTurnFailureNotice(ctx, m.Channel, m.ChatID, sessionKey, panicNoticeMessage)
 					}
 				}()
 				defer func() { <-al.workerSem }() // Release slot
@@ -446,6 +478,14 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		return fmt.Errorf("config cannot be nil")
 	}
 
+	// Build the new hook set before mutating live state. A broken hook must
+	// abort the reload while the previous gate is still mounted.
+	newHooks, err := al.buildConfiguredHooks(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("configure hooks: %w", err)
+	}
+	defer func() { closeHookRegistrations(newHooks) }()
+
 	var registry *AgentRegistry
 	func() {
 		defer func() {
@@ -486,6 +526,19 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		}
 	}
 
+	if err := al.hookRuntime.replace(al, newHooks); err != nil {
+		if newEvolution != nil {
+			if closeErr := newEvolution.Close(); closeErr != nil {
+				logger.WarnCF("agent", "Failed to close reinitialized evolution bridge after hook replacement failure",
+					map[string]any{"error": closeErr.Error()})
+			}
+		}
+		registry.Close()
+		return fmt.Errorf("reinitialize hooks: %w", err)
+	}
+	newHooks = nil
+	configureHookManagerFromConfig(al.hooks, cfg)
+
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
 	al.mu.Lock()
@@ -505,12 +558,6 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	oldMCPManager := al.mcp.reset()
 	al.closePlugins(false)
-	al.hookRuntime.reset(al)
-	configureHookManagerFromConfig(al.hooks, cfg)
-	if err := al.ensureHooksInitialized(ctx); err != nil {
-		logger.WarnCF("agent", "Configured hooks failed to reinitialize after reload",
-			map[string]any{"error": err.Error()})
-	}
 	if oldMCPManager != nil {
 		if err := oldMCPManager.Close(); err != nil {
 			logger.WarnCF("agent", "Failed to close previous MCP manager during reload",
@@ -628,6 +675,7 @@ func (al *AgentLoop) runAgentLoop(
 	ts.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
 	// Needed by Finish(true) to cascade a hard abort to this turn's SubTurns.
 	ts.al = al
+	ts.joinSubTurns = opts.JoinSubTurns
 
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)
@@ -667,6 +715,7 @@ func (al *AgentLoop) runAgentLoop(
 			Scope:        scope,
 			Content:      result.finalContent,
 			ContextUsage: contextUsage,
+			Usage:        al.latestAssistantUsage(ctx, opts.Dispatch.SessionKey, result.finalContent),
 		}
 		if modelName := strings.TrimSpace(result.modelName); modelName != "" {
 			if msg.Context.Raw == nil {

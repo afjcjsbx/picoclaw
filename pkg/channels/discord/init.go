@@ -4,6 +4,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -20,7 +21,17 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			ch, err := NewDiscordChannel(bc, c, b)
+			ch, err := NewDiscordChannel(
+				bc,
+				c,
+				b,
+				WithCommandDefinitionsProvider(func() []commands.Definition {
+					return commands.MergeCustomCommandDefinitions(
+						commands.BuiltinDefinitions(),
+						commands.LoadCustomCommands(cfg.WorkspacePath()),
+					)
+				}),
+			)
 			if err == nil {
 				ch.tts = tts.DetectTTS(cfg)
 			}

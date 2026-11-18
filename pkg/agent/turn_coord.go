@@ -41,11 +41,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {
-		// A SubTurn never ends before its async children, whatever the exit path
-		// (iteration cap, loop guard, hook abort, ...). The direct-answer path has
-		// already fed their results to the model; here nobody can read them any
-		// more, so they are dropped.
-		if ts.parentTurnState != nil {
+		// A SubTurn (and a CLI root turn) never ends before its async children,
+		// whatever the exit path (iteration cap, loop guard, hook abort, ...).
+		if ts.parentTurnState != nil || ts.joinSubTurns {
 			if dropped := ts.joinChildren(turnCtx, func(s string) string { return s }); len(dropped) > 0 {
 				logger.WarnCF("agent", "SubTurn ended with unread child results", map[string]any{
 					"agent_id": ts.agentID,
@@ -316,6 +314,30 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 				}
 				return result, finalizeErr
 			}
+		}
+	}
+
+	// Budget spent while the model still wanted tools: grant one tool-less call
+	// so it can summarize instead of the turn ending on a canned message. It is
+	// not a guarantee of completion, only a way to close the turn. History is
+	// passed as-is; the request is transient (not persisted) like other
+	// graceful-terminal hints. A failed call falls through to toolLimitResponse.
+	if finalContent == "" && ts.agent.MaxIterations > 0 && ts.currentIteration() >= ts.agent.MaxIterations &&
+		ts.requestIterationLimitSummary() {
+		logger.InfoCF("agent", "Iteration budget exhausted; requesting wrap-up summary", map[string]any{
+			"agent_id":  ts.agent.ID,
+			"iteration": ts.currentIteration(),
+			"max":       ts.agent.MaxIterations,
+		})
+		iteration := ts.currentIteration() + 1
+		ts.setIteration(iteration)
+		if _, graceErr := pipeline.CallLLM(ctx, turnCtx, ts, exec, iteration); graceErr != nil {
+			logger.WarnCF("agent", "Wrap-up summary call failed", map[string]any{
+				"agent_id": ts.agent.ID,
+				"error":    graceErr.Error(),
+			})
+		} else if !exec.abortedByHook && !exec.abortedByHardAbort {
+			finalContent = exec.finalContent
 		}
 	}
 

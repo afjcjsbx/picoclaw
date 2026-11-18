@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	integrationtools "github.com/sipeed/picoclaw/pkg/tools/integration"
@@ -20,8 +21,43 @@ func (al *AgentLoop) maybePublishError(ctx context.Context, channel, chatID, ses
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, formatProcessingError(err))
+	al.publishTurnFailureNotice(ctx, channel, chatID, sessionKey, formatProcessingError(err))
 	return true
+}
+
+// publishTurnFailureNotice delivers a visible notice when a turn produced no
+// reply for the user.
+//
+// It differs from PublishResponseIfNeeded in two ways:
+//
+//  1. It never suppresses the notice because the message tool already sent to
+//     this chat. A failure notice carries different information than whatever
+//     the tool delivered mid-turn, and suppressing it leaves the user staring
+//     at silence with no way to tell a finished turn from a dead one.
+//  2. It survives a canceled parent context. Turn failures often happen while
+//     the surrounding context is already being torn down (provider timeout,
+//     shutdown), which is exactly when the notice matters most.
+//
+// Internal channels (cli/system/subagent) have no human reader, so they are
+// skipped to avoid noise.
+func (al *AgentLoop) publishTurnFailureNotice(
+	ctx context.Context,
+	channel, chatID, sessionKey, notice string,
+) {
+	if strings.TrimSpace(notice) == "" {
+		return
+	}
+	if strings.TrimSpace(channel) == "" || strings.TrimSpace(chatID) == "" {
+		return
+	}
+	if constants.IsInternalChannel(channel) {
+		return
+	}
+
+	al.publishResponseIfNeeded(ctx, channel, chatID, sessionKey, notice, nil, publishResponseOptions{
+		skipMessageToolSuppression: true,
+		surviveCanceledContext:     true,
+	})
 }
 
 func (al *AgentLoop) publishResponseOrError(
@@ -39,21 +75,53 @@ func (al *AgentLoop) publishResponseOrError(
 	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 }
 
-func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
-	al.publishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+// publishResponseOptions controls how a response is delivered.
+type publishResponseOptions struct {
+	// skipMessageToolSuppression delivers the message even when the message
+	// tool already sent to this chat during the current round.
+	skipMessageToolSuppression bool
+	// surviveCanceledContext detaches the publish from the parent context so
+	// the message is still handed to the bus when the parent is already done.
+	surviveCanceledContext bool
 }
 
-func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) bool {
+func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
+	al.publishFinalResponse(ctx, channel, chatID, sessionKey, response)
+}
+
+func (al *AgentLoop) publishFinalResponse(
+	ctx context.Context,
+	channel, chatID, sessionKey, response string,
+) bool {
+	return al.publishResponseIfNeeded(
+		ctx,
+		channel,
+		chatID,
+		sessionKey,
+		response,
+		al.latestAssistantUsage(ctx, sessionKey, response),
+		publishResponseOptions{},
+	)
+}
+
+func (al *AgentLoop) publishResponseIfNeeded(
+	ctx context.Context,
+	channel, chatID, sessionKey, response string,
+	usage *bus.TokenUsage,
+	opts publishResponseOptions,
+) bool {
 	if response == "" {
 		return false
 	}
 
 	alreadySentToSameChat := false
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	if defaultAgent != nil {
-		if tool, ok := defaultAgent.Tools.Get("message"); ok {
-			if mt, ok := tool.(*integrationtools.MessageTool); ok {
-				alreadySentToSameChat = mt.HasSentTo(sessionKey, channel, chatID)
+	if !opts.skipMessageToolSuppression {
+		defaultAgent := al.GetRegistry().GetDefaultAgent()
+		if defaultAgent != nil {
+			if tool, ok := defaultAgent.Tools.Get("message"); ok {
+				if mt, ok := tool.(*integrationtools.MessageTool); ok {
+					alreadySentToSameChat = mt.HasSentTo(sessionKey, channel, chatID)
+				}
 			}
 		}
 	}
@@ -81,12 +149,33 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 		Context:    bus.NewOutboundContext(channel, chatID, ""),
 		SessionKey: sessionKey,
 		Content:    response,
+		Usage:      usage,
 	}
 	if sessionKey != "" {
 		msg.ContextUsage, _ = al.currentContextUsage(al.agentForSession(sessionKey), sessionKey)
 	}
 	markFinalOutbound(&msg)
-	if err := al.bus.PublishOutbound(ctx, msg); err != nil {
+
+	// A failure notice is often produced while the parent context is already
+	// being torn down (provider timeout, shutdown). Detach from cancellation so
+	// the notice still reaches the bus, but keep a bounded deadline so a stuck
+	// bus cannot leak this goroutine.
+	pubCtx := ctx
+	if opts.surviveCanceledContext {
+		pubCtx = context.WithoutCancel(ctx)
+	}
+	pubCtx, pubCancel := context.WithTimeout(pubCtx, 10*time.Second)
+	defer pubCancel()
+
+	if err := al.bus.PublishOutbound(pubCtx, msg); err != nil {
+		// A reply that never reached the bus used to vanish without a trace.
+		// Log it so silent turns stay diagnosable.
+		logger.WarnCF("agent", "Failed to publish outbound response", map[string]any{
+			"channel":     channel,
+			"chat_id":     chatID,
+			"content_len": len(response),
+			"error":       err.Error(),
+		})
 		return false
 	}
 	logger.InfoCF("agent", "Published outbound response",
@@ -96,6 +185,38 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 			"content_len": len(response),
 		})
 	return true
+}
+
+// latestAssistantUsage returns the usage attached to the persisted assistant
+// reply that matches response. Matching on content prevents command replies,
+// stop messages, and errors from picking up stale usage from an earlier turn.
+func (al *AgentLoop) latestAssistantUsage(
+	ctx context.Context,
+	sessionKey, response string,
+) *bus.TokenUsage {
+	if sessionKey == "" || strings.TrimSpace(response) == "" {
+		return nil
+	}
+	agent := al.agentForSession(sessionKey)
+	if agent == nil || agent.Sessions == nil {
+		return nil
+	}
+	history, err := agent.Sessions.GetHistory(ctx, sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "read assistant usage", err)
+		return nil
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+		if strings.TrimSpace(msg.Content) != strings.TrimSpace(response) {
+			return nil
+		}
+		return tokenUsageFromProviders(msg.Usage)
+	}
+	return nil
 }
 
 func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {

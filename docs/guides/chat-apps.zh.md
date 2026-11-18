@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "聊天应用配置"
+description: "PicoClaw 支持多种聊天平台，使您的 Agent 能够连接到任何地方，包括 Telegram、Discord、WhatsApp、微信、QQ、钉钉、LINE、企业微信、飞书、Slack、IRC、OneBot、MQTT、MaixCam 等。"
+---
 # 💬 聊天应用配置
 
 > 返回 [README](../project/README.zh.md)
@@ -254,7 +259,7 @@ picoclaw gateway
 picoclaw gateway
 ```
 
-完整选项（`device_id`、`join_on_invite`、`group_trigger`、`placeholder`、`reasoning_channel_id`）请参考 [Matrix 渠道配置指南](../channels/matrix/README.md)。
+完整选项（`device_id`、`join_on_invite`、`group_trigger`、`placeholder`、`reasoning_channel_id`）请参考 [Matrix 渠道配置指南](../channels/matrix/)。
 
 </details>
 

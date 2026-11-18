@@ -5,8 +5,9 @@ import "context"
 func clearCommand() Definition {
 	return Definition{
 		Name:        "clear",
-		Description: "Clear the chat history",
+		Description: "Clear the chat history (alias: /new)",
 		Usage:       "/clear",
+		Aliases:     []string{"new"},
 		Handler: func(_ context.Context, req Request, rt *Runtime) error {
 			if rt == nil || rt.ClearHistory == nil {
 				return req.Reply(unavailableMsg)

@@ -17,6 +17,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 func (al *AgentLoop) handleCommand(
@@ -33,6 +34,17 @@ func (al *AgentLoop) handleCommand(
 
 	if matched, handled, reply := al.applyExplicitSkillCommand(msg.Content, agent, opts); matched {
 		return reply, handled
+	}
+
+	// Custom commands expand into a normal user prompt and continue through the
+	// regular agent turn instead of replying directly. A command that expands to
+	// an empty prompt replies with a clear error instead of falling through to
+	// the model as raw slash text.
+	if found, reply := al.expandCustomCommand(msg, agent, opts); found {
+		if reply != "" {
+			return reply, true
+		}
+		return "", false
 	}
 
 	if al.cmdRegistry == nil {
@@ -66,6 +78,118 @@ func (al *AgentLoop) handleCommand(
 	default: // OutcomePassthrough — let the message fall through to LLM
 		return "", false
 	}
+}
+
+// expandCustomCommand rewrites a user-defined prompt command into its expanded
+// template and stores it in opts so the normal turn continues with that text.
+// Built-in commands always take precedence. It returns matched=true with a
+// user-facing reply when the command expands to an empty prompt.
+func (al *AgentLoop) expandCustomCommand(
+	msg bus.InboundMessage,
+	agent *AgentInstance,
+	opts *processOptions,
+) (matched bool, reply string) {
+	if opts == nil {
+		return false, ""
+	}
+	command, expanded, found := al.resolveCustomCommand(msg.Content, agent)
+	if !found {
+		return false, ""
+	}
+	if strings.TrimSpace(expanded) == "" {
+		return true, customCommandEmptyPromptReply(command.Name)
+	}
+
+	opts.Dispatch.UserMessage = expanded
+	opts.UserMessage = expanded
+	logger.InfoCF("agent", "Expanded custom command", map[string]any{
+		"command": command.Name,
+		"source":  command.Source,
+	})
+	return true, ""
+}
+
+// expandCustomCommandContent expands a custom command before it is queued as a
+// steering message during an active turn. Built-in slash commands are left
+// untouched so tryHandleActiveTurnCommand can keep its current behavior. When
+// the command expands to an empty prompt it returns a user-facing reply instead
+// of enqueuing raw slash text.
+func (al *AgentLoop) expandCustomCommandContent(content, agentID string) (expanded, reply string) {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return content, ""
+	}
+	agent, ok := registry.GetAgent(agentID)
+	if !ok || agent == nil {
+		agent = registry.GetDefaultAgent()
+	}
+	if agent == nil {
+		return content, ""
+	}
+	command, expanded, found := al.resolveCustomCommand(content, agent)
+	if !found {
+		return content, ""
+	}
+	if strings.TrimSpace(expanded) == "" {
+		return "", customCommandEmptyPromptReply(command.Name)
+	}
+	return expanded, ""
+}
+
+func customCommandEmptyPromptReply(name string) string {
+	return fmt.Sprintf(
+		"Command /%s produced an empty prompt. Check that the required arguments are provided and that the template contains prompt text.",
+		name,
+	)
+}
+
+func (al *AgentLoop) resolveCustomCommand(
+	content string,
+	agent *AgentInstance,
+) (commands.CustomCommand, string, bool) {
+	if agent == nil || strings.TrimSpace(agent.Workspace) == "" {
+		return commands.CustomCommand{}, "", false
+	}
+
+	cmdName, ok := commands.CommandName(content)
+	if !ok {
+		return commands.CustomCommand{}, "", false
+	}
+	if al.cmdRegistry != nil {
+		if _, builtin := al.cmdRegistry.Lookup(cmdName); builtin {
+			return commands.CustomCommand{}, "", false
+		}
+	}
+
+	command, found := commands.LookupCustomCommand(
+		commands.LoadCustomCommands(agent.Workspace),
+		cmdName,
+	)
+	if !found {
+		return commands.CustomCommand{}, "", false
+	}
+
+	expanded := commands.ExpandCustomCommandTemplate(
+		command.Template,
+		commands.CommandArguments(content),
+	)
+	return command, expanded, true
+}
+
+// commandDefinitions returns built-in commands plus custom command metadata for
+// help output and command palettes.
+func (al *AgentLoop) commandDefinitions(agent *AgentInstance) []commands.Definition {
+	defs := commands.BuiltinDefinitions()
+	if al.cmdRegistry != nil {
+		defs = al.cmdRegistry.Definitions()
+	}
+	if agent == nil || strings.TrimSpace(agent.Workspace) == "" {
+		return defs
+	}
+	return commands.MergeCustomCommandDefinitions(
+		defs,
+		commands.LoadCustomCommands(agent.Workspace),
+	)
 }
 
 func (al *AgentLoop) applyExplicitSkillCommand(
@@ -137,10 +261,12 @@ func (al *AgentLoop) buildCommandsRuntime(
 	registry := al.GetRegistry()
 	cfg := al.GetConfig()
 	rt := &commands.Runtime{
-		Config:          cfg,
-		VoiceMode:       al.voiceMode(opts.Dispatch.SessionKey),
-		ListAgentIDs:    registry.ListAgentIDs,
-		ListDefinitions: al.cmdRegistry.Definitions,
+		Config:       cfg,
+		VoiceMode:    al.voiceMode(opts.Dispatch.SessionKey),
+		ListAgentIDs: registry.ListAgentIDs,
+		ListDefinitions: func() []commands.Definition {
+			return al.commandDefinitions(agent)
+		},
 		ListMCPServers: func(ctx context.Context) []commands.MCPServerInfo {
 			if cfg == nil {
 				return nil
@@ -438,13 +564,18 @@ func (al *AgentLoop) buildCommandsRuntime(
 					todo.ClearSession(agent.ID, opts.SessionKey)
 				}
 			}
+			if tool, ok := agent.Tools.Get("exec"); ok {
+				if execTool, ok := tool.(*tools.ExecTool); ok {
+					execTool.ClearSession(agent.ID, opts.SessionKey)
+				}
+			}
 			agent.ContextBuilder.ForgetMemorySnapshot(opts.SessionKey)
 			return nil
 		}
 
-		rt.CompactContext = func(focus string) (bool, error) {
+		rt.CompactContext = func(focus string, force bool) (commands.CompactOutcome, error) {
 			if opts == nil {
-				return false, fmt.Errorf("process options not available")
+				return commands.CompactOutcome{}, fmt.Errorf("process options not available")
 			}
 			// Same as /clear: the owning agent must be resolvable from the session.
 			ensureSessionMetadata(
@@ -453,35 +584,63 @@ func (al *AgentLoop) buildCommandsRuntime(
 				opts.Dispatch.SessionScope,
 				opts.Dispatch.SessionAliases,
 			)
-			err := al.contextManager.Compact(ctx, &CompactRequest{
-				SessionKey:   opts.SessionKey,
-				Reason:       ContextCompressReasonManual,
-				Budget:       agent.ContextWindow,
-				Instructions: focus,
-			})
-			if errors.Is(err, ErrNothingToCompact) {
-				return false, nil
+			before, _ := al.currentContextUsage(agent, opts.SessionKey)
+			outcome := &CompactOutcome{}
+			if before != nil {
+				outcome.TokensBefore = before.HistoryTokens
 			}
-			return err == nil, err
+			err := al.contextManager.Compact(ctx, &CompactRequest{
+				SessionKey:         opts.SessionKey,
+				Reason:             ContextCompressReasonManual,
+				Budget:             usableContextTokens(agent),
+				ActiveTurnMessages: al.activeTurnMessageCountForSession(opts.SessionKey),
+				Instructions:       focus,
+				Force:              force,
+				Outcome:            outcome,
+			})
+			after, _ := al.currentContextUsage(agent, opts.SessionKey)
+			if after != nil {
+				outcome.TokensAfter = after.HistoryTokens
+			}
+			if errors.Is(err, ErrNothingToCompact) {
+				if outcome.Reason == "" {
+					outcome.Reason = CompactReasonNoCandidates
+				}
+				return commandCompactOutcome(outcome), nil
+			}
+			if err != nil {
+				return commands.CompactOutcome{}, err
+			}
+			if outcome.Reason == "" {
+				outcome.Reason = CompactReasonCompacted
+			}
+			return commandCompactOutcome(outcome), nil
 		}
 
 		rt.GetContextStats = func() *commands.ContextStats {
 			if opts == nil || agent.Sessions == nil {
 				return nil
 			}
-			usage, messageCount := al.currentContextUsage(agent, opts.SessionKey)
-			if usage == nil {
+			contextUsage, messageCount := al.currentContextUsage(agent, opts.SessionKey)
+			if contextUsage == nil {
 				return nil
 			}
 			return &commands.ContextStats{
-				UsedTokens:        usage.UsedTokens,
-				TotalTokens:       usage.TotalTokens,
-				HistoryTokens:     usage.HistoryTokens,
-				CompressAtTokens:  usage.CompressAtTokens,
-				SummarizeAtTokens: usage.SummarizeAtTokens,
-				UsedPercent:       usage.UsedPercent,
+				UsedTokens:        contextUsage.UsedTokens,
+				TotalTokens:       contextUsage.TotalTokens,
+				HistoryTokens:     contextUsage.HistoryTokens,
+				CompressAtTokens:  contextUsage.CompressAtTokens,
+				SummarizeAtTokens: contextUsage.SummarizeAtTokens,
+				UsedPercent:       contextUsage.UsedPercent,
 				MessageCount:      messageCount,
 			}
+		}
+
+		rt.GetUsageStats = func() (*usage.Summary, error) {
+			if opts == nil {
+				return nil, nil
+			}
+			return sessionUsageSummary(ctx, agent, opts.SessionKey)
 		}
 	}
 	return rt
@@ -522,6 +681,21 @@ func (al *AgentLoop) setPendingSkills(sessionKey string, skillNames []string) {
 	}
 
 	al.pendingSkills.Store(sessionKey, filtered)
+}
+
+func commandCompactOutcome(outcome *CompactOutcome) commands.CompactOutcome {
+	if outcome == nil {
+		return commands.CompactOutcome{}
+	}
+	return commands.CompactOutcome{
+		Compacted:          outcome.Compacted,
+		Reason:             commands.CompactReason(outcome.Reason),
+		TokensBefore:       outcome.TokensBefore,
+		TokensAfter:        outcome.TokensAfter,
+		Target:             outcome.Target,
+		LeafSummaries:      outcome.LeafSummaries,
+		CondensedSummaries: outcome.CondensedSummaries,
+	}
 }
 
 func (al *AgentLoop) takePendingSkills(sessionKey string) []string {

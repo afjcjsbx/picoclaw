@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 func TestReadFileLinesTool_RegistryValidationSupportsMaxLinesAndRejectsLimit(t *testing.T) {
@@ -47,5 +48,86 @@ func TestReadFileLinesTool_RegistryValidationSupportsMaxLinesAndRejectsLimit(t *
 	}
 	if !strings.Contains(result.ForLLM, "unexpected property \"limit\"") {
 		t.Fatalf("expected registry validation error for limit, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileLinesTool_KeepsLargeBase64LikeLineText(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "large_text.txt")
+	payload := strings.Repeat("A", 3000)
+	if err := os.WriteFile(testFile, []byte(payload+"\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	reg := NewToolRegistry()
+	reg.SetMaxInlineResultRunes(1 << 20)
+	// The default max_line_length (2000) would cut the run below the guard
+	// threshold, so raise it to exercise the exemption.
+	reg.Register(fstools.NewReadFileLinesTool(
+		tmpDir, false, fstools.MaxReadFileSize,
+		fstools.DefaultReadFileMaxLines, 100000,
+	))
+
+	result := reg.Execute(context.Background(), "read_file", map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("read_file error = %s", result.ForLLM)
+	}
+	if result.ForLLM == toolshared.LargeBase64OmittedMessage {
+		t.Fatal("line-mode text must not be replaced by the base64 omission notice")
+	}
+	if !strings.Contains(result.ForLLM, strings.Repeat("A", 128)) {
+		t.Fatalf("expected the line-mode payload to stay inline, got: %s", result.ForLLM)
+	}
+}
+
+func TestReadFileTool_KeepsLargeBase64LikeBytes(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "large_text.txt")
+	payload := strings.Repeat("A", 3000)
+	if err := os.WriteFile(testFile, []byte(payload), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	reg := NewToolRegistry()
+	reg.SetMaxInlineResultRunes(1 << 20)
+	reg.Register(fstools.NewReadFileTool(tmpDir, false, fstools.MaxReadFileSize))
+
+	result := reg.Execute(context.Background(), "read_file", map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("read_file error = %s", result.ForLLM)
+	}
+	if result.ForLLM == toolshared.LargeBase64OmittedMessage {
+		t.Fatal("byte mode must not be replaced by the base64 omission notice")
+	}
+	if !strings.Contains(result.ForLLM, strings.Repeat("A", 128)) {
+		t.Fatalf("expected the text-file bytes to stay inline, got: %s", result.ForLLM)
+	}
+}
+
+func TestEditFileTool_RegistryValidationAcceptsPatchWithoutOldText(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "patch_registry.txt")
+	if err := os.WriteFile(testFile, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	reg := NewToolRegistry()
+	reg.Register(fstools.NewEditFileTool(tmpDir, true))
+
+	patch := "*** Begin Patch\n*** Update File: " + testFile + "\n@@\n-before\n+after\n*** End Patch"
+	result := reg.Execute(context.Background(), "edit_file", map[string]any{
+		"path":  testFile,
+		"patch": patch,
+	})
+	if result.IsError {
+		t.Fatalf("expected patch-only edit_file call to pass registry validation, got: %s", result.ForLLM)
+	}
+
+	content, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("Failed to read edited file: %v", err)
+	}
+	if strings.TrimSpace(string(content)) != "after" {
+		t.Fatalf("expected patched content, got: %q", content)
 	}
 }

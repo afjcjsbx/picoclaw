@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"os"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -121,11 +122,25 @@ func (m *scriptedToolProvider) Chat(
 					Arguments: map[string]any{"task": "ping"},
 				},
 			},
+			Usage: &providers.UsageInfo{
+				PromptTokens:     120,
+				CompletionTokens: 30,
+				TotalTokens:      150,
+				CacheReadTokens:  10,
+				CostUSD:          0.001,
+			},
 		}, nil
 	}
 
 	return &providers.LLMResponse{
 		Content: "done",
+		Usage: &providers.UsageInfo{
+			PromptTokens:     200,
+			CompletionTokens: 50,
+			TotalTokens:      250,
+			CacheReadTokens:  20,
+			CostUSD:          0.002,
+		},
 	}, nil
 }
 
@@ -272,6 +287,52 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	}
 	if toolEndPayload.IsError {
 		t.Fatal("expected mock_custom tool to succeed")
+	}
+
+	firstResponsePayload, ok := events[2].Payload.(LLMResponsePayload)
+	if !ok {
+		t.Fatalf("expected LLMResponsePayload, got %T", events[2].Payload)
+	}
+	if firstResponsePayload.InputTokens != 120 ||
+		firstResponsePayload.OutputTokens != 30 ||
+		firstResponsePayload.TotalTokens != 150 {
+		t.Fatalf("unexpected first LLM token usage: %+v", firstResponsePayload)
+	}
+
+	secondResponsePayload, ok := events[6].Payload.(LLMResponsePayload)
+	if !ok {
+		t.Fatalf("expected LLMResponsePayload, got %T", events[6].Payload)
+	}
+	if secondResponsePayload.InputTokens != 200 ||
+		secondResponsePayload.OutputTokens != 50 ||
+		secondResponsePayload.TotalTokens != 250 {
+		t.Fatalf("unexpected second LLM token usage: %+v", secondResponsePayload)
+	}
+
+	history, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-1")
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	if len(history) == 0 {
+		t.Fatal("expected persisted session history")
+	}
+	finalMessage := history[len(history)-1]
+	if finalMessage.Role != "assistant" || finalMessage.Content != "done" {
+		t.Fatalf("unexpected final message: %+v", finalMessage)
+	}
+	if finalMessage.Usage == nil {
+		t.Fatal("expected final message usage to be persisted")
+	}
+	if got, want := *finalMessage.Usage, (providers.UsageInfo{
+		PromptTokens:     120 + 200,
+		CompletionTokens: 30 + 50,
+		TotalTokens:      150 + 250,
+		CacheReadTokens:  10 + 20,
+		CostUSD:          0.001 + 0.002,
+		Requests:         2,
+		ContextTokens:    200,
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("final message usage = %+v, want %+v", got, want)
 	}
 
 	turnEndPayload, ok := events[len(events)-1].Payload.(TurnEndPayload)

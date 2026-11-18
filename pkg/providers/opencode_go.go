@@ -31,6 +31,23 @@ const (
 	opencodeGoGoogle                            // {base}/google/v1beta/models/{id}:generateContent
 )
 
+// normalizeOpenCodeGoModelID drops a redundant "opencode-go/" segment from a
+// model ID. OpenCode Go exposes flat model IDs, so the prefix is never part of
+// the upstream name; keeping it also hides the vendor prefix used by
+// opencodeGoRoute. Other providers keep their model ID untouched.
+func normalizeOpenCodeGoModelID(modelID string) string {
+	modelID = strings.TrimSpace(modelID)
+	prefix, rest, found := strings.Cut(modelID, "/")
+	if !found || NormalizeProvider(prefix) != "opencode-go" {
+		return modelID
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return modelID
+	}
+	return rest
+}
+
 // opencodeGoRoute picks the wire protocol and the path below api_base for a model.
 //
 // ponytail: routing is by vendor prefix (the docs publish no machine-readable

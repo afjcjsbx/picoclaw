@@ -109,6 +109,29 @@ func TestCooldown_BillingCap(t *testing.T) {
 	}
 }
 
+func TestCooldown_AmbiguousBillingDoesNotEscalateBillingCooldown(t *testing.T) {
+	now := time.Now()
+	ct, current := newTestTracker(now)
+
+	ct.MarkFailureWithoutBillingCooldown("anthropic", FailoverBilling)
+	if got := ct.FailureCount("anthropic", FailoverBilling); got != 0 {
+		t.Fatalf("billing failure count = %d, want 0 for an ambiguous verdict", got)
+	}
+	if ct.IsAvailable("anthropic") {
+		t.Fatal("ambiguous billing should set the standard cooldown")
+	}
+
+	*current = now.Add(2 * time.Minute)
+	if !ct.IsAvailable("anthropic") {
+		t.Fatal("standard cooldown should expire after 2 minutes")
+	}
+
+	ct.MarkFailure("anthropic", FailoverBilling)
+	if got := ct.CooldownRemaining("anthropic"); got != 5*time.Hour {
+		t.Fatalf("confirmed billing cooldown = %v, want 5h", got)
+	}
+}
+
 func TestCooldown_SuccessReset(t *testing.T) {
 	ct := NewCooldownTracker()
 

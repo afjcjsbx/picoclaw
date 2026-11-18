@@ -1,3 +1,6 @@
+---
+description: "PicoClaw Gateway HTTP API: the two built-in servers, health and readiness endpoints, the chat WebSocket protocol, and authentication."
+---
 # Gateway HTTP API
 
 PicoClaw exposes two HTTP servers:
@@ -14,13 +17,15 @@ There are no generic REST chat endpoints — chat traffic uses the Pico protocol
 | `GET` | `/health` | Liveness check; JSON `{status:"ok", uptime, pid}` | None |
 | `GET` | `/ready` | Readiness check; returns 503 until the Gateway reports ready | None |
 | `POST` | `/reload` | Schedule an asynchronous config reload; returns `202 {"status":"reload scheduled",...}` (503 when reload is unavailable, 405 for other methods) | Bearer token |
+| `GET` | `/reload/status` | Latest reload state: `{generation, in_progress, last_error, started_at, finished_at}` (405 for other methods) | Bearer token |
 | `GET` | `/pico/ws` | Pico channel WebSocket (only when the `pico` channel is enabled) | Pico token |
 | `GET`/`HEAD` | `/pico/media/{id}` | Attachment download (`content-disposition: inline` for images) | Pico token |
 | `POST` | `/webhook/line` | LINE channel webhook; path configurable via `LINE.webhook_path` | LINE signature |
 
 Notes:
 
-- **`/reload` auth**: the Gateway generates a token at startup and stores it in the PID file (`.picoclaw.pid`). Send it as `Authorization: Bearer <token>`. An empty token disables the check.
+- **`/reload` auth**: the Gateway generates a token at startup and stores it in the PID file (`.picoclaw.pid`). Send it as `Authorization: Bearer <token>`. An empty token disables the check. `/reload/status` uses the same token.
+- **Reload status**: `generation` increases when a reload starts. Callers that triggered a reload can poll `/reload/status` until `generation` advances and `in_progress` is `false`; a non-empty `last_error` means the reload failed and the previous configuration is still active.
 - **Channel handlers**: HTTP-based channels register their own routes on the same server (for example the LINE webhook above). A channel that is not enabled does not expose its routes.
 - **Docker**: the `gateway` compose profile exposes only webhooks and health endpoints; use the `launcher` profile (or `PICOCLAW_GATEWAY_HOST=0.0.0.0`) for host access. See the [Docker & Quick Start Guide](../guides/docker.md).
 
@@ -30,6 +35,7 @@ Notes:
 
 - **Authentication**: `Authorization: Bearer <pico-token>`, or `Sec-WebSocket-Protocol: token.<token>` (echoed back on upgrade), or `?token=` only when `allow_token_query` is enabled.
 - **Session**: pass `?session_id=<id>` on the URL to continue an existing session; otherwise the server generates one. The channel treats the conversation as `pico:<sessionID>`.
+- **All-session observer**: pass `?all_sessions=1` to open a read-only observer connection that receives lightweight `session.activity` events for every session. Observer connections do not receive message content and reject `message.send`/`media.send` frames.
 - **Limits**: the endpoint returns 503 when the channel is not running or the connection limit (`max_connections`, default 100) is exceeded.
 
 Every frame is a JSON envelope:
@@ -47,9 +53,9 @@ Every frame is a JSON envelope:
 | Direction | `type` values |
 | --- | --- |
 | Client → server | `message.send`, `media.send`, `ping` |
-| Server → client | `message.create`, `message.update`, `message.delete`, `media.create`, `typing.start`, `typing.stop`, `error`, `pong` |
+| Server → client | `message.create`, `message.update`, `message.delete`, `media.create`, `typing.start`, `typing.stop`, `session.activity`, `error`, `pong` |
 
-Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_calls`, `tool_feedback`), `tool_calls`, `model_name`, `usage`, and the legacy `thought` boolean.
+Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_calls`, `tool_feedback`), `tool_calls`, `model_name`, `usage`, `final`, and the legacy `thought` boolean. `session.activity` events carry the originating `session_id` and an `event` payload equal to the underlying event type (for example, `typing.start` or `message.create`). The activity payload includes `final: true` when the underlying message is the turn's final response; observers use that flag to set unread state only after a completed answer, while non-final message activity and `typing.start` indicate a running turn. Observers never receive message content.
 
 ## Launcher API
 
@@ -66,6 +72,7 @@ The launcher serves the dashboard SPA and a REST API for everything the UI does.
 | Sessions | `/api/sessions`, `/api/sessions/{id}`, `/api/sessions/{id}/fork` | Chat history |
 | Skills | `/api/skills*` | Browse, import, and remove skills |
 | Tools | `/api/tools`, `/api/tools/{name}/state`, `/api/tools/web-search-config` | Tool availability and settings |
+| Subagents | `/api/agents/subagents`, `/api/agents/subagents/active` | Agent roster, delegation permissions, sub-turn limits, and live subagent tasks |
 | OAuth | `/api/oauth/providers`, `/login`, `/flows/{id}`, `/flows/{id}/poll`, `/logout`, `/oauth/callback` | Provider OAuth flows |
 | QR flows | `/api/weixin/flows*`, `/api/wecom/flows*` | WeChat/WeCom QR binding |
 | System | `/api/system/launcher-config`, `/api/system/autostart`, `/api/system/version`, `POST /api/update` | Launcher settings and self-update |
@@ -77,7 +84,7 @@ Unauthenticated requests behave as follows: dashboard pages redirect to `/launch
 | Surface | Endpoints | Condition |
 | --- | --- | --- |
 | Gateway health | `/health`, `/ready` | Always |
-| Gateway reload | `/reload` | Always (requires the PID-file token when set) |
+| Gateway reload | `/reload`, `/reload/status` | Always (requires the PID-file token when set) |
 | Pico | `/pico/ws`, `/pico/media/{id}` | `pico` channel enabled with a non-empty token (the launcher auto-enables it) |
 | Channel webhooks | `/webhook/*` | The respective channel enabled |
 | Launcher API | `/api/*`, `/pico/*` proxy | Launcher running; dashboard cookie required (503 when the Gateway is down for the Pico proxy) |

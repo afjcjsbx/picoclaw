@@ -5,10 +5,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sipeed/picoclaw/pkg/constants"
 )
 
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
@@ -30,28 +33,43 @@ var (
 )
 
 type ProcessSession struct {
-	mu              sync.Mutex
-	ID              string
-	PID             int
-	Command         string
-	PTY             bool
-	Background      bool
-	StartTime       int64
-	ExitCode        int
-	Status          string
-	stdinWriter     io.Writer
-	stdoutPipe      io.Reader
-	outputBuffer    *bytes.Buffer
-	outputTruncated bool
-	ptyMaster       *os.File
+	mu           sync.Mutex
+	ID           string
+	PID          int
+	Command      string
+	PTY          bool
+	Background   bool
+	StartTime    int64
+	ExitTime     int64
+	ExitCode     int
+	Status       string
+	ownerAgentID string
+	ownerChannel string
+	ownerChatID  string
+	stdinWriter  io.Writer
+	stdoutPipe   io.Reader
+	outputBuffer *bytes.Buffer
+	outputBase   int64
+	totalOutput  int64
+	ptyMaster    *os.File
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
 
+	// done is closed exactly once when the session reaches a terminal state.
+	done       chan struct{}
+	doneClosed bool
+	killed     bool
+
+	// onComplete is installed by ExecuteAsync so a background run can notify
+	// the agent when it exits. notifyStarted guards the one-shot watcher.
+	onComplete    func()
+	notifyStarted bool
+
 	// idleChecks counts consecutive poll/wait calls that saw no new output;
-	// lastCheckLen is the buffer length they compared against.
+	// lastCheckLen is the total output length they compared against.
 	idleChecks   int
-	lastCheckLen int
+	lastCheckLen int64
 }
 
 // noteCheck records one poll/wait of a still-running session and returns how
@@ -61,7 +79,7 @@ func (s *ProcessSession) noteCheck() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if n := s.outputBuffer.Len(); n != s.lastCheckLen {
+	if n := s.totalOutput; n != s.lastCheckLen {
 		s.lastCheckLen, s.idleChecks = n, 0
 	} else {
 		s.idleChecks++
@@ -137,13 +155,116 @@ func (s *ProcessSession) killProcess() error {
 		_ = closer.Close()
 	}
 
-	s.Status = "done"
-	s.ExitCode = -1
+	s.killed = true
+	s.finishLocked(-1)
 	return nil
 }
 
 func (s *ProcessSession) Kill() error {
 	return s.killProcess()
+}
+
+// finish records a terminal state and closes Done exactly once. A killed
+// session keeps the -1 exit code set by killProcess; a late reader cannot
+// overwrite it with the signal-derived status.
+func (s *ProcessSession) finish(exitCode int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finishLocked(exitCode)
+}
+
+func (s *ProcessSession) finishLocked(exitCode int) {
+	if s.Status == "done" || s.Status == "exited" {
+		return
+	}
+	s.ExitCode = exitCode
+	s.Status = "done"
+	if s.ExitTime == 0 {
+		s.ExitTime = time.Now().Unix()
+	}
+	s.ensureDoneLocked()
+	if !s.doneClosed {
+		close(s.done)
+		s.doneClosed = true
+	}
+}
+
+func (s *ProcessSession) ensureDoneLocked() {
+	if s.done == nil {
+		s.done = make(chan struct{})
+	}
+}
+
+// Done returns a channel closed when the session exits or is killed.
+func (s *ProcessSession) Done() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureDoneLocked()
+	if (s.Status == "done" || s.Status == "exited") && !s.doneClosed {
+		close(s.done)
+		s.doneClosed = true
+	}
+	return s.done
+}
+
+// SetCompletion installs the one-shot completion callback. The first caller
+// wins; ExecuteAsync installs it right after a background session starts.
+func (s *ProcessSession) SetCompletion(fn func()) {
+	if fn == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.onComplete == nil {
+		s.onComplete = fn
+	}
+}
+
+// StartNotify arms the completion watcher. It returns false when no callback
+// was installed or the watcher was already armed. A killed session does not
+// emit a completion notification.
+func (s *ProcessSession) StartNotify() bool {
+	s.mu.Lock()
+	if s.notifyStarted || s.onComplete == nil {
+		s.mu.Unlock()
+		return false
+	}
+	s.notifyStarted = true
+	fn := s.onComplete
+	s.mu.Unlock()
+
+	go func() {
+		<-s.Done()
+		s.mu.Lock()
+		killed := s.killed
+		s.mu.Unlock()
+		if !killed {
+			fn()
+		}
+	}()
+	return true
+}
+
+// NotifyEnabled reports whether the completion watcher was armed.
+func (s *ProcessSession) NotifyEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.notifyStarted
+}
+
+// Tail returns the last n bytes retained by the session without consuming
+// them. Callers use it for poll/wait/completion previews.
+func (s *ProcessSession) Tail(n int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n <= 0 || s.outputBuffer == nil || s.outputBuffer.Len() == 0 {
+		return ""
+	}
+	data := s.outputBuffer.Bytes()
+	if len(data) > n {
+		data = data[len(data)-n:]
+	}
+	return string(data)
 }
 
 func (s *ProcessSession) Write(data string) error {
@@ -167,19 +288,105 @@ func (s *ProcessSession) Write(data string) error {
 	return err
 }
 
+// appendOutput appends p to the rolling session log. The retained window is
+// capped at maxOutputBufferSize; dropped prefixes move outputBase forward so
+// absolute offsets remain stable for ReadRange callers.
+func (s *ProcessSession) appendOutput(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.outputBuffer == nil {
+		s.outputBuffer = &bytes.Buffer{}
+	}
+	s.totalOutput += int64(len(p))
+	_, _ = s.outputBuffer.Write(p)
+	if s.outputBuffer.Len() > maxOutputBufferSize {
+		drop := s.outputBuffer.Len() - maxOutputBufferSize
+		s.outputBuffer.Next(drop)
+		s.outputBase += int64(drop)
+	}
+}
+
+// Read returns the retained output without consuming it. The idle counter is
+// reset so a read counts as observing the current output.
 func (s *ProcessSession) Read() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Reading drains the buffer, so the idle count starts over.
-	s.idleChecks, s.lastCheckLen = 0, 0
-	if s.outputBuffer.Len() == 0 {
+	s.idleChecks, s.lastCheckLen = 0, s.totalOutput
+	if s.outputBuffer == nil || s.outputBuffer.Len() == 0 {
 		return ""
 	}
+	return s.outputBuffer.String()
+}
 
-	data := s.outputBuffer.String()
-	s.outputBuffer.Reset()
-	return data
+// SessionOutputPage is one page of retained session output. Offsets and byte
+// counts are absolute from the start of the session log.
+type SessionOutputPage struct {
+	Text         string
+	Offset       int64
+	NextOffset   int64
+	TotalBytes   int64
+	DroppedBytes int64
+	SkippedBytes int64
+	HasMore      bool
+}
+
+// ReadRange returns at most limit bytes starting at absolute byte offset. It
+// never consumes the log. DroppedBytes is the total evicted from the rolling
+// window; SkippedBytes is how much of the request was unavailable because the
+// offset predates that window.
+func (s *ProcessSession) ReadRange(offset, limit int64) SessionOutputPage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.idleChecks, s.lastCheckLen = 0, s.totalOutput
+	if offset < 0 {
+		offset = 0
+	}
+	page := SessionOutputPage{
+		Offset:       offset,
+		NextOffset:   offset,
+		TotalBytes:   s.totalOutput,
+		DroppedBytes: s.outputBase,
+	}
+	if s.outputBuffer == nil || s.outputBuffer.Len() == 0 {
+		return page
+	}
+	if offset < s.outputBase {
+		page.SkippedBytes = s.outputBase - offset
+		offset = s.outputBase
+		page.Offset = offset
+		page.NextOffset = offset
+	}
+	data := s.outputBuffer.Bytes()
+	rel := offset - s.outputBase
+	if rel >= int64(len(data)) {
+		return page
+	}
+	if limit <= 0 || limit > int64(len(data))-rel {
+		limit = int64(len(data)) - rel
+	}
+	end := rel + limit
+	page.Text = string(data[rel:end])
+	page.NextOffset = offset + int64(len(page.Text))
+	page.HasMore = page.NextOffset < page.TotalBytes
+	return page
+}
+
+func (s *ProcessSession) TotalBytes() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.totalOutput
+}
+
+func (s *ProcessSession) DroppedBytes() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.outputBase
 }
 
 func (s *ProcessSession) ToSessionInfo() SessionInfo {
@@ -192,7 +399,33 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 		Status:    s.Status,
 		PID:       s.PID,
 		StartedAt: s.StartTime,
+		ExitCode:  s.ExitCode,
+		ExitedAt:  s.ExitTime,
 	}
+}
+
+// isOwnedBy reports whether the session belongs to the caller identified by
+// agentID, channel and chatID. Ownership is recorded when the session starts.
+func (s *ProcessSession) isOwnedBy(agentID, channel, chatID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ownerAgentID == agentID &&
+		s.ownerChannel == strings.TrimSpace(channel) &&
+		s.ownerChatID == chatID
+}
+
+// retentionTime returns the session's terminal state and the timestamp the
+// retention window should start from: exit time for completed sessions,
+// start time as a fallback for manually constructed or legacy records.
+func (s *ProcessSession) retentionTime() (done bool, ts int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	done = s.Status == "done" || s.Status == "exited"
+	ts = s.ExitTime
+	if ts == 0 {
+		ts = s.StartTime
+	}
+	return done, ts
 }
 
 type SessionManager struct {
@@ -234,14 +467,17 @@ func (sm *SessionManager) Stop() {
 	})
 }
 
-// cleanupOldSessions removes sessions that are done and older than 30 minutes
+// cleanupOldSessions removes sessions whose retention window has elapsed.
+// The window starts when the session exits, not when it started, so a long
+// job keeps its final output readable for the full period.
 func (sm *SessionManager) cleanupOldSessions() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	cutoff := time.Now().Add(-30 * time.Minute)
 	for id, session := range sm.sessions {
-		if session.IsDone() && session.StartTime < cutoff.Unix() {
+		done, ts := session.retentionTime()
+		if done && ts < cutoff.Unix() {
 			delete(sm.sessions, id)
 		}
 	}
@@ -265,6 +501,26 @@ func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {
 	return session, nil
 }
 
+// GetForCaller returns a session only when the caller may access it. Internal
+// channels can see every session; remote callers can only access sessions
+// created by the same agent, channel and chat. Unauthorized lookups return
+// ErrSessionNotFound so callers cannot probe for session existence.
+func (sm *SessionManager) GetForCaller(
+	sessionID, agentID, channel, chatID string,
+) (*ProcessSession, error) {
+	session, err := sm.Get(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if constants.IsInternalChannel(strings.TrimSpace(channel)) {
+		return session, nil
+	}
+	if !session.isOwnedBy(agentID, channel, chatID) {
+		return nil, ErrSessionNotFound
+	}
+	return session, nil
+}
+
 func (sm *SessionManager) Remove(sessionID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -277,6 +533,24 @@ func (sm *SessionManager) List() []SessionInfo {
 
 	result := make([]SessionInfo, 0, len(sm.sessions))
 	for _, session := range sm.sessions {
+		result = append(result, session.ToSessionInfo())
+	}
+
+	return result
+}
+
+// ListForCaller returns the sessions visible to the caller. Internal channels
+// see everything; remote callers only see sessions they own.
+func (sm *SessionManager) ListForCaller(agentID, channel, chatID string) []SessionInfo {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	showAll := constants.IsInternalChannel(strings.TrimSpace(channel))
+	result := make([]SessionInfo, 0, len(sm.sessions))
+	for _, session := range sm.sessions {
+		if !showAll && !session.isOwnedBy(agentID, channel, chatID) {
+			continue
+		}
 		result = append(result, session.ToSessionInfo())
 	}
 

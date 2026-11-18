@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -119,16 +120,46 @@ func (c *ClawHubRegistry) Name() string {
 	return "clawhub"
 }
 
-func (c *ClawHubRegistry) ResolveInstallDirName(target string) (string, error) {
-	if err := utils.ValidateSkillIdentifier(target); err != nil {
-		return "", err
+// clawHubRef splits a ClawHub install target into its optional owner handle and
+// skill slug. ClawHub references use the "owner/slug" form (for example
+// "theglove44/reddit"). A bare "slug" without an owner is also accepted.
+func clawHubRef(target string) (owner, slug string) {
+	target = strings.TrimSpace(strings.Trim(target, "/"))
+	if target == "" {
+		return "", ""
 	}
-	return target, nil
+	if idx := strings.Index(target, "/"); idx >= 0 {
+		return strings.TrimSpace(target[:idx]), strings.TrimSpace(target[idx+1:])
+	}
+	return "", target
 }
 
-func (c *ClawHubRegistry) SkillURL(slug, _ string) string {
+func (c *ClawHubRegistry) ResolveInstallDirName(target string) (string, error) {
+	_, slug := clawHubRef(target)
+	if err := utils.ValidateSkillIdentifier(slug); err != nil {
+		return "", err
+	}
+	return slug, nil
+}
+
+func (c *ClawHubRegistry) NormalizeInstallTarget(target string) string {
+	owner, slug := clawHubRef(target)
+	if slug == "" {
+		return target
+	}
+	if owner != "" {
+		return owner + "/" + slug
+	}
+	return slug
+}
+
+func (c *ClawHubRegistry) SkillURL(target, _ string) string {
+	owner, slug := clawHubRef(target)
 	if slug == "" {
 		return ""
+	}
+	if owner != "" {
+		return c.baseURL + "/" + url.PathEscape(owner) + "/skills/" + url.PathEscape(slug)
 	}
 	return c.baseURL + "/skills/" + url.PathEscape(slug)
 }
@@ -148,11 +179,13 @@ type clawhubSearchResponse struct {
 }
 
 type clawhubSearchResult struct {
-	Score       float64 `json:"score"`
-	Slug        *string `json:"slug"`
-	DisplayName *string `json:"displayName"`
-	Summary     *string `json:"summary"`
-	Version     *string `json:"version"`
+	Score        float64 `json:"score"`
+	Slug         *string `json:"slug"`
+	DisplayName  *string `json:"displayName"`
+	Summary      *string `json:"summary"`
+	Version      *string `json:"version"`
+	OwnerHandle  *string `json:"ownerHandle"`
+	CanonicalURL *string `json:"canonicalUrl"`
 }
 
 func (c *ClawHubRegistry) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
@@ -195,9 +228,16 @@ func (c *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 			displayName = slug
 		}
 
+		owner := utils.DerefStr(r.OwnerHandle, "")
+		ref := slug
+		if owner != "" {
+			ref = owner + "/" + slug
+		}
+
 		results = append(results, SearchResult{
 			Score:        r.Score,
-			Slug:         slug,
+			Slug:         ref,
+			Owner:        owner,
 			DisplayName:  displayName,
 			Summary:      summary,
 			Version:      utils.DerefStr(r.Version, ""),
@@ -211,11 +251,25 @@ func (c *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 // --- GetSkillMeta ---
 
 type clawhubSkillResponse struct {
+	// Nested shape returned by the current clawhub.ai API.
+	Skill *clawhubSkillInfo `json:"skill"`
+	Owner *clawhubOwnerInfo `json:"owner"`
+	// Flat shape returned by some self-hosted/legacy deployments.
 	Slug          string                 `json:"slug"`
 	DisplayName   string                 `json:"displayName"`
 	Summary       string                 `json:"summary"`
 	LatestVersion *clawhubVersionInfo    `json:"latestVersion"`
 	Moderation    *clawhubModerationInfo `json:"moderation"`
+}
+
+type clawhubSkillInfo struct {
+	Slug        string `json:"slug"`
+	DisplayName string `json:"displayName"`
+	Summary     string `json:"summary"`
+}
+
+type clawhubOwnerInfo struct {
+	Handle string `json:"handle"`
 }
 
 type clawhubVersionInfo struct {
@@ -227,14 +281,23 @@ type clawhubModerationInfo struct {
 	IsSuspicious     bool `json:"isSuspicious"`
 }
 
-func (c *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*SkillMeta, error) {
+func (c *ClawHubRegistry) GetSkillMeta(ctx context.Context, target string) (*SkillMeta, error) {
+	owner, slug := clawHubRef(target)
 	if err := utils.ValidateSkillIdentifier(slug); err != nil {
 		return nil, fmt.Errorf("invalid slug %q: error: %s", slug, err.Error())
 	}
 
-	u := c.baseURL + c.skillsPath + "/" + url.PathEscape(slug)
+	u, err := url.Parse(c.baseURL + c.skillsPath + "/" + url.PathEscape(slug))
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL: %w", err)
+	}
+	if owner != "" {
+		q := u.Query()
+		q.Set("ownerHandle", owner)
+		u.RawQuery = q.Encode()
+	}
 
-	body, err := c.doGet(ctx, u)
+	body, err := c.doGet(ctx, u.String())
 	if err != nil {
 		return nil, fmt.Errorf("skill metadata request failed: %w", err)
 	}
@@ -245,10 +308,18 @@ func (c *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*Skill
 	}
 
 	meta := &SkillMeta{
-		Slug:         resp.Slug,
+		Slug:         slug,
 		DisplayName:  resp.DisplayName,
 		Summary:      resp.Summary,
 		RegistryName: c.Name(),
+	}
+
+	if resp.Skill != nil {
+		if resp.Skill.Slug != "" {
+			meta.Slug = resp.Skill.Slug
+		}
+		meta.DisplayName = resp.Skill.DisplayName
+		meta.Summary = resp.Skill.Summary
 	}
 
 	if resp.LatestVersion != nil {
@@ -269,15 +340,16 @@ func (c *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*Skill
 // Returns an InstallResult for the caller to use for moderation decisions.
 func (c *ClawHubRegistry) DownloadAndInstall(
 	ctx context.Context,
-	slug, version, targetDir string,
+	target, version, targetDir string,
 ) (*InstallResult, error) {
+	owner, slug := clawHubRef(target)
 	if err := utils.ValidateSkillIdentifier(slug); err != nil {
 		return nil, fmt.Errorf("invalid slug %q: error: %s", slug, err.Error())
 	}
 
 	// Step 1: Fetch metadata (with fallback).
 	result := &InstallResult{}
-	meta, err := c.GetSkillMeta(ctx, slug)
+	meta, err := c.GetSkillMeta(ctx, target)
 	if err != nil {
 		// Fallback: proceed without metadata.
 		meta = nil
@@ -307,6 +379,9 @@ func (c *ClawHubRegistry) DownloadAndInstall(
 
 	q := u.Query()
 	q.Set("slug", slug)
+	if owner != "" {
+		q.Set("ownerHandle", owner)
+	}
 	if installVersion != "latest" {
 		q.Set("version", installVersion)
 	}

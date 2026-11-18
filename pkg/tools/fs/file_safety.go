@@ -105,28 +105,42 @@ func (p *protectedReadFs) ReadDir(path string) ([]os.DirEntry, error) {
 	return visible, nil
 }
 
-func (p *protectedWriteFs) Open(path string) (fs.File, error) {
+func (p *protectedWriteFs) checkWrite(path string) error {
 	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
+		return err
+	}
+	return p.memoryFiles.check(path, p.workspace, p.restrict)
+}
+
+// checkRead reports whether the read policy allows inspecting path. write_file
+// only uses it to decide whether existing content may be compared; a path that
+// is writable but not readable (.env.example) is written without comparison.
+func (p *protectedWriteFs) checkRead(path string) error {
+	return checkSensitiveReadPath(path, p.workspace, p.restrict)
+}
+
+// ResolvePath delegates to the backend so the host, sandbox, and whitelist
+// path rules live next to the operations that use them.
+func (p *protectedWriteFs) ResolvePath(path string) string {
+	return resolveToolPath(p.fileSystem, path)
+}
+
+func (p *protectedWriteFs) Open(path string) (fs.File, error) {
+	if err := p.checkWrite(path); err != nil {
 		return nil, err
 	}
 	return p.fileSystem.Open(path)
 }
 
 func (p *protectedWriteFs) WriteFile(path string, data []byte) error {
-	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
-		return err
-	}
-	if err := p.memoryFiles.check(path, p.workspace, p.restrict); err != nil {
+	if err := p.checkWrite(path); err != nil {
 		return err
 	}
 	return p.fileSystem.WriteFile(path, data)
 }
 
 func (p *protectedWriteFs) AppendFile(path string, data []byte) error {
-	if err := checkSensitiveWritePath(path, p.workspace, p.restrict); err != nil {
-		return err
-	}
-	if err := p.memoryFiles.check(path, p.workspace, p.restrict); err != nil {
+	if err := p.checkWrite(path); err != nil {
 		return err
 	}
 	if appender, ok := p.fileSystem.(fileAppender); ok {

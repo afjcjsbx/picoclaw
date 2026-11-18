@@ -90,6 +90,8 @@ Platform note:
 - Linux uses a real `source -> target` mount view.
 - Linux probes optional bubblewrap namespace flags once. If the kernel rejects one with `Creating new namespace failed` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active. This weakens isolation for that namespace; other probe failures stop startup.
 - macOS requires `target` to match `source`; Seatbelt does not remap paths.
+  Read-only rules under the instance root are rejected because Seatbelt cannot
+  revoke the root's write access.
 - Windows does not currently support `expose_paths`.
 
 ## Instance Root And Directories
@@ -201,8 +203,10 @@ It does not currently implement true `source -> target` filesystem remapping.
 The macOS backend uses `/usr/bin/sandbox-exec` with a Seatbelt default-deny profile.
 It allows writes under the PicoClaw instance root and explicit `rw` paths, while
 exposing system files, the command, its configured working directory, and
-absolute path arguments as needed. Network access remains available, matching
-Linux behavior.
+absolute path arguments as needed. A read-only `expose_paths` rule under the
+instance root is rejected: Seatbelt rules are additive, so a later read-only
+allow cannot revoke the root's write access. Network access remains available,
+matching Linux behavior.
 Because Apple deprecated `sandbox-exec`, macOS may remove it in a future release;
 when it is missing, isolation fails closed.
 
@@ -232,6 +236,30 @@ If you suspect isolation is ineffective, check whether unexpected host paths app
 - `pkg/isolation` limits what a child process can see and where its user environment points.
 
 They complement each other and do not replace each other.
+
+## Prompt Boundary Notice
+
+When isolation is enabled and supported, the agent system prompt includes a
+`Sandbox Boundaries` section. It is generated from `DescribeBoundary` when the
+agent is created and lists:
+
+- the workspace and the PicoClaw instance root;
+- the scratch directory (`$TMPDIR`);
+- user-configured `expose_paths`, split into writable and read-only targets;
+- whether subprocess network access remains available.
+
+The notice also tells the model that a `Read-only file system`, missing path, or
+permission error at the boundary is not a broken host. The model should report
+it and ask the user to add the path to `isolation.expose_paths` instead of
+retrying with `sudo`, another absolute path, or another tool.
+
+The notice describes child-process isolation only. File tools follow
+`restrict_to_workspace` and `allow_read_outside_workspace` independently. On
+Windows the notice has no path list because that backend applies process-level
+restrictions without path-level filesystem remapping.
+
+Config reload rebuilds the agent registry, so a changed isolation configuration
+is reflected in the next system prompt.
 
 ## Current Limits
 

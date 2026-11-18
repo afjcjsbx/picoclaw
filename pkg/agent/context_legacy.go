@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -75,7 +76,17 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		// Same agent as Assemble, so the rebuilt prompt reads what was compacted.
 		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
 	case ContextCompressReasonManual:
-		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
+		err := m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
+		if req.Outcome != nil {
+			switch {
+			case err == nil:
+				req.Outcome.Compacted = true
+				req.Outcome.Reason = CompactReasonCompacted
+			case errors.Is(err, ErrNothingToCompact):
+				req.Outcome.Reason = CompactReasonNoCandidates
+			}
+		}
+		return err
 	}
 	return nil
 }
@@ -147,6 +158,18 @@ const (
 	minToolResultChars = 200
 )
 
+// resultLen is len(content) without trailing budget notices, so a notice alone
+// never makes a short result bulky enough to be pruned.
+func resultLen(content string) int {
+	n := len(content)
+	for _, notice := range [...]string{budgetNoticePrefix, runBudgetNotice} {
+		if i := strings.LastIndex(content, "\n\n"+notice); i >= 0 {
+			n = min(n, i)
+		}
+	}
+	return n
+}
+
 // pruneOldToolResults clears tool outputs longer than minToolResultChars that
 // sit before the last protectedTail messages, in place. Media-carrying results
 // are kept. It reports whether anything changed.
@@ -158,7 +181,7 @@ func pruneOldToolResults(history []providers.Message) bool {
 func pruneToolResultsBefore(history []providers.Message, end int) bool {
 	pruned := false
 	for i := 0; i < end; i++ {
-		if history[i].Role == "tool" && len(history[i].Content) > minToolResultChars &&
+		if history[i].Role == "tool" && resultLen(history[i].Content) > minToolResultChars &&
 			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 {
 			history[i].Content = prunedToolResult
 			pruned = true

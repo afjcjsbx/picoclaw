@@ -51,6 +51,7 @@ type modelResponse struct {
 	RPM                 int                         `json:"rpm,omitempty"`
 	MaxTokensField      string                      `json:"max_tokens_field,omitempty"`
 	RequestTimeout      int                         `json:"request_timeout,omitempty"`
+	ProviderSort        string                      `json:"provider_sort,omitempty"`
 	ThinkingLevel       string                      `json:"thinking_level,omitempty"`
 	ToolSchemaTransform string                      `json:"tool_schema_transform,omitempty"`
 	Streaming           config.ModelStreamingConfig `json:"streaming,omitempty"`
@@ -100,6 +101,11 @@ func normalizeStoredModelConfig(mc *config.ModelConfig, defaultProvider string) 
 	authMethod := strings.ToLower(strings.TrimSpace(mc.AuthMethod))
 	if authMethod != mc.AuthMethod {
 		mc.AuthMethod = authMethod
+		changed = true
+	}
+	providerSort := strings.ToLower(strings.TrimSpace(mc.ProviderSort))
+	if providerSort != mc.ProviderSort {
+		mc.ProviderSort = providerSort
 		changed = true
 	}
 
@@ -153,6 +159,7 @@ func normalizeIncomingModelConfig(mc *config.ModelConfig, defaultProvider string
 	mc.Model = strings.TrimSpace(mc.Model)
 	mc.Provider = strings.TrimSpace(mc.Provider)
 	mc.AuthMethod = strings.ToLower(strings.TrimSpace(mc.AuthMethod))
+	mc.ProviderSort = strings.ToLower(strings.TrimSpace(mc.ProviderSort))
 	if mc.Provider == "" {
 		mc.Provider, mc.Model = providers.SplitModelProviderAndID(mc.Model, defaultProvider)
 	} else {
@@ -632,6 +639,7 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			RPM:                 m.RPM,
 			MaxTokensField:      m.MaxTokensField,
 			RequestTimeout:      m.RequestTimeout,
+			ProviderSort:        m.ProviderSort,
 			ThinkingLevel:       m.ThinkingLevel,
 			ToolSchemaTransform: m.ToolSchemaTransform,
 			Streaming:           m.Streaming,
@@ -727,6 +735,7 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -821,6 +830,9 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	if _, ok := rawFields["tool_schema_transform"]; !ok {
 		mc.ToolSchemaTransform = cfg.ModelList[idx].ToolSchemaTransform
 	}
+	if _, ok := rawFields["provider_sort"]; !ok {
+		mc.ProviderSort = cfg.ModelList[idx].ProviderSort
+	}
 	if _, ok := rawFields["streaming"]; !ok {
 		mc.Streaming = cfg.ModelList[idx].Streaming
 	}
@@ -899,6 +911,7 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]any{"status": "ok"}
@@ -972,6 +985,7 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -1068,6 +1082,7 @@ func (h *Handler) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -1117,6 +1132,7 @@ func (h *Handler) handleUpdateDefaultChain(w http.ResponseWriter, r *http.Reques
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(defaultChainResponse{

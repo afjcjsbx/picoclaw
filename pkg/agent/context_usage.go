@@ -94,7 +94,7 @@ func contextUsageFromMessages(
 
 	historyTokens := 0
 	for _, m := range history {
-		historyTokens += EstimateMessageTokens(m)
+		historyTokens += estimateMessageTokensForProvider(agent.Provider, m)
 	}
 
 	// System message tokens: uses EstimateSystemTokens which mirrors

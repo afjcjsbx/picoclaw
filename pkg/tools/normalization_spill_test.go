@@ -218,6 +218,219 @@ func TestExecuteWithContext_SmallPreTruncationTextIsNotSpilled(t *testing.T) {
 	}
 }
 
+// TestExecuteWithContext_ForceArtifactPersistsFullTextBelowInlineBudget pins
+// the web_fetch maxChars fix: the tool's requested preview stays inline, but
+// the full page is still persisted even when it is smaller than the inline
+// budget, because the model was explicitly given a cut view.
+func TestExecuteWithContext_ForceArtifactPersistsFullTextBelowInlineBudget(t *testing.T) {
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(4096)
+
+	full := "HEAD_MARKER_ALPHA " + strings.Repeat("m", 1000) + " TAIL_MARKER_OMEGA"
+	preview := "HEAD_MARKER_ALPHA ... [CONTENT TRUNCATED - 1,000 chars omitted out of 1,018 total] ... TAIL_MARKER_OMEGA"
+	result := SilentResult(preview)
+	result.FullText = full
+	result.ForceArtifact = true
+	result.ArtifactMaxRunes = 2048
+
+	reg.Register(newSpillTool("web_fetch", result))
+
+	got := reg.Execute(context.Background(), "web_fetch", nil)
+
+	if got.FullText != "" {
+		t.Fatalf("expected FullText consumed, got %d chars", utf8.RuneCountInString(got.FullText))
+	}
+	if got.ForceArtifact || got.ArtifactMaxRunes != 0 {
+		t.Fatalf("expected one-shot artifact fields cleared, got %+v", got)
+	}
+	if !strings.HasPrefix(got.ForLLM, "WARNING: web_fetch preview truncated;") {
+		t.Fatalf("expected a front-loaded warning, got %q", got.ForLLM)
+	}
+	if !strings.Contains(got.ForLLM, "was saved as a local artifact") {
+		t.Fatalf("expected the artifact pointer in the warning, got %q", got.ForLLM)
+	}
+	if !strings.HasSuffix(got.ForLLM, preview) {
+		t.Fatalf("expected the tool's requested preview kept inline, got %q", got.ForLLM)
+	}
+	if !got.LargeResultSpilled {
+		t.Fatal("expected the result marked as spilled so a hook cannot spill the preview again")
+	}
+	if len(got.ArtifactTags) != 1 {
+		t.Fatalf("expected one artifact tag, got %+v", got.ArtifactTags)
+	}
+
+	path := strings.TrimSuffix(strings.TrimPrefix(got.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if string(data) != strings.TrimSpace(full) {
+		t.Fatalf("expected the artifact to hold the full pre-truncation text")
+	}
+	content := got.ContentForLLM()
+	if n := strings.Count(content, path); n != 1 {
+		t.Fatalf("expected artifact path once in model content, got %d times", n)
+	}
+}
+
+// TestExecuteWithContext_ForceArtifactReportsArtifactCap verifies that when the
+// server-side cap cuts the artifact too, the model is told explicitly instead
+// of being sent to an artifact that also lacks the answer.
+func TestExecuteWithContext_ForceArtifactReportsArtifactCap(t *testing.T) {
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(4096)
+
+	full := "HEAD " + strings.Repeat("abcdefghij", 100) + " TAIL"
+	preview := "HEAD ... [CONTENT TRUNCATED - 990 chars omitted out of 1,010 total] ... TAIL"
+	result := SilentResult(preview)
+	result.FullText = full
+	result.ForceArtifact = true
+	result.ArtifactMaxRunes = 64
+
+	reg.Register(newSpillTool("web_fetch", result))
+
+	got := reg.Execute(context.Background(), "web_fetch", nil)
+
+	if !strings.Contains(got.ForLLM, "artifact was truncated at 64 chars") {
+		t.Fatalf("expected the artifact cap disclosed, got %q", got.ForLLM)
+	}
+	if !strings.Contains(got.ForLLM, "Use a structured endpoint or a narrower source") {
+		t.Fatalf("expected recovery guidance, got %q", got.ForLLM)
+	}
+	if !strings.HasSuffix(got.ForLLM, preview) {
+		t.Fatalf("expected the preview kept inline, got %q", got.ForLLM)
+	}
+
+	path := strings.TrimSuffix(strings.TrimPrefix(got.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	stored := string(data)
+	if !strings.Contains(stored, "[ARTIFACT TRUNCATED - ") {
+		t.Fatalf("expected a truncation notice inside the capped artifact, got %q", stored)
+	}
+	if !strings.HasPrefix(stored, "HEAD ") || !strings.HasSuffix(stored, " TAIL") {
+		t.Fatalf("expected head and tail of the page in the capped artifact, got %q", stored)
+	}
+	if utf8.RuneCountInString(stored) > 200 {
+		t.Fatalf("expected the capped artifact bounded, got %d runes", utf8.RuneCountInString(stored))
+	}
+}
+
+// TestExecuteWithContext_ForceArtifactLargeTextKeepsToolPreview verifies the
+// oversized path: when the forced preview is small enough, the tool's requested
+// view stays inline instead of being replaced by the generic head+tail preview,
+// while the full page is still persisted.
+func TestExecuteWithContext_ForceArtifactLargeTextKeepsToolPreview(t *testing.T) {
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(4096)
+
+	full := "HEAD_MARKER_ALPHA " + strings.Repeat("body line\n", 3000) + "TAIL_MARKER_OMEGA"
+	preview := "short cut view"
+	result := SilentResult(preview)
+	result.FullText = full
+	result.ForceArtifact = true
+
+	reg.Register(newSpillTool("web_fetch", result))
+
+	got := reg.Execute(context.Background(), "web_fetch", nil)
+
+	if !strings.HasPrefix(got.ForLLM, "WARNING: web_fetch preview truncated;") {
+		t.Fatalf("expected a front-loaded warning, got %q", got.ForLLM)
+	}
+	if !strings.HasSuffix(got.ForLLM, preview) {
+		t.Fatalf("expected the tool's requested preview kept inline, got %q", got.ForLLM)
+	}
+	if strings.Contains(got.ForLLM, largeResultSpillSentinel) {
+		t.Fatalf("expected no generic spill preview, got %q", got.ForLLM)
+	}
+	if len(got.ArtifactTags) != 1 {
+		t.Fatalf("expected one artifact tag, got %+v", got.ArtifactTags)
+	}
+
+	path := strings.TrimSuffix(strings.TrimPrefix(got.ArtifactTags[0], "[file:"), "]")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected artifact readable: %v", err)
+	}
+	if string(data) != strings.TrimSpace(full) {
+		t.Fatalf("expected the artifact to hold the full pre-truncation text")
+	}
+}
+
+// TestExecuteWithContext_ForceArtifactLargePreviewFallsBackToHeadTail verifies
+// the guard: when the forced preview is itself as large as the inline budget,
+// the spill keeps the generic bounded preview instead of inlining the whole
+// tool envelope.
+func TestExecuteWithContext_ForceArtifactLargePreviewFallsBackToHeadTail(t *testing.T) {
+	workspace := t.TempDir()
+	reg := NewToolRegistry()
+	reg.SetWorkspace(workspace)
+	reg.SetMaxInlineResultRunes(4096)
+
+	full := "HEAD_MARKER_ALPHA " + strings.Repeat("body line\n", 3000) + "TAIL_MARKER_OMEGA"
+	result := SilentResult(strings.Repeat("preview line\n", 400))
+	result.FullText = full
+	result.ForceArtifact = true
+
+	reg.Register(newSpillTool("web_fetch", result))
+
+	got := reg.Execute(context.Background(), "web_fetch", nil)
+
+	if !strings.HasPrefix(got.ForLLM, "WARNING: web_fetch preview truncated;") {
+		t.Fatalf("expected a front-loaded warning, got %q", got.ForLLM)
+	}
+	if !strings.Contains(got.ForLLM, largeResultSpillSentinel) {
+		t.Fatalf("expected the generic spill preview, got %q", got.ForLLM)
+	}
+	if utf8.RuneCountInString(got.ForLLM) >= 5000 {
+		t.Fatalf("expected a bounded preview, got %d runes", utf8.RuneCountInString(got.ForLLM))
+	}
+	if len(got.ArtifactTags) != 1 {
+		t.Fatalf("expected one artifact tag, got %+v", got.ArtifactTags)
+	}
+}
+
+// TestExecuteWithContext_ForceArtifactWithoutWorkspaceIsHonest verifies the
+// warning does not claim a saved artifact when persistence is unavailable.
+func TestExecuteWithContext_ForceArtifactWithoutWorkspaceIsHonest(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.SetMaxInlineResultRunes(4096)
+
+	preview := "cut view"
+	result := SilentResult(preview)
+	result.FullText = strings.Repeat("z", 200)
+	result.ForceArtifact = true
+
+	reg.Register(newSpillTool("web_fetch", result))
+
+	got := reg.Execute(context.Background(), "web_fetch", nil)
+
+	if !strings.Contains(got.ForLLM, "could not be saved as an artifact") {
+		t.Fatalf("expected an honest no-artifact warning, got %q", got.ForLLM)
+	}
+	if strings.Contains(got.ForLLM, "was saved as a local artifact") {
+		t.Fatalf("must not claim an artifact was saved, got %q", got.ForLLM)
+	}
+	if !strings.HasSuffix(got.ForLLM, preview) {
+		t.Fatalf("expected the preview kept inline, got %q", got.ForLLM)
+	}
+	if len(got.ArtifactTags) != 0 {
+		t.Fatalf("expected no artifact tag, got %+v", got.ArtifactTags)
+	}
+}
+
+// TestExecuteWithContext_WebFetchTruncatedPreviewPersistsFullArtifact lives in
+// normalization_webfetch_e2e_test.go so it can import the integration tool
+// without an in-package test import cycle.
+
 func TestSpillLargeResult_AppliesToPostHookResult(t *testing.T) {
 	workspace := t.TempDir()
 	reg := NewToolRegistry()

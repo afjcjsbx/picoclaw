@@ -1,3 +1,6 @@
+---
+description: "Split agent/pipeline.go (~1400 lines) into multiple logical files, organizing code by responsibility."
+---
 # Pipeline Restructuring Plan
 
 ## Goal

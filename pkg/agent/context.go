@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/skills"
@@ -28,6 +29,10 @@ type ContextBuilder struct {
 	splitOnMarker  bool
 	agentDiscovery func(agentID string) []AgentDescriptor
 	promptRegistry *PromptRegistry
+
+	isolationBoundary         *isolation.Boundary
+	restrictToWorkspace       bool
+	allowReadOutsideWorkspace bool
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -76,6 +81,24 @@ func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuil
 // WithMemoryConfig sets the limits and switches of the injected memory block.
 func (cb *ContextBuilder) WithMemoryConfig(cfg config.MemoryConfig) *ContextBuilder {
 	cb.memory.cfg = cfg
+	return cb
+}
+
+// WithIsolation snapshots the active subprocess isolation boundary and the
+// workspace file-tool policy used by the system prompt. The prompt is static, so
+// a later isolation configuration change requires rebuilding the ContextBuilder
+// (config reload creates a new agent registry and does that automatically).
+func (cb *ContextBuilder) WithIsolation(
+	cfg config.IsolationConfig,
+	restrictToWorkspace, allowReadOutsideWorkspace bool,
+) *ContextBuilder {
+	cb.restrictToWorkspace = restrictToWorkspace
+	cb.allowReadOutsideWorkspace = allowReadOutsideWorkspace
+	cb.isolationBoundary = nil
+	if boundary, ok := isolation.DescribeBoundary(cb.workspace, cfg); ok {
+		cb.isolationBoundary = &boundary
+	}
+	cb.InvalidateCache()
 	return cb
 }
 
@@ -214,6 +237,115 @@ Your workspace is at: %s
 	)
 }
 
+// isolationPromptOrder keeps the sandbox notice after the core identity when
+// both parts share the kernel identity slot.
+const isolationPromptOrder = 10
+
+func (cb *ContextBuilder) buildIsolationPrompt() string {
+	boundary := cb.isolationBoundary
+	if boundary == nil {
+		return ""
+	}
+
+	filePolicy := fmt.Sprintf(
+		"`restrict_to_workspace=%t` and `allow_read_outside_workspace=%t`",
+		cb.restrictToWorkspace,
+		cb.allowReadOutsideWorkspace,
+	)
+
+	if !boundary.PathBoundary {
+		var sb strings.Builder
+		sb.WriteString("## Sandbox Boundaries\n\n")
+		fmt.Fprintf(
+			&sb,
+			"Process-level isolation is enabled: %s. Child processes started by PicoClaw run with reduced privileges. The exact filesystem map is platform-defined; work inside the workspace.\n\n",
+			boundary.Backend,
+		)
+		fmt.Fprintf(
+			&sb,
+			"- File tools follow %s. This isolation applies to child processes, not to the main PicoClaw process.\n",
+			filePolicy,
+		)
+		sb.WriteString(isolationBoundaryError(
+			"the workspace",
+			"Report it and ask the user to adjust the isolation configuration;",
+		))
+		return sb.String()
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Sandbox Boundaries\n\n")
+	fmt.Fprintf(
+		&sb,
+		"Subprocess isolation is enabled: %s. Commands started by `exec`, CLI providers, process hooks, and stdio MCP servers "+
+			"run in a restricted filesystem view of this host, not directly against the host filesystem.\n\n",
+		boundary.Backend,
+	)
+	if boundary.Workspace != "" {
+		fmt.Fprintf(&sb, "- Workspace: `%s` (working directory; create task files here)\n", boundary.Workspace)
+	}
+	if boundary.Root != "" {
+		rootMode := "read-only"
+		if boundary.RootWritable {
+			rootMode = "writable"
+		}
+		fmt.Fprintf(&sb, "- PicoClaw instance root: `%s` (%s; internal state)\n", boundary.Root, rootMode)
+	}
+	if boundary.Scratch != "" {
+		scratchMode := "read-only"
+		if boundary.ScratchWritable {
+			scratchMode = "writable"
+		}
+		fmt.Fprintf(&sb, "- Scratch: `%s` (`$TMPDIR`, %s)\n", boundary.Scratch, scratchMode)
+	}
+	if len(boundary.Writable) > 0 {
+		fmt.Fprintf(&sb, "- Additional writable paths (expose_paths): %s\n", formatBoundaryPathList(boundary.Writable))
+	}
+	if len(boundary.ReadOnly) > 0 {
+		fmt.Fprintf(&sb, "- Additional read-only paths (expose_paths): %s\n", formatBoundaryPathList(boundary.ReadOnly))
+	}
+	sb.WriteString("- Standard system runtime paths are read-only unless listed above. " +
+		"Other host paths outside the roots above are not visible.\n")
+	if boundary.Network {
+		sb.WriteString("- Network access remains available.\n")
+	} else {
+		sb.WriteString("- Network access is unavailable.\n")
+	}
+	fmt.Fprintf(
+		&sb,
+		"- File tools follow %s. This isolation applies to child processes started by PicoClaw, not to the main PicoClaw process.\n",
+		filePolicy,
+	)
+	sb.WriteString(isolationBoundaryError(
+		"the roots above",
+		"Report it and ask the user to add the path to `isolation.expose_paths`;",
+	))
+	return sb.String()
+}
+
+func isolationBoundaryError(location, action string) string {
+	return "- A `Read-only file system`, `No such file or directory`, or permission error " +
+		"on a path outside " + location + " is the sandbox boundary, not a broken host. " +
+		action + " do not retry with `sudo`, another absolute path, or another tool.\n"
+}
+
+func formatBoundaryPathList(paths []string) string {
+	const maxPaths = 8
+
+	shown := paths
+	if len(shown) > maxPaths {
+		shown = shown[:maxPaths]
+	}
+	quoted := make([]string, len(shown))
+	for i, path := range shown {
+		quoted[i] = "`" + path + "`"
+	}
+	if len(paths) > maxPaths {
+		return fmt.Sprintf("%s (+%d more)", strings.Join(quoted, ", "), len(paths)-maxPaths)
+	}
+	return strings.Join(quoted, ", ")
+}
+
 func formatToolDiscoveryRule(useBM25, useRegex bool) string {
 	if !useBM25 && !useRegex {
 		return ""
@@ -276,6 +408,20 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 		Stable:  true,
 		Cache:   PromptCacheEphemeral,
 	})
+
+	if isolationPrompt := cb.buildIsolationPrompt(); isolationPrompt != "" {
+		add(PromptPart{
+			ID:      "kernel.isolation",
+			Layer:   PromptLayerKernel,
+			Slot:    PromptSlotIdentity,
+			Source:  PromptSource{ID: PromptSourceIsolation, Name: "isolation"},
+			Order:   isolationPromptOrder,
+			Title:   "sandbox boundaries",
+			Content: isolationPrompt,
+			Stable:  true,
+			Cache:   PromptCacheEphemeral,
+		})
+	}
 
 	// Bootstrap files
 	bootstrapContent := cb.LoadBootstrapFiles()

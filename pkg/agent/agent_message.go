@@ -49,7 +49,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		return "", err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", err
+		al.warnMCPInitFailure(err)
 	}
 
 	senderID := "direct"
@@ -80,7 +80,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 		return "", err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", err
+		al.warnMCPInitFailure(err)
 	}
 
 	agent := al.GetRegistry().GetDefaultAgent()
@@ -211,6 +211,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		EnableSummary:           true,
 		SendResponse:            false,
 		AllowInterimPicoPublish: true,
+		JoinSubTurns:            msg.Channel == "cli",
 	}
 	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
@@ -311,8 +312,23 @@ func (al *AgentLoop) processSystemMessage(
 		return "", fmt.Errorf("no default agent for system message")
 	}
 
-	// Use the origin session for context
-	sessionKey := session.BuildMainSessionKey(agent.ID)
+	// Continue the conversation that produced the system event when the
+	// producer supplied an explicit session key. Only fall back to the agent
+	// main session when the event has no originating conversation (heartbeat,
+	// legacy producers, external system events).
+	if agentID := strings.TrimSpace(msg.AgentID); agentID != "" {
+		if originAgent, ok := al.GetRegistry().GetAgent(agentID); ok {
+			agent = originAgent
+		}
+	}
+	sessionKey := strings.TrimSpace(msg.SessionKey)
+	if !session.IsExplicitSessionKey(sessionKey) {
+		sessionKey = session.BuildMainSessionKey(agent.ID)
+	} else if originAgentID := session.ResolveAgentID(agent.Sessions, sessionKey); originAgentID != "" {
+		if originAgent, ok := al.GetRegistry().GetAgent(originAgentID); ok {
+			agent = originAgent
+		}
+	}
 	dispatch := DispatchRequest{
 		SessionKey:  sessionKey,
 		UserMessage: fmt.Sprintf("[System: %s] %s", msg.SenderID, msg.Content),

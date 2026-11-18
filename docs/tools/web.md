@@ -1,3 +1,6 @@
+---
+description: "Web tools: web_search and web_fetch, the separate config switches for each, and how the results are shaped for the model."
+---
 # Web tools
 
 Web tools are used for web search and fetching. They are two tools with separate switches:
@@ -231,6 +234,8 @@ At runtime, the `web_search` tool accepts the following parameters:
 If `range` is omitted, PicoClaw performs an unrestricted search.
 For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens `time_after` date one year before the current day.
 
+Search results are normalized before they are returned: runs of blank lines in provider snippets are collapsed to a single newline, so repeated hard wraps cannot bloat the result layout or its large-result artifact. Single line breaks, tabs, indentation, and markdown structure are preserved.
+
 ## Example `web_search` Call
 
 ```json
@@ -246,11 +251,24 @@ For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `url` | string | yes | URL to fetch |
-| `maxChars` | integer | no | Maximum characters to extract (minimum `100`). Content beyond the cap keeps the first 40% and the last 60% around a `[CONTENT TRUNCATED - N chars omitted out of T total]` notice. Default: `2000000` |
+| `maxChars` | integer | no | Maximum characters to extract (minimum `1500`). Defaults to `tools.max_inline_result_chars`; a smaller value returns a shorter inline preview while the full page is still saved as an artifact. |
 
-The default cap is a flood guard, not a context budget: pages fetched without `maxChars` (or under it) keep their full text, which the generic [large tool result handling](../reference/tools_configuration.md#large-tool-results) turns into a head+tail preview plus a pageable workspace artifact instead of a lossy cut. When the cap does apply, the spillover saves the full pre-truncation page (when the result is oversized), so the omitted middle stays readable.
+`maxChars` defaults to the same `tools.max_inline_result_chars` budget used by the spill layer, so pages that fit stay inline. A per-call value may only lower that budget, which is useful when the model needs less context; values below the `1500` minimum are raised to it, unless the configured budget is already lower. The tool's requested preview stays inline as long as it fits the inline budget, and the full pre-truncation page is still saved as an artifact, even when the page is smaller than `max_inline_result_chars`.
 
-When an intact `web_fetch` envelope is spilled to a workspace artifact (`<workspace>/.artifacts/tool/`), it is stored as its pageable text: the extracted content with real newlines, followed by a `<web-fetch-metadata>` block holding the other result fields (URL, status, extractor, truncation flag, length). This keeps the artifact usable with `read_file` (`offset`/`length`) and `search_files`. A payload is recognized only when it carries the full envelope shape (only known keys, a non-empty `url`, a numeric `status`, and a non-empty `text`); unrecognized JSON from other tools is stored verbatim. When `maxChars` did truncate the page, the artifact stores the full pre-truncation page text instead (see above).
+A truncated preview is never the only copy. When `maxChars` cuts the page, the full pre-truncation text is saved as a workspace artifact and the result is front-loaded with a warning telling the model to read the artifact before answering. The artifact is capped server-side at `2,000,000` characters regardless of the requested preview size. If the page exceeds that cap, the artifact keeps a head+tail window with an `[ARTIFACT TRUNCATED - N chars omitted out of T total]` notice and the warning says the stored copy was truncated and points to a structured endpoint or a narrower source. This makes the benchmark failure mode — answering from a 1,500-character preview while the missing fact sat in the omitted page — explicit and recoverable.
+
+When an intact `web_fetch` envelope is spilled to a workspace artifact (`<workspace>/.artifacts/tool/`), it is stored as its pageable text: the extracted content with real newlines, followed by a `<web-fetch-metadata>` block holding the other result fields (URL, status, extractor, truncation flag, length). This keeps the artifact usable with `read_file` (`offset`/`length`) and `search_files`. A payload is recognized only when it carries the full envelope shape (only known keys, a non-empty `url`, a numeric `status`, and a non-empty `text`); unrecognized JSON from other tools is stored verbatim. When `maxChars` did truncate the page, the artifact stores the full pre-truncation page text instead (up to the `2,000,000`-character cap, see above).
+
+### Example `web_fetch` Call
+
+```json
+{
+  "url": "https://go.dev/doc/devel/release",
+  "maxChars": 12000
+}
+```
+
+For "latest version" questions, prefer a structured endpoint when the source offers one instead of scraping a long release page. For example, `https://go.dev/VERSION?m=text` returns the current Go version in one line. This is cheaper, avoids truncation entirely, and removes the risk of anchoring on the first version listed in a page.
 
 ### Payment-required resources (HTTP 402)
 

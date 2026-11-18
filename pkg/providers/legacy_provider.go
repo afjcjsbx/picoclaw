@@ -92,6 +92,7 @@ func ResolveModelConfig(cfg *config.Config, model string) (*config.ModelConfig, 
 	clone.Fallbacks = nil
 	clone.RPM = 0
 	clone.MaxTokensField = ""
+	clone.ProviderSort = ""
 	clone.ThinkingLevel = ""
 	clone.ToolSchemaTransform = ""
 	clone.Streaming = config.ModelStreamingConfig{}

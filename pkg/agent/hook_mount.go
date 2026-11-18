@@ -14,9 +14,12 @@ import (
 
 type hookRuntime struct {
 	initOnce sync.Once
-	mu       sync.Mutex
-	initErr  error
-	mounted  []string
+	// applyMu serializes lazy initialization and reload-time replacement so
+	// the two paths cannot race each other.
+	applyMu sync.Mutex
+	mu      sync.Mutex
+	initErr error
+	mounted []string
 }
 
 func (r *hookRuntime) setInitErr(err error) {
@@ -37,17 +40,79 @@ func (r *hookRuntime) setMounted(names []string) {
 	r.mu.Unlock()
 }
 
-func (r *hookRuntime) reset(al *AgentLoop) {
+func (r *hookRuntime) mountedNames() []string {
 	r.mu.Lock()
-	names := append([]string(nil), r.mounted...)
-	r.mounted = nil
-	r.initErr = nil
-	r.initOnce = sync.Once{}
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.mounted...)
+}
 
-	for _, name := range names {
-		al.UnmountHook(name)
+// apply mounts regs and unmounts configured hooks that are no longer present.
+// New hooks are mounted before stale ones are removed, so replacing a gate
+// never leaves the manager without an approval hook.
+func (r *hookRuntime) apply(al *AgentLoop, regs []HookRegistration) error {
+	if err := validateHookRegistrations(regs); err != nil {
+		return err
 	}
+	if al == nil {
+		if len(regs) != 0 {
+			return fmt.Errorf("agent loop is nil")
+		}
+		r.setMounted(nil)
+		r.setInitErr(nil)
+		return nil
+	}
+	if len(regs) > 0 && al.hooks == nil {
+		return fmt.Errorf("hook manager is not initialized")
+	}
+
+	newNames := make([]string, 0, len(regs))
+	for _, reg := range regs {
+		if err := al.MountHook(reg); err != nil {
+			return fmt.Errorf("mount hook %q: %w", reg.Name, err)
+		}
+		newNames = append(newNames, reg.Name)
+	}
+
+	for _, name := range r.mountedNames() {
+		if !slices.Contains(newNames, name) {
+			al.UnmountHook(name)
+		}
+	}
+
+	r.setMounted(newNames)
+	r.setInitErr(nil)
+	return nil
+}
+
+func validateHookRegistrations(regs []HookRegistration) error {
+	seen := make(map[string]struct{}, len(regs))
+	for _, reg := range regs {
+		if reg.Name == "" {
+			return fmt.Errorf("hook name is required")
+		}
+		if reg.Hook == nil {
+			return fmt.Errorf("hook %q is nil", reg.Name)
+		}
+		if _, exists := seen[reg.Name]; exists {
+			return fmt.Errorf("hook %q is duplicated", reg.Name)
+		}
+		seen[reg.Name] = struct{}{}
+	}
+	return nil
+}
+
+// replace applies a pre-built hook set and marks initialization as complete.
+// If the set cannot be applied, the previous hooks remain mounted.
+func (r *hookRuntime) replace(al *AgentLoop, regs []HookRegistration) error {
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+
+	if err := r.apply(al, regs); err != nil {
+		r.setInitErr(err)
+		return err
+	}
+	r.initOnce.Do(func() {})
+	return nil
 }
 
 // BuiltinHookFactory constructs an in-process hook from config.
@@ -117,6 +182,9 @@ func (al *AgentLoop) ensureHooksInitialized(ctx context.Context) error {
 		return nil
 	}
 
+	al.hookRuntime.applyMu.Lock()
+	defer al.hookRuntime.applyMu.Unlock()
+
 	al.hookRuntime.initOnce.Do(func() {
 		al.hookRuntime.setInitErr(al.loadConfiguredHooks(ctx))
 	})
@@ -124,70 +192,78 @@ func (al *AgentLoop) ensureHooksInitialized(ctx context.Context) error {
 	return al.hookRuntime.getInitErr()
 }
 
-func (al *AgentLoop) loadConfiguredHooks(ctx context.Context) (err error) {
-	if al == nil || al.cfg == nil || !al.cfg.Hooks.Enabled {
+func (al *AgentLoop) loadConfiguredHooks(ctx context.Context) error {
+	if al == nil || al.cfg == nil {
 		return nil
 	}
 
-	mounted := make([]string, 0)
-	defer func() {
-		if err != nil {
-			for _, name := range mounted {
-				al.UnmountHook(name)
-			}
-			return
-		}
-		al.hookRuntime.setMounted(mounted)
-	}()
+	regs, err := al.buildConfiguredHooks(ctx, al.cfg)
+	if err != nil {
+		return err
+	}
+	return al.hookRuntime.apply(al, regs)
+}
 
-	builtinNames := enabledBuiltinHookNames(al.cfg.Hooks.Builtins)
-	for _, name := range builtinNames {
-		spec := al.cfg.Hooks.Builtins[name]
+// buildConfiguredHooks constructs the configured hooks without mounting them.
+// A caller can therefore fail a reload before changing any live state.
+func (al *AgentLoop) buildConfiguredHooks(
+	ctx context.Context,
+	cfg *config.Config,
+) ([]HookRegistration, error) {
+	if cfg == nil || !cfg.Hooks.Enabled {
+		return nil, nil
+	}
+
+	var regs []HookRegistration
+	for _, name := range enabledBuiltinHookNames(cfg.Hooks.Builtins) {
+		spec := cfg.Hooks.Builtins[name]
 		factory, ok := lookupBuiltinHook(name)
 		if !ok {
-			return fmt.Errorf("builtin hook %q is not registered", name)
+			closeHookRegistrations(regs)
+			return nil, fmt.Errorf("builtin hook %q is not registered", name)
 		}
 
 		hook, factoryErr := factory(ctx, spec)
 		if factoryErr != nil {
-			return fmt.Errorf("build builtin hook %q: %w", name, factoryErr)
+			closeHookRegistrations(regs)
+			return nil, fmt.Errorf("build builtin hook %q: %w", name, factoryErr)
 		}
-		if err := al.MountHook(HookRegistration{
+		regs = append(regs, HookRegistration{
 			Name:     name,
 			Priority: spec.Priority,
 			Source:   HookSourceInProcess,
 			Hook:     hook,
-		}); err != nil {
-			return fmt.Errorf("mount builtin hook %q: %w", name, err)
-		}
-		mounted = append(mounted, name)
+		})
 	}
 
-	processNames := enabledProcessHookNames(al.cfg.Hooks.Processes)
-	for _, name := range processNames {
-		spec := al.cfg.Hooks.Processes[name]
+	for _, name := range enabledProcessHookNames(cfg.Hooks.Processes) {
+		spec := cfg.Hooks.Processes[name]
 		opts, buildErr := processHookOptionsFromConfig(spec)
 		if buildErr != nil {
-			return fmt.Errorf("configure process hook %q: %w", name, buildErr)
+			closeHookRegistrations(regs)
+			return nil, fmt.Errorf("configure process hook %q: %w", name, buildErr)
 		}
 
 		processHook, buildErr := NewProcessHook(ctx, name, opts)
 		if buildErr != nil {
-			return fmt.Errorf("start process hook %q: %w", name, buildErr)
+			closeHookRegistrations(regs)
+			return nil, fmt.Errorf("start process hook %q: %w", name, buildErr)
 		}
-		if err := al.MountHook(HookRegistration{
+		regs = append(regs, HookRegistration{
 			Name:     name,
 			Priority: spec.Priority,
 			Source:   HookSourceProcess,
 			Hook:     processHook,
-		}); err != nil {
-			_ = processHook.Close()
-			return fmt.Errorf("mount process hook %q: %w", name, err)
-		}
-		mounted = append(mounted, name)
+		})
 	}
 
-	return nil
+	return regs, nil
+}
+
+func closeHookRegistrations(regs []HookRegistration) {
+	for _, reg := range regs {
+		closeHookIfPossible(reg.Hook)
+	}
 }
 
 func enabledBuiltinHookNames(specs map[string]config.BuiltinHookConfig) []string {

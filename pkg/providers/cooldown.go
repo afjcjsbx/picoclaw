@@ -43,6 +43,36 @@ func (ct *CooldownTracker) MarkFailure(provider string, reason FailoverReason) {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 
+	entry, now := ct.beginFailure(provider, reason, true)
+	if reason == FailoverBilling {
+		billingCount := entry.FailureCounts[FailoverBilling]
+		entry.DisabledUntil = now.Add(calculateBillingCooldown(billingCount))
+		entry.DisabledReason = FailoverBilling
+	} else {
+		entry.CooldownEnd = now.Add(calculateStandardCooldown(entry.ErrorCount))
+	}
+}
+
+// MarkFailureWithoutBillingCooldown records a failure with the standard
+// exponential backoff even when the reason is billing. Used for ambiguous
+// billing messages that may actually describe a non-billing rejection. The
+// reason is not counted, so a later confirmed billing failure still starts at
+// the first billing step.
+func (ct *CooldownTracker) MarkFailureWithoutBillingCooldown(provider string, reason FailoverReason) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+
+	entry, now := ct.beginFailure(provider, reason, false)
+	entry.CooldownEnd = now.Add(calculateStandardCooldown(entry.ErrorCount))
+}
+
+// beginFailure applies the shared failure-window reset and counters. Callers
+// hold ct.mu.
+func (ct *CooldownTracker) beginFailure(
+	provider string,
+	reason FailoverReason,
+	recordReason bool,
+) (*cooldownEntry, time.Time) {
 	now := ct.nowFunc()
 	entry := ct.getOrCreate(provider)
 
@@ -53,16 +83,11 @@ func (ct *CooldownTracker) MarkFailure(provider string, reason FailoverReason) {
 	}
 
 	entry.ErrorCount++
-	entry.FailureCounts[reason]++
-	entry.LastFailure = now
-
-	if reason == FailoverBilling {
-		billingCount := entry.FailureCounts[FailoverBilling]
-		entry.DisabledUntil = now.Add(calculateBillingCooldown(billingCount))
-		entry.DisabledReason = FailoverBilling
-	} else {
-		entry.CooldownEnd = now.Add(calculateStandardCooldown(entry.ErrorCount))
+	if recordReason {
+		entry.FailureCounts[reason]++
 	}
+	entry.LastFailure = now
+	return entry, now
 }
 
 // MarkSuccess resets all counters and cooldowns for a provider.
