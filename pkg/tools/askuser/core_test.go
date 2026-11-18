@@ -285,7 +285,7 @@ func TestNormalizeQuestionsValidationErrors(t *testing.T) {
 		{
 			"choice too long",
 			[]any{map[string]any{"question": "q", "choices": []any{strings.Repeat("a", MaxChoiceLength+1)}}},
-			"exceeds 8000 characters",
+			"exceeds 1000 characters",
 		},
 		{
 			"multi select not bool",
@@ -433,5 +433,30 @@ func TestBuildDocumentTruncatesLongAnswers(t *testing.T) {
 	}
 	if document.Notice != "" {
 		t.Fatalf("notice = %q", document.Notice)
+	}
+}
+
+func TestNormalizeQuestionsIgnoresExtraInvalidChoices(t *testing.T) {
+	questions, err := NormalizeQuestions([]any{map[string]any{
+		"question": "q",
+		"choices":  []any{"a", "b", "c", "d", 123, []any{"nested"}, strings.Repeat("x", MaxChoiceLength+1)},
+	}})
+	if err != nil {
+		t.Fatalf("malformed extra choices rejected: %v", err)
+	}
+	if got := len(questions[0].Choices); got != MaxChoices {
+		t.Fatalf("choices = %d, want %d", got, MaxChoices)
+	}
+	if questions[0].Choices[3] != "d" {
+		t.Fatalf("last choice = %q", questions[0].Choices[3])
+	}
+
+	// A malformed value before the limit is still a validation error.
+	_, err = NormalizeQuestions([]any{map[string]any{
+		"question": "q",
+		"choices":  []any{"a", 123},
+	}})
+	if err == nil {
+		t.Fatal("malformed choice within the limit was accepted")
 	}
 }

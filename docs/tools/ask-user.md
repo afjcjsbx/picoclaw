@@ -36,8 +36,9 @@ Rules:
 - `question` must be non-empty after trimming and at most 1,000 characters.
 - `choices` is optional. Omit it, use `null`, or use `[]` for a free-text
   question. A non-empty list made only of blank strings is a validation error.
-- At most four valid choices are kept; extra choices are truncated in order.
-- Each choice may contain at most 8,000 characters after trimming.
+- At most four valid choices are kept; extra options are truncated in order and
+  malformed values after the fourth valid choice are ignored.
+- Each choice may contain at most 1,000 characters after trimming.
 - The rendered prompt of a single question (question, numbered options and
   instructions) must fit the `tools.ask_user.max_prompt_chars` budget (default
   `1900`, enough for Telegram and Discord). An oversized prompt is rejected

@@ -594,6 +594,11 @@
     "message": {
       "enabled": true
     },
+    "ask_user": {
+      "enabled": true,
+      "timeout_seconds": 300,
+      "max_prompt_chars": 1900
+    },
     "reaction": {
       "enabled": false
     },

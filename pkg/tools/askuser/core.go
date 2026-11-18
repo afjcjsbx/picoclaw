@@ -22,7 +22,7 @@ const (
 	MaxQuestionLength = 1000
 	// MaxChoiceLength is the maximum length of a single option, in runes,
 	// measured after trimming surrounding whitespace.
-	MaxChoiceLength = 8000
+	MaxChoiceLength = 1000
 	// MaxAnswerLength is the maximum length of a single user answer, in runes.
 	// Longer answers are truncated and the result carries a notice.
 	MaxAnswerLength = 2000
@@ -220,6 +220,11 @@ func normalizeChoices(questionIndex int, raw any) ([]string, error) {
 
 	choices := make([]string, 0, min(len(values), MaxChoices))
 	for i, rawChoice := range values {
+		// Extra options beyond the first four valid ones are ignored,
+		// including malformed values that would otherwise fail validation.
+		if len(choices) == MaxChoices {
+			break
+		}
 		choice, ok := rawChoice.(string)
 		if !ok {
 			return nil, fmt.Errorf("questions[%d].choices[%d] must be a string", questionIndex, i)
@@ -232,9 +237,6 @@ func normalizeChoices(questionIndex int, raw any) ([]string, error) {
 			)
 		}
 		if choice == "" {
-			continue
-		}
-		if len(choices) == MaxChoices {
 			continue
 		}
 		choices = append(choices, choice)
