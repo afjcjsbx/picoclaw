@@ -63,6 +63,8 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //     rejects anything above risk_threshold. Commands the classifier cannot
 //     resolve (dynamic command names, opaque shells, parse errors) are allowed
 //     by default; dynamic operands for destructive commands are still rejected.
+//     In smart mode, critical risk is a deterministic floor and stays blocked
+//     even if risk_threshold is critical.
 //  8. Smart approvals: only unknown commands (layer 7) are reviewed by the
 //     Guardian model. APPROVE runs the command and DENY blocks it. ESCALATE
 //     follows approvals.on_escalate ("block" by default, "approve" to run).
@@ -218,6 +220,15 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		assessment := t.riskGuard.AssessFile(cmd, riskFile)
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
+		}
+		// Smart approvals are an additional reviewer, never a way to lower the
+		// static floor. In smart mode a critical command stays blocked even
+		// when risk_threshold=critical, unless an operator explicitly unlocks
+		// the exact command. Hardline, workspace escapes, brace-expanded
+		// commands and interpreter paths have already returned above and never
+		// reach the Guardian.
+		if t.approvalEnabled && !assessment.Unknown && assessment.Level >= shellguard.RiskCritical {
+			return "Command blocked by smart-approval floor: known critical risk cannot be delegated to the guardian"
 		}
 		if assessment.Unknown {
 			// Unknown commands are allowed by default. Smart approvals can
