@@ -48,7 +48,6 @@ type ExecTool struct {
 	hardlineDenyPatterns []*regexp.Regexp
 	customDenyPatterns   []*regexp.Regexp
 	customAllowPatterns  []*regexp.Regexp
-	customUnlockPatterns []*regexp.Regexp
 	// allowedPathPatterns are paths exec may read or modify. exec can mutate
 	// any path it receives, so callers must pass write grants, not a read-only
 	// allowlist.
@@ -342,7 +341,6 @@ func NewExecToolWithConfig(
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
-	customUnlockPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	// Fail closed when no config is supplied. Callers that need remote exec
 	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
@@ -382,12 +380,6 @@ func NewExecToolWithConfig(
 		}
 		customAllowPatterns, err = compilePatterns(
 			execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow",
-		)
-		if err != nil {
-			return nil, err
-		}
-		customUnlockPatterns, err = compilePatterns(
-			execConfig.CustomUnlockPatterns, compileFullMatchPattern, "custom unlock",
 		)
 		if err != nil {
 			return nil, err
@@ -435,7 +427,6 @@ func NewExecToolWithConfig(
 		hardlineDenyPatterns: hardlinePatterns,
 		customDenyPatterns:   customDenyPatterns,
 		customAllowPatterns:  customAllowPatterns,
-		customUnlockPatterns: customUnlockPatterns,
 		allowedPathPatterns:  allowedPathPatterns,
 		restrictToWorkspace:  restrict,
 		allowRemote:          allowRemote,

@@ -528,8 +528,7 @@
       "risk_threshold": "medium",
       "allow_remote": false,
       "custom_deny_patterns": null,
-      "custom_allow_patterns": null,
-      "custom_unlock_patterns": null
+      "custom_allow_patterns": null
     },
     "skills": {
       "enabled": true,

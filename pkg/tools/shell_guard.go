@@ -18,13 +18,6 @@ func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
 	return patternsMatchAny(t.customAllowPatterns, []string{lower})
 }
 
-// commandMatchesCustomUnlockPattern reports whether an operator unlock rule
-// matches the whole command. A match skips the default deny set and the risk
-// classifier; hardline, custom deny and the workspace boundary still run.
-func (t *ExecTool) commandMatchesCustomUnlockPattern(lower string) bool {
-	return patternsMatchAny(t.customUnlockPatterns, []string{lower})
-}
-
 func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 	for _, pattern := range patterns {
 		for _, form := range forms {
@@ -47,15 +40,12 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //     self-protection). They apply even with enable_deny_patterns=false and no
 //     allow rule exempts them.
 //  3. Custom deny patterns: always enforced and stronger than any allow rule.
-//  4. Custom unlock patterns: full-command operator exceptions. A match skips
-//     the default deny set and the risk classifier; hardline, custom deny and
-//     the workspace boundary still run.
-//  5. Default deny patterns: the shell constructs the AST cannot inspect
+//  4. Default deny patterns: the shell constructs the AST cannot inspect
 //     (command substitution, pipe-to-shell, shell heredocs). Exempted only by
 //     custom_allow_patterns; a hit is always rejected.
-//  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
+//  5. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
 //     check, then the AST path guard on Unix or the path scanner on Windows.
-//  7. Risk level: the AST classifier rates the command low to critical and
+//  6. Risk level: the AST classifier rates the command low to critical and
 //     rejects anything above risk_threshold. Commands the classifier cannot
 //     resolve (dynamic command names, opaque shells, parse errors) are allowed
 //     by default; dynamic operands for destructive commands are still rejected.
@@ -114,15 +104,10 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
-	// An operator unlock rule is an explicit per-command exception. It skips
-	// the default deny set and the risk classifier, but never the hardline
-	// floor or the workspace boundary.
-	unlocked := t.commandMatchesCustomUnlockPattern(lower)
-
 	// Default deny patterns can be exempted by custom allow patterns, so
 	// operators can selectively permit normally-blocked commands. A hit is
 	// final.
-	if !unlocked && !t.commandMatchesCustomAllowPattern(lower) {
+	if !t.commandMatchesCustomAllowPattern(lower) {
 		// Use the same canonical forms as the hardline/custom layers. This
 		// catches shell-equivalent spellings such as g\it, which the raw
 		// lowerForDeny form does not expose.
@@ -180,11 +165,10 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	}
 
 	// The AST classifier is the last built-in layer: it sees commands that the
-	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
-	// explicit custom unlock pattern can bypass it; custom_allow_patterns no
-	// longer does. Known commands above the threshold are rejected, while
-	// unknown commands are allowed by default.
-	if t.riskGuard != nil && !unlocked {
+	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`.
+	// custom_allow_patterns does not bypass it. Known commands above the
+	// threshold are rejected, while unknown commands are allowed by default.
+	if t.riskGuard != nil {
 		assessment := t.riskGuard.AssessFile(cmd, riskFile)
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
