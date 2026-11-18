@@ -27,7 +27,7 @@ type WorkspacePolicy struct {
 	CwdChanged bool
 	// AllowPath reports whether an absolute path is inside the workspace or
 	// covered by an operator allowlist. It is responsible for resolving
-	// symlinks; CheckWorkspace only joins and cleans paths.
+	// symlinks; the workspace check only joins and cleans paths.
 	AllowPath func(string) bool
 }
 
@@ -53,23 +53,18 @@ func normalizeWorkspace(command string) string {
 	return decodeANSICQuotes(command)
 }
 
-// CheckWorkspace parses command and rejects constructs that the byte-level
-// absolute-path check cannot see: tilde and $HOME expansion in path position,
-// parent-directory traversal, dynamic redirection targets, and directory
-// changes through cd, pushd, popd and env -C.
-//
-// It is a static, best-effort guard, not an OS sandbox. Commands whose paths
-// cannot be resolved statically are rejected only in path position; arbitrary
-// child processes and file contents are outside its reach. OS-level isolation
-// remains the only hard boundary.
-func CheckWorkspace(command string, policy WorkspacePolicy) error {
-	return checkWorkspaceScript(command, policy, 0)
-}
-
 // CheckWorkspaceFile validates an already parsed command. The exec guard uses
 // it to share one parse with the risk classifier. Commands that contain fixed
 // shell rewrites are re-parsed after normalizeWorkspace, because those rewrites
 // can change word boundaries and the shared file reflects the written form.
+//
+// It rejects constructs that the byte-level absolute-path check cannot see:
+// tilde and $HOME expansion in path position, parent-directory traversal,
+// dynamic redirection targets, and directory changes through cd, pushd, popd
+// and env -C. It is a static, best-effort guard, not an OS sandbox. Commands
+// whose paths cannot be resolved statically are rejected only in path
+// position; arbitrary child processes and file contents are outside its reach.
+// OS-level isolation remains the only hard boundary.
 func CheckWorkspaceFile(command string, file *syntax.File, policy WorkspacePolicy) error {
 	if file == nil {
 		return newWorkspaceError("command could not be parsed for workspace validation")
@@ -80,9 +75,10 @@ func CheckWorkspaceFile(command string, file *syntax.File, policy WorkspacePolic
 	return checkWorkspaceFile(file, policy, 0)
 }
 
+// checkWorkspaceScript parses command and applies the workspace policy. The
+// fixed shell rewrites run before parsing, including for scripts reached
+// through sh -c, eval and heredocs.
 func checkWorkspaceScript(command string, policy WorkspacePolicy, depth int) error {
-	// Apply the fixed shell rewrites before parsing. This also applies to
-	// scripts reached through sh -c, eval and heredocs.
 	return checkWorkspaceText(normalizeWorkspace(command), policy, depth)
 }
 

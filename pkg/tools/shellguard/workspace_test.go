@@ -7,6 +7,12 @@ import (
 	"testing"
 )
 
+// checkWorkspaceTest exercises the text path that the removed public wrapper
+// used to expose.
+func checkWorkspaceTest(command string, policy WorkspacePolicy) error {
+	return checkWorkspaceScript(command, policy, 0)
+}
+
 func testWorkspacePolicy(t *testing.T) (WorkspacePolicy, string, string) {
 	t.Helper()
 
@@ -183,12 +189,12 @@ func TestCheckWorkspaceBlocksEscapes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := CheckWorkspace(tc.command, policy)
+			err := checkWorkspaceTest(tc.command, policy)
 			if err == nil {
-				t.Fatalf("CheckWorkspace(%q) = nil, want %q", tc.command, tc.want)
+				t.Fatalf("checkWorkspaceTest(%q) = nil, want %q", tc.command, tc.want)
 			}
 			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("CheckWorkspace(%q) = %q, want %q", tc.command, err, tc.want)
+				t.Fatalf("checkWorkspaceTest(%q) = %q, want %q", tc.command, err, tc.want)
 			}
 		})
 	}
@@ -232,8 +238,8 @@ func TestCheckWorkspaceAllowsInsideCommands(t *testing.T) {
 	for _, command := range commands {
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
-			if err := CheckWorkspace(command, policy); err != nil {
-				t.Fatalf("CheckWorkspace(%q) = %v, want nil", command, err)
+			if err := checkWorkspaceTest(command, policy); err != nil {
+				t.Fatalf("checkWorkspaceTest(%q) = %v, want nil", command, err)
 			}
 		})
 	}
@@ -252,22 +258,22 @@ func TestCheckWorkspaceUnsetHome(t *testing.T) {
 		},
 	}
 
-	if err := CheckWorkspace("unset HOME; cd ~", policy); err == nil ||
+	if err := checkWorkspaceTest("unset HOME; cd ~", policy); err == nil ||
 		!strings.Contains(err.Error(), "path outside working dir") {
 		t.Fatalf("cd after unset HOME should be rejected, got: %v", err)
 	}
-	if err := CheckWorkspace("unset HOME; sh -c 'cat $HOME/file'", policy); err == nil ||
+	if err := checkWorkspaceTest("unset HOME; sh -c 'cat $HOME/file'", policy); err == nil ||
 		!strings.Contains(err.Error(), "path outside working dir") {
 		t.Fatalf("nested $HOME after unset HOME should be rejected, got: %v", err)
 	}
-	if err := CheckWorkspace("unset PWD; eval 'cat $PWD/etc/passwd'", policy); err == nil ||
+	if err := checkWorkspaceTest("unset PWD; eval 'cat $PWD/etc/passwd'", policy); err == nil ||
 		!strings.Contains(err.Error(), "path outside working dir") {
 		t.Fatalf("nested $PWD after unset PWD should be rejected, got: %v", err)
 	}
-	if err := CheckWorkspace("cd ~", policy); err != nil {
+	if err := checkWorkspaceTest("cd ~", policy); err != nil {
 		t.Fatalf("cd ~ with HOME inside the workspace should be allowed, got: %v", err)
 	}
-	if err := CheckWorkspace("HOME=.; sh -c 'cat $HOME/file'", policy); err == nil {
+	if err := checkWorkspaceTest("HOME=.; sh -c 'cat $HOME/file'", policy); err == nil {
 		t.Fatal("a HOME assignment must conservatively disable tilde expansion")
 	}
 	for _, command := range []string{
@@ -277,7 +283,7 @@ func TestCheckWorkspaceUnsetHome(t *testing.T) {
 		"env -i sh -c 'cat $HOME/file'",
 		"env -u HOME sh -c 'cat $HOME/file'",
 	} {
-		if err := CheckWorkspace(command, policy); err == nil {
+		if err := checkWorkspaceTest(command, policy); err == nil {
 			t.Fatalf("HOME assignment in a nested scope must not loosen %q", command)
 		}
 	}
@@ -289,13 +295,13 @@ func TestCheckWorkspaceCDPath(t *testing.T) {
 	policy, cwd, _ := testWorkspacePolicy(t)
 	policy.CDPath = true
 
-	if err := CheckWorkspace("cd sub", policy); err == nil ||
+	if err := checkWorkspaceTest("cd sub", policy); err == nil ||
 		!strings.Contains(err.Error(), "directory change cannot be validated") {
 		t.Fatalf("relative cd with CDPATH should be rejected, got: %v", err)
 	}
 	for _, command := range []string{"cd ./sub", "cd " + filepath.Join(cwd, "sub")} {
-		if err := CheckWorkspace(command, policy); err != nil {
-			t.Fatalf("CheckWorkspace(%q) = %v, want nil", command, err)
+		if err := checkWorkspaceTest(command, policy); err != nil {
+			t.Fatalf("checkWorkspaceTest(%q) = %v, want nil", command, err)
 		}
 	}
 }
@@ -313,8 +319,8 @@ func TestCheckWorkspaceEffectiveCwd(t *testing.T) {
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatalf("create outside: %v", err)
 	}
-	// The production guard resolves the workspace root before calling
-	// CheckWorkspace; resolve it here for the same comparison semantics.
+	// The production guard resolves the workspace root before calling the
+	// workspace check; resolve it here for the same comparison semantics.
 	resolvedCwd, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
@@ -364,8 +370,8 @@ func TestCheckWorkspaceEffectiveCwd(t *testing.T) {
 	} {
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
-			if err := CheckWorkspace(command, policy); err == nil {
-				t.Fatalf("CheckWorkspace(%q) = nil, want a workspace escape", command)
+			if err := checkWorkspaceTest(command, policy); err == nil {
+				t.Fatalf("checkWorkspaceTest(%q) = nil, want a workspace escape", command)
 			}
 		})
 	}
@@ -378,14 +384,14 @@ func TestCheckWorkspaceEffectiveCwd(t *testing.T) {
 	} {
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
-			if err := CheckWorkspace(command, policy); err != nil {
-				t.Fatalf("CheckWorkspace(%q) = %v, want nil", command, err)
+			if err := checkWorkspaceTest(command, policy); err != nil {
+				t.Fatalf("checkWorkspaceTest(%q) = %v, want nil", command, err)
 			}
 		})
 	}
 }
 
-func TestCheckWorkspaceFileMatchesCheckWorkspace(t *testing.T) {
+func TestCheckWorkspaceFileMatchesTextPath(t *testing.T) {
 	t.Parallel()
 
 	policy, cwd, _ := testWorkspacePolicy(t)
@@ -406,13 +412,13 @@ func TestCheckWorkspaceFileMatchesCheckWorkspace(t *testing.T) {
 		} else {
 			fromFile = CheckWorkspaceFile(command, nil, policy)
 		}
-		fromText := CheckWorkspace(command, policy)
+		fromText := checkWorkspaceTest(command, policy)
 
 		if (fromFile == nil) != (fromText == nil) {
-			t.Fatalf("%q: CheckWorkspaceFile=%v CheckWorkspace=%v", command, fromFile, fromText)
+			t.Fatalf("%q: CheckWorkspaceFile=%v checkWorkspaceTest=%v", command, fromFile, fromText)
 		}
 		if fromFile != nil && fromFile.Error() != fromText.Error() {
-			t.Fatalf("%q: CheckWorkspaceFile=%q CheckWorkspace=%q", command, fromFile, fromText)
+			t.Fatalf("%q: CheckWorkspaceFile=%q checkWorkspaceTest=%q", command, fromFile, fromText)
 		}
 	}
 }
@@ -422,9 +428,9 @@ func TestCheckWorkspaceWrapperNestingLimit(t *testing.T) {
 
 	policy, _, _ := testWorkspacePolicy(t)
 	command := strings.Repeat("command ", maxShellNesting+2) + "true"
-	err := CheckWorkspace(command, policy)
+	err := checkWorkspaceTest(command, policy)
 	if err == nil || !strings.Contains(err.Error(), "shell nesting limit") {
-		t.Fatalf("CheckWorkspace(%q) = %v, want shell nesting limit", command, err)
+		t.Fatalf("checkWorkspaceTest(%q) = %v, want shell nesting limit", command, err)
 	}
 }
 
@@ -446,8 +452,8 @@ func TestCheckWorkspaceAllowsHomeInsideWorkspace(t *testing.T) {
 		"cat $HOME/file",
 		`cd "~"`,
 	} {
-		if err := CheckWorkspace(command, policy); err != nil {
-			t.Fatalf("CheckWorkspace(%q) = %v, want nil", command, err)
+		if err := checkWorkspaceTest(command, policy); err != nil {
+			t.Fatalf("checkWorkspaceTest(%q) = %v, want nil", command, err)
 		}
 	}
 }
