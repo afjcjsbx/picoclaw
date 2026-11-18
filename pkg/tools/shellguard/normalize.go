@@ -8,11 +8,7 @@ import "strings"
 // It is deliberately not a shell evaluator and does not expand arbitrary
 // variables.
 func NormalizeForDeny(command string) string {
-	command = stripShellLineContinuations(command)
-	command = decodeANSICQuotes(command)
-	command = strings.ReplaceAll(command, "${IFS}", " ")
-	command = strings.ReplaceAll(command, "$IFS", " ")
-	return command
+	return normalizeFixedRewrites(command, true)
 }
 
 // normalizeForParse applies only the fixed rewrites needed before parsing a
@@ -20,7 +16,17 @@ func NormalizeForDeny(command string) string {
 // ANSI-C quoting in place: literalWord decodes every shell word exactly once,
 // so pre-decoding here would make r\\m and $'r\m' look like rm.
 func normalizeForParse(command string) string {
+	return normalizeFixedRewrites(command, false)
+}
+
+// normalizeFixedRewrites is the shared implementation of the two fixed
+// rewrites. decodeANSI is the only difference: deny matching wants ANSI-C
+// strings decoded, while the parser wants literalWord to decode them once.
+func normalizeFixedRewrites(command string, decodeANSI bool) string {
 	command = stripShellLineContinuations(command)
+	if decodeANSI {
+		command = decodeANSICQuotes(command)
+	}
 	command = strings.ReplaceAll(command, "${IFS}", " ")
 	command = strings.ReplaceAll(command, "$IFS", " ")
 	return command
