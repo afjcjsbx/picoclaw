@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -426,7 +428,7 @@ func TestTurnProfile_SkillsOffAndCustomControlCatalogAndActiveSkills(t *testing.
 		t.Fatalf("runAgentLoop(no-skills) error = %v", err)
 	}
 	noSkillsPrompt := provider.messages[0].Content
-	if strings.Contains(noSkillsPrompt, "# Skills") ||
+	if strings.Contains(noSkillsPrompt, "skills_search") ||
 		strings.Contains(noSkillsPrompt, "# Active Skills") {
 		t.Fatalf("skills-off prompt includes skill context:\n%s", noSkillsPrompt)
 	}
@@ -449,13 +451,30 @@ func TestTurnProfile_SkillsOffAndCustomControlCatalogAndActiveSkills(t *testing.
 		t.Fatalf("runAgentLoop(shell-only) error = %v", err)
 	}
 	customPrompt := provider.messages[0].Content
-	if !strings.Contains(customPrompt, "<name>shell</name>") ||
+	if !strings.Contains(customPrompt, "skills_search") ||
 		!strings.Contains(customPrompt, "### Skill: shell") {
-		t.Fatalf("custom skills prompt missing allowed shell context:\n%s", customPrompt)
+		t.Fatalf("custom skills prompt missing discovery or allowed shell context:\n%s", customPrompt)
 	}
-	if strings.Contains(customPrompt, "<name>paint</name>") ||
-		strings.Contains(customPrompt, "### Skill: paint") {
+	if strings.Contains(customPrompt, "### Skill: paint") {
 		t.Fatalf("custom skills prompt includes disallowed paint context:\n%s", customPrompt)
+	}
+
+	// The catalog tools enforce the same allow list: paint is neither
+	// searchable nor readable, shell is both.
+	ctx := skills.WithAccess(context.Background(), turnProfileSkillAccess(config.EffectiveTurnProfile{
+		Enabled:       true,
+		SkillsMode:    config.TurnProfileModeCustom,
+		AllowedSkills: []string{"shell"},
+	}))
+	catalog := agent.ContextBuilder.SkillCatalog()
+	if hits, _, err := catalog.Search(ctx, "paint", 5); err != nil || len(hits) != 0 {
+		t.Fatalf("Search(paint) = %v, %v; want no hits", hits, err)
+	}
+	if _, err := catalog.Read(ctx, "paint", ""); !errors.Is(err, skills.ErrSkillNotFound) {
+		t.Fatalf("Read(paint) error = %v, want ErrSkillNotFound", err)
+	}
+	if body, err := catalog.Read(ctx, "shell", ""); err != nil || !strings.Contains(body, "Use shell carefully.") {
+		t.Fatalf("Read(shell) = %q, %v", body, err)
 	}
 }
 

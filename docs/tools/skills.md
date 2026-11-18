@@ -12,7 +12,16 @@ The skills tool configures skill discovery and installation via registries like 
 | `find_skills` | Searches the configured registries for installable skills | `tools.find_skills.enabled` | `true` |
 | `install_skill` | Downloads a skill from a registry into the workspace | `tools.install_skill.enabled` | `true` |
 
-Both tools are registered only while `tools.skills.enabled` (default `true`) is on; disabling it removes them regardless of the individual switches. Environment overrides: `PICOCLAW_TOOLS_SKILLS_ENABLED`, `PICOCLAW_TOOLS_FIND_SKILLS_ENABLED`, `PICOCLAW_TOOLS_INSTALL_SKILL_ENABLED`.
+Two more tools work on skills that are already installed. They are local and read-only, so they are always registered (an agent `tools:` allowlist can still remove them):
+
+| Tool | What it does |
+|------|--------------|
+| `skills_search` | Searches installed skills by natural language or exact name; returns `name`, `description`, `location` (`query` up to 1,000 characters, `limit` 1-20, default 5) |
+| `skills_read` | Returns the full instructions of one installed skill, or a file inside its directory via `relativePath` (256 KiB maximum) |
+
+The system prompt carries only the instructions for these two tools, never the skill list. See [Skills authoring](../guides/skills-authoring.md#how-skills-reach-the-agent).
+
+`find_skills` and `install_skill` are registered only while `tools.skills.enabled` (default `true`) is on; disabling it removes them regardless of the individual switches. Environment overrides: `PICOCLAW_TOOLS_SKILLS_ENABLED`, `PICOCLAW_TOOLS_FIND_SKILLS_ENABLED`, `PICOCLAW_TOOLS_INSTALL_SKILL_ENABLED`.
 
 `find_skills` arguments:
 

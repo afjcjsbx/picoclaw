@@ -237,8 +237,8 @@ func TestContextBuilder_SuppressesToolReferencesWhenToolsUnavailable(t *testing.
 		strings.Contains(system.Content, "update "+workspace+"/memory/MEMORY.md") {
 		t.Fatalf("system prompt includes tool references despite tools being unavailable: %q", system.Content)
 	}
-	if !strings.Contains(system.Content, "<name>research</name>") {
-		t.Fatalf("system prompt should keep non-tool skill catalog context, got: %q", system.Content)
+	if strings.Contains(system.Content, "skills_search") {
+		t.Fatalf("system prompt mentions skill tools although tools are unavailable: %q", system.Content)
 	}
 }
 
@@ -261,8 +261,8 @@ func TestContextBuilder_CustomToolAllowListSuppressesReadFileSkillInstruction(t 
 	if strings.Contains(system.Content, "read_file tool") {
 		t.Fatalf("system prompt includes read_file skill instruction without read_file permission: %q", system.Content)
 	}
-	if !strings.Contains(system.Content, "<name>research</name>") {
-		t.Fatalf("system prompt should keep skill catalog context, got: %q", system.Content)
+	if strings.Contains(system.Content, "skills_search") {
+		t.Fatalf("system prompt mentions skills_search without permission to call it: %q", system.Content)
 	}
 }
 

@@ -23,7 +23,7 @@ A call is parallel-eligible only when its tool implements `tools.ParallelAware` 
 
 | Eligible | Footprint |
 | --- | --- |
-| `web_search`, `web_fetch`, `find_skills`, `image_generate` | none |
+| `web_search`, `web_fetch`, `find_skills`, `image_generate`, `skills_search`, `skills_read` | none |
 | `read_file`, `list_dir`, `search_files`, `load_image` | read of `path` (directories cover their whole subtree) |
 | `write_file`, `edit_file`, `append_file` | write of `path` |
 

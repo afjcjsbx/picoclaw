@@ -87,24 +87,6 @@ func TestPluginRelativePath(t *testing.T) {
 	}
 }
 
-func catalogLocations(summary string) []string {
-	var out []string
-	const open, closeTag = "<location>", "</location>"
-	for {
-		start := strings.Index(summary, open)
-		if start < 0 {
-			return out
-		}
-		summary = summary[start+len(open):]
-		end := strings.Index(summary, closeTag)
-		if end < 0 {
-			return out
-		}
-		out = append(out, summary[:end])
-		summary = summary[end+len(closeTag):]
-	}
-}
-
 func TestPluginToolDeferredOverride(t *testing.T) {
 	deferred := true
 	eager := false
@@ -157,24 +139,21 @@ func TestAgentPluginsLoadExecuteAndReload(t *testing.T) {
 	if _, ok := agent.ContextBuilder.ResolveSkillName("test-plugin:greet"); !ok {
 		t.Fatal("plugin skill missing")
 	}
-	summary := agent.ContextBuilder.buildSkillsSummary(nil)
-	if !strings.Contains(summary, "test-plugin:greet") {
-		t.Fatal("missing skill prompt")
+	catalog := agent.ContextBuilder.SkillCatalog()
+	hits, _, err := catalog.Search(ctx, "test-plugin:greet", 5)
+	if err != nil || len(hits) != 1 {
+		t.Fatalf("plugin skill search = %v, %v", hits, err)
 	}
 	// The catalog must not expose the plugin's host filesystem path: the agent
 	// cannot read it and would loop against the workspace guard. It must point
 	// at the plugin resource tool with a plugin-relative path instead.
-	locations := catalogLocations(summary)
-	if len(locations) != 1 || locations[0] != "skills/greet/SKILL.md" {
-		t.Fatalf("plugin catalog locations = %q, want [skills/greet/SKILL.md]:\n%s", locations, summary)
+	location := hits[0].Location()
+	if location != "skills/greet/SKILL.md" || filepath.IsAbs(location) || strings.Contains(location, pluginRoot) {
+		t.Fatalf("plugin catalog location = %q, want skills/greet/SKILL.md", location)
 	}
-	for _, loc := range locations {
-		if filepath.IsAbs(loc) || strings.Contains(loc, pluginRoot) {
-			t.Fatalf("plugin catalog leaked absolute host path %q:\n%s", loc, summary)
-		}
-	}
-	if !strings.Contains(summary, "<resource-tool>plugin_test-plugin_package_read_resource_") {
-		t.Fatalf("plugin catalog missing resource-tool guidance:\n%s", summary)
+	body, err := catalog.Read(ctx, "test-plugin:greet", "")
+	if err != nil || !strings.Contains(body, "plugin_test-plugin_package_read_resource_") {
+		t.Fatalf("plugin skill body missing resource-tool guidance: %q, %v", body, err)
 	}
 	cfg.Plugins.Enabled = false
 	if err := al.ReloadProviderAndConfig(ctx, &mockProvider{}, cfg); err != nil {
