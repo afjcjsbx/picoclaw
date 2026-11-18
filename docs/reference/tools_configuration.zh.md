@@ -175,7 +175,6 @@ Exec 工具用于执行 shell 命令。
 | `enable_deny_patterns` | bool  | true   | 启用内置 shell 结构拦截（命令替换、管道到 shell、shell heredoc）和 AST 风险分类器 |
 | `custom_deny_patterns` | array | []     | 自定义拒绝模式（正则表达式），始终生效 |
 | `custom_allow_patterns` | array | []     | 整条命令匹配，仅豁免默认拒绝规则；自动锚定 |
-| `custom_unlock_patterns` | array | []     | 整条命令匹配；显式信任的命令跳过默认拒绝、风险分类器和智能审批；硬性底线、自定义拒绝和工作区边界仍生效 |
 
 ### 禁用 Exec 工具
 
@@ -204,7 +203,6 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - **`enable_deny_patterns`**：设为 `false` 可禁用可选的 shell 结构拦截和 AST 风险分类器；硬性底线规则和 `custom_deny_patterns` 仍然生效
 - **`custom_deny_patterns`**：添加自定义拒绝正则模式；即使关闭内置拦截也始终生效，且不会被自定义允许规则豁免
 - **`custom_allow_patterns`**：整条命令匹配，仅豁免默认 shell 结构拦截规则；不会豁免风险分类器
-- **`custom_unlock_patterns`**：整条命令匹配；显式信任的命令跳过默认拒绝、风险分类器和智能审批；硬性底线、自定义拒绝和工作区边界仍然生效
 
 ### 始终生效的硬性底线规则
 
@@ -226,7 +224,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - 管道到 shell：`| sh`、`| bash`（以及其他 POSIX shell）
 - Shell heredoc：`sh <<EOF`、`bash <<'EOF'`
 
-`sudo`、`chmod`、`chown`、`kill`、`git push`、`docker run`、包安装、`eval`、`source` 等命令由风险表分类；使用 `risk_threshold`、`risk_overrides`、`arg_modifiers` 或 `custom_unlock_patterns` 调整。
+`sudo`、`chmod`、`chown`、`kill`、`git push`、`docker run`、包安装、`eval`、`source` 等命令由风险表分类；使用 `risk_threshold`、`risk_overrides`、`arg_modifiers` 或 `custom_rules` 调整。
 
 Windows 没有 AST 分类器，因此其正则底线保留等价的通用命令模式以及 PowerShell 专用检查：递归 `Remove-Item`（含 `rm`/`ri`/`del` 别名）、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex` 等下载后执行管道、`taskkill /F`、`Stop-Process -Force`。
 

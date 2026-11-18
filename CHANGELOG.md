@@ -9,10 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Exec supports `tools.exec.custom_rules`, a unified allow/deny rule list with an explicit `bypass` set (`shell_constructs`, `risk`, `approval`); the legacy `custom_allow_patterns` and `custom_unlock_patterns` remain aliases.
+- Exec supports `tools.exec.custom_rules`, a unified allow/deny rule list with an explicit `bypass` set (`shell_constructs`, `risk`, `approval`); `custom_allow_patterns` remains a legacy alias for `bypass: ["shell_constructs"]`.
 - Exec supports a per-tool `tools.exec.isolation` override with `off`, `auto` and `required` modes. `auto` uses the local platform backend when available and falls back to the static guard; `required` fails closed. When the sandbox provides a path boundary, the static workspace/interpreter passes are skipped. POSIX children receive `RLIMIT_NOFILE`, `RLIMIT_FSIZE` and `RLIMIT_NPROC` limits.
 - Human approval for reviewed exec commands: a `ToolApprover` hook receives the command, rule, reason and risk and is the final gate before a reviewed command runs.
-- Exec now supports `tools.exec.custom_unlock_patterns`: full-command regular expressions that let an explicitly trusted command skip the default deny set and the risk classifier. Every other command keeps the configured thresholds, and hardline, custom deny and the workspace boundary still apply.
 
 ### Changed
 
@@ -45,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Exec hardline now also blocks recursive deletion of `/etc`, `/usr`, `/home`, `/root` and the other top-level system directories, plus `kill -1` and `kill -9 1`; these commands are always rejected.
-- `tools.exec.custom_allow_patterns` is now anchored to the full command and exempts only the default regex deny set. Commands the AST risk classifier rejects must be allowed explicitly with `custom_unlock_patterns` or by tuning `risk_threshold`/`risk_overrides`; `custom_allow_patterns` no longer bypasses the risk layer.
+- `tools.exec.custom_allow_patterns` is now anchored to the full command and exempts only the default regex deny set. Commands the AST risk classifier rejects must be allowed explicitly with a `custom_rules` allow rule that includes `risk`, or by tuning `risk_threshold`/`risk_overrides`; `custom_allow_patterns` no longer bypasses the risk layer.
 - Exec hardline and custom deny matching now normalizes `$IFS`/`${IFS}`, ANSI-C `$'...'` quoting, backslash-newline continuations and AST-resolved quote splicing, so obfuscated critical commands such as `r''m -rf /` or `rm${IFS}-rf${IFS}/` cannot bypass the floor when the risk classifier is disabled.
 - Exec (Unix) workspace restriction now validates the constructs the absolute-path regex cannot see: `~`/`$HOME` expansion, bare `..` in `cd`/`pushd`/`-C` targets, `cd`/`pushd` changes (including symlink escapes), dynamic redirection targets, and nested scripts reached through `sh -c`, heredocs, `exec` and `find -exec`. `env -C`, `eval` and `trap` are rejected under workspace restriction; assignments or unsets of `HOME`, `PWD`, `OLDPWD` and `CDPATH` are rejected, and `file:` URIs are rejected fail-closed. `cd -`, bare `cd` and dynamic `cd` targets are rejected when they cannot be validated statically. Relative operands are resolved against every directory the command entered, so a chained `cd`, a relative operand such as `cd sub; cat link/secret.txt`, or a bare filename that resolves to an outside-pointing symlink under the new directory is also rejected. This is a static best-effort layer; OS isolation remains the hard boundary for untrusted workloads.
 - Exec now has a self-protection hardline floor: it refuses to kill the PicoClaw process or service, delete the state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or the resolved `PICOCLAW_HOME`), or delete the running executable, even when default deny patterns are disabled or a broad custom allow rule is configured.

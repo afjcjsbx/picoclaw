@@ -40,12 +40,12 @@ var shellKillPIDPattern = regexp.MustCompile(`(?:^|[;&|]\s*)kill\s+(?:-\w+\s+)*[
 //  2. Hardline floor: immutable AST rules plus a regex fallback for forms the
 //     parser cannot represent. Hardline is never reviewed and never exempted.
 //  3. Custom deny patterns: always enforced and stronger than any allow rule.
-//  4. Custom unlock patterns: full-command operator exceptions. A match skips
-//     the default deny set and the risk classifier; hardline, custom deny and
-//     the workspace boundary still run.
+//  4. Operator allow rules: full-command exceptions. A rule skips only the
+//     layers named in its bypass set; hardline, custom deny and the workspace
+//     boundary still run.
 //  5. Default deny patterns: the shell constructs the AST cannot inspect
 //     (command substitution, pipe-to-shell, shell heredocs). Exempted only by
-//     custom_allow_patterns.
+//     an allow rule that bypasses shell constructs.
 //  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
 //     check, then the AST path guard on Unix or the path scanner on Windows.
 //  7. Risk level: the AST classifier rates the command low to critical and
@@ -243,9 +243,9 @@ func (t *ExecTool) guardCommandWithAnalysis(
 
 	// The AST classifier is the last built-in layer: it sees commands that the
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
-	// explicit custom unlock pattern can bypass it; custom_allow_patterns no
-	// longer does. Known commands above the threshold are rejected. Unknown
-	// commands are returned for review, never silently allowed.
+	// allow rule that bypasses risk can skip it. Known commands above the
+	// threshold are rejected. Unknown commands are returned for review, never
+	// silently allowed.
 	if t.riskGuard != nil && !bypassRisk {
 		assessment := t.riskGuard.AssessFile(cmd, riskFile)
 		if assessment.Reject {

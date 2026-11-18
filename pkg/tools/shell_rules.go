@@ -21,7 +21,7 @@ type execAllowRule struct {
 }
 
 func compileExecAllowRules(cfg config.ExecConfig) ([]execAllowRule, error) {
-	rules := make([]execAllowRule, 0, len(cfg.CustomAllowPatterns)+len(cfg.CustomUnlockPatterns)+len(cfg.CustomRules))
+	rules := make([]execAllowRule, 0, len(cfg.CustomAllowPatterns)+len(cfg.CustomRules))
 
 	for i, pattern := range cfg.CustomAllowPatterns {
 		re, err := compileFullMatchPattern(pattern)
@@ -32,19 +32,6 @@ func compileExecAllowRules(cfg config.ExecConfig) ([]execAllowRule, error) {
 			id:          fmt.Sprintf("operator.allow[%d]", i),
 			pattern:     re,
 			bypassShell: true,
-		})
-	}
-	for i, pattern := range cfg.CustomUnlockPatterns {
-		re, err := compileFullMatchPattern(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("invalid custom unlock pattern: %w", err)
-		}
-		rules = append(rules, execAllowRule{
-			id:             fmt.Sprintf("operator.unlock[%d]", i),
-			pattern:        re,
-			bypassShell:    true,
-			bypassRisk:     true,
-			bypassApproval: true,
 		})
 	}
 	for i, rule := range cfg.CustomRules {

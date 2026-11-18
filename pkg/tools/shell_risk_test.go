@@ -263,81 +263,6 @@ func TestShellTool_RiskRmCalibration(t *testing.T) {
 	}
 }
 
-func TestShellTool_CustomUnlockPatternsAllowListedCommands(t *testing.T) {
-	t.Parallel()
-
-	tool := riskTestTool(t, config.ExecConfig{
-		RiskThreshold: "medium",
-		CustomUnlockPatterns: []string{
-			`^sh script\.sh$`,
-			`^sh -c 'rm -rf build'$`,
-			`^chmod \+x build\.sh$`,
-			`^git push origin main$`,
-		},
-	})
-
-	for _, command := range []string{
-		"sh script.sh",
-		"sh -c 'rm -rf build'",
-		"chmod +x build.sh",
-		"git push origin main",
-	} {
-		if got := tool.guardCommand(command, t.TempDir()); got != "" {
-			t.Errorf("unlocked command %q blocked: %q", command, got)
-		}
-	}
-
-	for _, command := range []string{
-		"chmod +x other.sh",
-		"systemctl start nginx",
-	} {
-		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "risk classifier") {
-			t.Errorf("default threshold should still block %q, got %q", command, got)
-		}
-	}
-}
-
-func TestShellTool_CustomUnlockPatternsKeepSafetyFloors(t *testing.T) {
-	t.Parallel()
-
-	tool := riskTestTool(t, config.ExecConfig{
-		RiskThreshold:        "medium",
-		CustomUnlockPatterns: []string{`.*`},
-		CustomDenyPatterns:   []string{`^sh blocked\.sh$`},
-	})
-
-	if got := tool.guardCommand("rm -rf /", t.TempDir()); !strings.Contains(got, "safety guard") {
-		t.Fatalf("unlock patterns must not bypass hardline, got %q", got)
-	}
-	if got := tool.guardCommand("sh blocked.sh", t.TempDir()); !strings.Contains(got, "dangerous pattern") {
-		t.Fatalf("unlock patterns must not bypass custom deny, got %q", got)
-	}
-}
-
-func TestShellTool_CustomUnlockPatternsKeepWorkspaceBoundary(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	cfg := &config.Config{
-		Tools: config.ToolsConfig{Exec: config.ExecConfig{
-			EnableDenyPatterns:   true,
-			CustomUnlockPatterns: []string{`^sh .*$`},
-		}},
-	}
-	tool, err := NewExecToolWithConfig(workspace, true, cfg)
-	if err != nil {
-		t.Fatalf("NewExecToolWithConfig: %v", err)
-	}
-
-	if got := tool.guardCommand("sh script.sh", workspace); got != "" {
-		t.Fatalf("unlocked in-workspace command blocked: %q", got)
-	}
-	outside := filepath.Join(t.TempDir(), "outside.sh")
-	if got := tool.guardCommand("sh "+outside, workspace); got == "" {
-		t.Fatal("unlock patterns must not bypass the workspace boundary")
-	}
-}
-
 func TestShellTool_RiskThresholdCanBeRaised(t *testing.T) {
 	t.Parallel()
 
@@ -408,26 +333,6 @@ func TestShellTool_UserArgModifiers(t *testing.T) {
 	}
 	if got := tool.guardCommand("echo safe", t.TempDir()); got != "" {
 		t.Fatalf("unmodified echo should pass, got %q", got)
-	}
-}
-
-func TestShellTool_CustomAllowAndUnlockLayers(t *testing.T) {
-	t.Parallel()
-
-	allowOnly := riskTestTool(t, config.ExecConfig{
-		RiskThreshold:       "medium",
-		CustomAllowPatterns: []string{`git\s+push\b.*`},
-	})
-	if got := allowOnly.guardCommand("git push origin main", t.TempDir()); !strings.Contains(got, "risk classifier") {
-		t.Fatalf("custom allow must not exempt the risk classifier, got %q", got)
-	}
-
-	unlocked := riskTestTool(t, config.ExecConfig{
-		RiskThreshold:        "medium",
-		CustomUnlockPatterns: []string{`git\s+push\b.*`},
-	})
-	if got := unlocked.guardCommand("git push origin main", t.TempDir()); got != "" {
-		t.Fatalf("custom unlock must permit the trusted command, got %q", got)
 	}
 }
 

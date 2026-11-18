@@ -15,7 +15,6 @@ The exec tool is used to execute shell commands.
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
 | `custom_rules` | object[] | `[]` | Unified operator rules. `{"pattern": "...", "action": "allow", "bypass": ["shell_constructs", "risk", "approval"]}`; deny rules use `{"pattern": "...", "action": "deny"}`. Allow patterns are anchored to the whole command |
 | `custom_allow_patterns` | string[] | `[]` | Legacy allow alias for `bypass: ["shell_constructs"]`; it never exempts the AST risk classifier |
-| `custom_unlock_patterns` | string[] | `[]` | Legacy allow alias for `bypass: ["shell_constructs", "risk", "approval"]`; hardline, custom deny and the workspace boundary still apply |
 | `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. The classifier stays active when `enable_deny_patterns` is `false` if strict unknown blocking (`allow_unknown: false`) needs it. Empty means `medium` |
 | `risk_overrides` | object | `{}` | Base risk level per command (command name to level), replacing the built-in table. Argument modifiers can still elevate it |
 | `arg_modifiers` | object | `{}` | Extra argument-aware risk elevations per command. Every listed token must be present; the highest matching level wins |
@@ -68,13 +67,13 @@ defense in depth against file-descriptor exhaustion, a single file filling the
 disk and an unbounded fork bomb; the OS sandbox remains the primary boundary.
 Unsupported limits are ignored on shells that do not implement `ulimit`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_SHELL_CONSTRUCTS`, `PICOCLAW_TOOLS_EXEC_RISK_CLASSIFIER`, `PICOCLAW_TOOLS_EXEC_ALLOW_UNKNOWN`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_SHELL_CONSTRUCTS`, `PICOCLAW_TOOLS_EXEC_RISK_CLASSIFIER`, `PICOCLAW_TOOLS_EXEC_ALLOW_UNKNOWN`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
 
 ### Risk classification
 
 When the built-in guard is enabled (`enable_deny_patterns: true`, the default), PicoClaw parses every Unix command with `mvdan.cc/sh/v3/syntax` before execution and classifies each simple command in the AST. Pipelines, `&&`/`||`/`;` lists, loops, functions and command substitutions are all walked. This catches indirection that regex deny lists cannot resolve, for example `x=rm; $x -rf /` or `"r"'m' -rf /`.
 
-On Unix the AST classifier is the **single source of truth for command danger**. The regex default deny set only covers shell constructs that hide a command from the AST: command substitution, pipe-to-shell and shell heredocs. Command names such as `sudo`, `chmod`, `git push` or `docker run` follow `risk_threshold`; use `risk_overrides` or `custom_unlock_patterns` to tune them.
+On Unix the AST classifier is the **single source of truth for command danger**. The regex default deny set only covers shell constructs that hide a command from the AST: command substitution, pipe-to-shell and shell heredocs. Command names such as `sudo`, `chmod`, `git push` or `docker run` follow `risk_threshold`; use `risk_overrides` or a `custom_rules` allow rule to tune them.
 
 | Level | Meaning | Examples |
 |-------|---------|----------|
@@ -140,21 +139,27 @@ Custom thresholds and modifiers:
 
 `risk_overrides` changes the base level but cannot suppress an argument modifier: with `rm` overridden to `medium`, plain `rm file` is allowed while `rm -rf build` is still `critical`.
 
-`custom_rules` allow patterns are anchored to the whole command (`^(?:...)$`), as are the legacy allow aliases. A bare `git` pattern matches only the command `git`, not `git push --force`. An allow rule only skips the layers named in `bypass`; hardline, custom deny rules and the workspace boundary always win. `custom_allow_patterns` is the legacy alias for `bypass: ["shell_constructs"]`; `custom_unlock_patterns` is the legacy alias for `bypass: ["shell_constructs", "risk", "approval"]`.
+`custom_rules` allow patterns are anchored to the whole command (`^(?:...)$`), as are the legacy allow aliases. A bare `git` pattern matches only the command `git`, not `git push --force`. An allow rule only skips the layers named in `bypass`; hardline, custom deny rules and the workspace boundary always win. `custom_allow_patterns` is the legacy alias for `bypass: ["shell_constructs"]`.
 
-`custom_unlock_patterns` is the explicit per-command override. A matching command skips the default deny set and the AST risk classifier, so it runs even when it would be classified as critical or as unknown. It does not bypass hardline patterns, custom deny patterns or the workspace boundary. Use an exact, anchored pattern for the trusted command; a broad pattern such as `.*` unlocks every command that does not hit the hardline or custom deny floor.
+A `custom_rules` allow rule with `bypass: ["shell_constructs", "risk", "approval"]` is the explicit per-command override. A match skips the default deny set and the AST risk classifier, so the command runs even when it would be classified as critical or as unknown. It does not bypass hardline patterns, custom deny patterns or the workspace boundary. Use an exact, anchored pattern for the trusted command; a broad pattern such as `.*` exempts every command that does not hit the hardline or custom deny floor.
 
 ```json
 {
   "tools": {
     "exec": {
-      "custom_unlock_patterns": ["^sh scripts/deploy\\.sh$"]
+      "custom_rules": [
+        {
+          "pattern": "^sh scripts/deploy\\.sh$",
+          "action": "allow",
+          "bypass": ["shell_constructs", "risk", "approval"]
+        }
+      ]
     }
   }
 }
 ```
 
-Configurations that need to allow a command the risk classifier rejects should use `custom_unlock_patterns` for that exact command, or tune `risk_threshold`/`risk_overrides` globally. `custom_allow_patterns` remains the narrow legacy exemption for the default shell-construct set (command substitution, pipe-to-shell, shell heredocs); it never exempts the risk classifier.
+Configurations that need to allow a command the risk classifier rejects should use a `custom_rules` allow rule with `bypass: ["risk", "approval"]` for that exact command, or tune `risk_threshold`/`risk_overrides` globally. `custom_allow_patterns` remains the narrow legacy exemption for the default shell-construct set (command substitution, pipe-to-shell, shell heredocs); it never exempts the risk classifier.
 
 Limits worth knowing:
 
@@ -348,7 +353,7 @@ On Unix the AST risk classifier is the source of truth for command danger. The r
 - Pipe to shell: `| sh`, `| bash` (and the other POSIX shells)
 - Shell heredoc: `sh <<EOF`, `bash <<'EOF'`
 
-Command-level dangers such as `sudo`, `chmod`, `chown`, `kill`, `git push`, `docker run`, package installs, `eval` and `source` are classified by the risk table. Use `risk_threshold`, `risk_overrides`, `arg_modifiers` or `custom_unlock_patterns` to tune them.
+Command-level dangers such as `sudo`, `chmod`, `chown`, `kill`, `git push`, `docker run`, package installs, `eval` and `source` are classified by the risk table. Use `risk_threshold`, `risk_overrides`, `arg_modifiers` or a `custom_rules` allow rule to tune them.
 
 Windows has no AST classifier, so its regex floor keeps the equivalent generic command patterns plus the PowerShell-specific checks: recursive `Remove-Item` (including `rm`/`ri`/`del` aliases), `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, download-and-execute pipelines such as `iwr ... | iex`, `taskkill /F`, and `Stop-Process -Force`.
 
