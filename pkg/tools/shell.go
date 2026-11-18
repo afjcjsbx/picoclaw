@@ -772,8 +772,7 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 // executeRun handles action=run. A call passes through these stages in order;
 // the first one that fails returns an error result and nothing is executed.
 //
-//  1. Arguments: command is required and the optional env object is parsed
-//     (string values only; no empty names, "=" or NUL bytes).
+//  1. Arguments: command is required.
 //  2. Remote gate: Execute rejects every action from a non-internal channel
 //     unless allow_remote is set, so a run never reaches this function from
 //     an untrusted caller.
@@ -782,14 +781,14 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 //  4. Timeout: must be a non-negative integer. A foreground request above the
 //     foreground cap, or timeout=0, is promoted to a tracked background
 //     session instead of being clamped or rejected.
-//  5. Conversation state: the remembered cwd and env overlay for this
-//     agent/session are loaded and the call's env is merged on top, dropping
-//     names the LLM may not set (PATH, HOME, LD_*, PICOCLAW_*).
+//  5. Conversation state: only the remembered cwd for this agent/session is
+//     loaded. Environment variables are not per-call state; the child always
+//     starts from the sanitized base environment.
 //  6. Working directory: explicit cwd, else the remembered cwd (revalidated),
 //     else the workspace. With restrict_to_workspace an explicit cwd must
 //     resolve inside the workspace.
-//  7. Command guard: guardCommandContext runs the hardline, deny, allowlist,
-//     workspace, risk-level and smart-approval layers (see its comment).
+//  7. Command guard: guardCommandContext runs the layered guard described in
+//     its comment (hardline, patterns, workspace, risk and smart approvals).
 //  8. Symlinks in cwd are resolved again right before execution to narrow the
 //     TOCTOU window between validation and cmd.Dir.
 //  9. State persistence: cwd is remembered only after the guard passed.
