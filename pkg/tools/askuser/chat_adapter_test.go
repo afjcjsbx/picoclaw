@@ -176,15 +176,16 @@ func TestChatAdapterMultiSelectFreeTextIsSingleEntry(t *testing.T) {
 	}
 }
 
-func TestChatAdapterSkipAndCancel(t *testing.T) {
+func TestChatAdapterSlashCommands(t *testing.T) {
 	for _, test := range []struct {
 		reply   string
 		outcome Outcome
+		skipped bool
 	}{
-		{"skip", OutcomeSubmitted},
-		{"SKIP", OutcomeSubmitted},
-		{"cancel", OutcomeCancelled},
-		{"/CANCEL", OutcomeCancelled},
+		{"/skip", OutcomeSubmitted, true},
+		{"/SKIP", OutcomeSubmitted, true},
+		{"/cancel", OutcomeCancelled, false},
+		{" /CANCEL ", OutcomeCancelled, false},
 	} {
 		broker := NewBroker()
 		adapter := NewChatAdapter(broker, nil, time.Second)
@@ -199,12 +200,163 @@ func TestChatAdapterSkipAndCancel(t *testing.T) {
 		if run.result.Outcome != test.outcome {
 			t.Fatalf("reply=%q outcome=%s", test.reply, run.result.Outcome)
 		}
-		if test.reply == "skip" || test.reply == "SKIP" {
+		if test.skipped {
 			value, present := run.result.Answers["q0"]
 			if !present || value != nil {
 				t.Fatalf("skip answer = %#v present=%v", value, present)
 			}
 		}
+	}
+}
+
+func TestChatAdapterBareControlWordsOnChoiceQuestions(t *testing.T) {
+	for _, test := range []struct {
+		reply   string
+		outcome Outcome
+	}{
+		{"skip", OutcomeSubmitted},
+		{"SKIP", OutcomeSubmitted},
+		{"cancel", OutcomeCancelled},
+	} {
+		broker := NewBroker()
+		adapter := NewChatAdapter(broker, nil, time.Second)
+		questions := []Question{{ID: "q0", Text: "Question", Choices: []string{"A", "B"}}}
+		done, prompts := runAdapter(t, adapter, questions)
+		waitPrompt(t, prompts)
+		broker.Deliver(testBrokerKey(), test.reply)
+		run := waitResult(t, done)
+		if run.err != nil {
+			t.Fatal(run.err)
+		}
+		if run.result.Outcome != test.outcome {
+			t.Fatalf("reply=%q outcome=%s", test.reply, run.result.Outcome)
+		}
+	}
+}
+
+func TestChatAdapterOpenQuestionKeepsControlWordsAsAnswers(t *testing.T) {
+	for _, reply := range []string{"skip", "cancel", "SKIP"} {
+		broker := NewBroker()
+		adapter := NewChatAdapter(broker, nil, time.Second)
+		done, prompts := runAdapter(t, adapter, []Question{{ID: "q0", Text: "Open question"}})
+		waitPrompt(t, prompts)
+		broker.Deliver(testBrokerKey(), reply)
+		run := waitResult(t, done)
+		if run.err != nil {
+			t.Fatal(run.err)
+		}
+		if run.result.Outcome != OutcomeSubmitted {
+			t.Fatalf("reply=%q outcome=%s, want submitted", reply, run.result.Outcome)
+		}
+		if got := run.result.Answers["q0"]; got != reply {
+			t.Fatalf("reply=%q answer=%#v", reply, got)
+		}
+	}
+}
+
+func TestChatAdapterChoiceLabelWinsOverControlWord(t *testing.T) {
+	broker := NewBroker()
+	adapter := NewChatAdapter(broker, nil, time.Second)
+	done, prompts := runAdapter(t, adapter, []Question{{
+		ID: "q0", Text: "Pick", Choices: []string{"skip", "cancel"},
+	}})
+	waitPrompt(t, prompts)
+	broker.Deliver(testBrokerKey(), "skip")
+	run := waitResult(t, done)
+	if run.err != nil {
+		t.Fatal(run.err)
+	}
+	if run.result.Outcome != OutcomeSubmitted {
+		t.Fatalf("outcome = %s", run.result.Outcome)
+	}
+	if got := run.result.Answers["q0"]; got != "skip" {
+		t.Fatalf("answer = %#v, want the option label", got)
+	}
+}
+
+func TestChatAdapterNumericLabelsWinOverIndex(t *testing.T) {
+	for _, test := range []struct {
+		reply string
+		want  string
+	}{
+		{"1", "1"},
+		{"2", "2"},
+	} {
+		broker := NewBroker()
+		adapter := NewChatAdapter(broker, nil, time.Second)
+		done, prompts := runAdapter(t, adapter, []Question{{
+			ID: "q0", Text: "Pick", Choices: []string{"2", "1"},
+		}})
+		waitPrompt(t, prompts)
+		broker.Deliver(testBrokerKey(), test.reply)
+		run := waitResult(t, done)
+		if run.err != nil {
+			t.Fatal(run.err)
+		}
+		if got := run.result.Answers["q0"]; got != test.want {
+			t.Fatalf("reply=%q answer=%#v, want %q", test.reply, got, test.want)
+		}
+	}
+
+	// Non-numeric labels keep the positional interpretation.
+	broker := NewBroker()
+	adapter := NewChatAdapter(broker, nil, time.Second)
+	done, prompts := runAdapter(t, adapter, []Question{{
+		ID: "q0", Text: "Pick", Choices: []string{"A", "B"},
+	}})
+	waitPrompt(t, prompts)
+	broker.Deliver(testBrokerKey(), "2")
+	run := waitResult(t, done)
+	if got := run.result.Answers["q0"]; got != "B" {
+		t.Fatalf("answer = %#v, want B", got)
+	}
+}
+
+func TestChatAdapterIgnoresEmptyReplies(t *testing.T) {
+	broker := NewBroker()
+	adapter := NewChatAdapter(broker, nil, 500*time.Millisecond)
+	done, prompts := runAdapter(t, adapter, []Question{{ID: "q0", Text: "Open question"}})
+	waitPrompt(t, prompts)
+	deliver := func(content string) {
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			if broker.Deliver(testBrokerKey(), content) {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("reply %q was not delivered", content)
+	}
+	deliver("")
+	deliver("   ")
+	deliver("real answer")
+	run := waitResult(t, done)
+	if run.err != nil {
+		t.Fatal(run.err)
+	}
+	if run.result.Outcome != OutcomeSubmitted {
+		t.Fatalf("outcome = %s", run.result.Outcome)
+	}
+	if got := run.result.Answers["q0"]; got != "real answer" {
+		t.Fatalf("answer = %#v, want the non-empty reply", got)
+	}
+}
+
+func TestChatAdapterEmptyRepliesDoNotSkip(t *testing.T) {
+	broker := NewBroker()
+	adapter := NewChatAdapter(broker, nil, 80*time.Millisecond)
+	done, prompts := runAdapter(t, adapter, []Question{{ID: "q0", Text: "Open question"}})
+	waitPrompt(t, prompts)
+	broker.Deliver(testBrokerKey(), "")
+	run := waitResult(t, done)
+	if run.err != nil {
+		t.Fatal(run.err)
+	}
+	if run.result.Outcome != OutcomeTimedOut {
+		t.Fatalf("outcome = %s, want timed_out", run.result.Outcome)
+	}
+	if _, present := run.result.Answers["q0"]; present {
+		t.Fatalf("empty reply was recorded: %#v", run.result.Answers["q0"])
 	}
 }
 

@@ -266,23 +266,38 @@ func (a *ChatAdapter) Collect(ctx context.Context, questions []Question) (Adapte
 			deadline = time.Now().Add(a.timeout)
 		}
 
-		reply, received, waitErr := waiting.next(ctx, time.Until(deadline))
-		if waitErr != nil {
-			if errors.Is(waitErr, context.DeadlineExceeded) {
+		var reply string
+		for {
+			candidate, received, waitErr := waiting.next(ctx, time.Until(deadline))
+			if waitErr != nil {
+				if errors.Is(waitErr, context.DeadlineExceeded) {
+					return timedOut(answers, a.timeout), nil
+				}
+				return AdapterResult{}, waitErr
+			}
+			if !received {
 				return timedOut(answers, a.timeout), nil
 			}
-			return AdapterResult{}, waitErr
-		}
-		if !received {
-			return timedOut(answers, a.timeout), nil
+			// Empty and whitespace-only messages (for example a media-only
+			// reply) are not answers: keep waiting instead of skipping.
+			if strings.TrimSpace(candidate) != "" {
+				reply = candidate
+				break
+			}
 		}
 
-		switch strings.ToLower(strings.TrimSpace(reply)) {
-		case "cancel", "/cancel":
-			return AdapterResult{Answers: answers, Outcome: OutcomeCancelled}, nil
-		case "skip", "/skip":
-			answers[question.ID] = nil
-			continue
+		trimmed := strings.TrimSpace(reply)
+		// Slash commands always work. Bare skip/cancel are convenience
+		// shortcuts on questions with choices, unless an option uses the word
+		// as its exact label. On open questions they are literal answers.
+		if !matchesChoiceLabel(trimmed, question) && (strings.HasPrefix(trimmed, "/") || len(question.Choices) > 0) {
+			switch strings.ToLower(trimmed) {
+			case "cancel", "/cancel":
+				return AdapterResult{Answers: answers, Outcome: OutcomeCancelled}, nil
+			case "skip", "/skip":
+				answers[question.ID] = nil
+				continue
+			}
 		}
 
 		if question.MultiSelect {
@@ -344,19 +359,21 @@ func formatPrompt(index, total int, question Question) string {
 			builder.WriteString("\nReply with a number, or type your own answer (Other).")
 		}
 	}
-	builder.WriteString("\nType `skip` to skip this question or `cancel` to cancel.")
+	builder.WriteString("\nType `/skip` to skip this question or `/cancel` to cancel.")
 	return builder.String()
 }
 
 func parseSingleAnswer(reply string, question Question) any {
 	reply = strings.TrimSpace(reply)
-	if index, ok := validChoiceIndex(reply, question); ok {
-		return question.Choices[index-1]
-	}
+	// An exact option label wins over the numeric index: with options "2" and
+	// "1" a reply of "1" means the second option, not option one.
 	for _, choice := range question.Choices {
 		if strings.EqualFold(choice, reply) {
 			return choice
 		}
+	}
+	if index, ok := validChoiceIndex(reply, question); ok {
+		return question.Choices[index-1]
 	}
 	if custom, ok := otherAnswer(reply); ok {
 		return custom
@@ -419,13 +436,15 @@ func appendSelectableAnswer(answers []string, raw string, question Question) []s
 	if raw == "" {
 		return answers
 	}
-	if index, ok := validChoiceIndex(raw, question); ok {
-		return append(answers, question.Choices[index-1])
-	}
+	// Exact labels win over the numeric index so numeric option texts are not
+	// shadowed by their position.
 	for _, choice := range question.Choices {
 		if strings.EqualFold(choice, raw) {
 			return append(answers, choice)
 		}
+	}
+	if index, ok := validChoiceIndex(raw, question); ok {
+		return append(answers, question.Choices[index-1])
 	}
 	if custom, ok := otherAnswer(raw); ok {
 		if custom == "" {
@@ -481,6 +500,19 @@ func validChoiceIndex(value string, question Question) (int, bool) {
 		return 0, false
 	}
 	return index, true
+}
+
+func matchesChoiceLabel(value string, question Question) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, choice := range question.Choices {
+		if strings.EqualFold(strings.TrimSpace(choice), value) {
+			return true
+		}
+	}
+	return false
 }
 
 func otherAnswer(value string) (string, bool) {

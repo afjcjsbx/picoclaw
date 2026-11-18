@@ -68,19 +68,24 @@ Which format do you prefer?
 3. XML
 
 Reply with a number, or type your own answer (Other).
-Type `skip` to skip this question or `cancel` to cancel.
+Type `/skip` to skip this question or `/cancel` to cancel.
 ```
 
 - Single choice: reply with the option number, the option text, or custom text
-  for the implicit **Other** option.
+  for the implicit **Other** option. An exact option text wins over a number:
+  with options `2` and `1`, a reply of `1` selects the option labeled `1`.
 - Multi-select: reply with one or more option numbers separated by commas (for
   example `1,3`), or custom text. A custom answer containing commas is treated
   as one entry when no option number or exact option label is present.
-- Free text: reply with any non-empty text.
-- `skip` (case-insensitive, optional leading `/`) marks the question as
-  explicitly skipped.
-- `cancel` (case-insensitive, optional leading `/`) ends the batch with outcome
-  `cancelled`. Answers already collected are preserved.
+- Free text: reply with any non-empty text. An empty or media-only message is
+  ignored and the question keeps waiting.
+- `/skip` (case-insensitive) marks the question as explicitly skipped.
+- `/cancel` (case-insensitive) ends the batch with outcome `cancelled`. Answers
+  already collected are preserved.
+- On questions with choices, the bare words `skip` and `cancel` are accepted as
+  shortcuts too, unless an option uses that exact word as its label. On open
+  questions they are ordinary answers, so use the slash forms to skip or
+  cancel.
 
 The interaction is bound to the conversation **and to the sender who started
 the turn**. A reply from another participant of a group chat, from another
