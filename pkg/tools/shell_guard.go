@@ -12,10 +12,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
-func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
-	return patternsMatchAny(t.allowPatterns, []string{lower}) || t.commandMatchesCustomAllowPattern(lower)
-}
-
 // commandMatchesCustomAllowPattern reports whether a custom allow pattern
 // matches the whole command. These patterns exempt only the default deny set;
 // they do not affect the risk classifier.
@@ -69,20 +65,19 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //     self-protection). They apply even with enable_deny_patterns=false, no
 //     allow rule exempts them and the Guardian is never consulted.
 //  3. Custom deny patterns: always enforced and stronger than any allow rule.
-//  4. Custom unlock patterns: full-command operator allowlist. A match skips
-//     the default deny set, the allowlist, the risk classifier and smart
-//     approvals; hardline, custom deny and the workspace boundary still run.
+//  4. Custom unlock patterns: full-command operator exceptions. A match skips
+//     the default deny set, the risk classifier and smart approvals; hardline,
+//     custom deny and the workspace boundary still run.
 //  5. Default deny patterns: exempted only by custom_allow_patterns. A hit is
 //     always rejected, also in smart mode.
-//  6. Allowlist: when allow patterns are set, the command must match one.
-//  7. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
+//  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
 //     check, then the AST path guard on Unix or the path scanner on Windows.
-//  8. Risk level: the AST classifier rates the command low to critical and
+//  7. Risk level: the AST classifier rates the command low to critical and
 //     rejects anything above risk_threshold, unless custom_risk_allow_patterns
 //     exempts it up to risk_allow_threshold. Commands the classifier cannot
 //     resolve (dynamic command names, opaque shells, parse errors) are allowed
 //     by default; dynamic operands for destructive commands are still rejected.
-//  9. Smart approvals: only unknown commands (layer 8) are reviewed by the
+//  8. Smart approvals: only unknown commands (layer 7) are reviewed by the
 //     Guardian model. APPROVE runs the command; DENY, ESCALATE and any error
 //     block it. With approvals off, unknown commands run.
 func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
@@ -142,8 +137,8 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	}
 
 	// An operator unlock rule is an explicit per-command exception. It skips
-	// the default deny set, the allowlist, the risk classifier and smart
-	// approvals, but never the hardline floor or the workspace boundary.
+	// the default deny set, the risk classifier and smart approvals, but never
+	// the hardline floor or the workspace boundary.
 	unlocked := t.commandMatchesCustomUnlockPattern(lower)
 
 	// Default deny patterns can be exempted by custom allow patterns, so
@@ -156,12 +151,6 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		// lowerForDeny form does not expose.
 		if patternsMatchAny(t.denyPatterns, denyForms) {
 			return "Command blocked by safety guard (dangerous pattern detected)"
-		}
-	}
-
-	if !unlocked && len(t.allowPatterns) > 0 {
-		if !t.commandMatchesAllowPattern(lower) {
-			return "Command blocked by safety guard (not in allowlist)"
 		}
 	}
 

@@ -66,7 +66,6 @@ type ExecTool struct {
 	denyPatterns            []*regexp.Regexp
 	hardlineDenyPatterns    []*regexp.Regexp
 	customDenyPatterns      []*regexp.Regexp
-	allowPatterns           []*regexp.Regexp
 	customAllowPatterns     []*regexp.Regexp
 	customUnlockPatterns    []*regexp.Regexp
 	customRiskAllowPatterns []*regexp.Regexp
@@ -521,7 +520,6 @@ func NewExecToolWithConfig(
 		denyPatterns:            denyPatterns,
 		hardlineDenyPatterns:    hardlinePatterns,
 		customDenyPatterns:      customDenyPatterns,
-		allowPatterns:           nil,
 		customAllowPatterns:     customAllowPatterns,
 		customUnlockPatterns:    customUnlockPatterns,
 		customRiskAllowPatterns: customRiskAllowPatterns,
@@ -1106,16 +1104,4 @@ func (t *ExecTool) SetTimeout(timeout time.Duration) {
 
 func (t *ExecTool) SetRestrictToWorkspace(restrict bool) {
 	t.restrictToWorkspace = restrict
-}
-
-func (t *ExecTool) SetAllowPatterns(patterns []string) error {
-	t.allowPatterns = make([]*regexp.Regexp, 0, len(patterns))
-	for _, p := range patterns {
-		re, err := regexp.Compile(p)
-		if err != nil {
-			return fmt.Errorf("invalid allow pattern %q: %w", p, err)
-		}
-		t.allowPatterns = append(t.allowPatterns, re)
-	}
-	return nil
 }
