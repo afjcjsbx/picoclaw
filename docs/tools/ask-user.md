@@ -33,11 +33,17 @@ questions, and batches of one to five independent questions.
 Rules:
 
 - 1–5 questions per call.
-- `question` must be non-empty after trimming.
+- `question` must be non-empty after trimming and at most 1,000 characters.
 - `choices` is optional. Omit it, use `null`, or use `[]` for a free-text
   question. A non-empty list made only of blank strings is a validation error.
 - At most four valid choices are kept; extra choices are truncated in order.
 - Each choice may contain at most 8,000 characters after trimming.
+- The rendered prompt of a single question (question, numbered options and
+  instructions) must fit the `tools.ask_user.max_prompt_chars` budget (default
+  `1900`, enough for Telegram and Discord). An oversized prompt is rejected
+  before any question is delivered, so a long batch never starts halfway.
+- User answers are capped at 2,000 characters. Longer answers are truncated and
+  the result carries a `notice`.
 - `multi_select` defaults to `false` and is ignored on questions without
   choices.
 - When a question has at least two choices, the first choice is displayed with
@@ -89,6 +95,10 @@ after a timeout. The timeout is configured with
 question is delivered. A timeout produces a complete result with the answers
 collected so far.
 
+Prompt size is checked for every question before the first message is sent. A
+question whose rendered prompt exceeds `tools.ask_user.max_prompt_chars`
+(default `1900`) fails with a validation error and nothing is delivered.
+
 The text adapter requires an interactive chat turn driven by the agent loop.
 Invocations that cannot receive an inbound reply, such as direct, cron or
 heartbeat runs, return outcome `undelivered` with an explanatory notice instead
@@ -133,7 +143,8 @@ of blocking until the timeout.
   are always arrays, even with a single selected option.
 - `outcome` is one of `submitted`, `cancelled`, `timed_out`, or `undelivered`.
 - `notice` is included only when the adapter reports a timeout or delivery
-  problem, for example `[user did not respond within 5m]`.
+  problem, for example `[user did not respond within 5m]`, or when an answer was
+  truncated to the 2,000-character cap.
 
 Validation errors and adapter failures are returned through the tool error
 channel as `{"error": "..."}`. They are never returned as an apparently
@@ -145,3 +156,4 @@ successful result. Validation runs in the core before any message is delivered.
 |------------|------|---------|-------------|
 | `tools.ask_user.enabled` | bool | `true` | Registers the `ask_user` tool |
 | `tools.ask_user.timeout_seconds` | int | `300` | Seconds to wait for the user, measured from the first delivered question |
+| `tools.ask_user.max_prompt_chars` | int | `1900` | Maximum characters in one rendered question prompt; larger prompts are rejected before delivery |

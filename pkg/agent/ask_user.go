@@ -15,8 +15,10 @@ import (
 // the loop's ask_user broker.
 func (al *AgentLoop) newAskUserTool(msgBus interfaces.MessageBus) *askusertools.Tool {
 	timeout := askusertools.DefaultTimeout
+	promptRunes := askusertools.DefaultMaxPromptRunes
 	if al.cfg != nil {
 		timeout = al.cfg.Tools.AskUser.GetTimeout()
+		promptRunes = al.cfg.Tools.AskUser.GetMaxPromptChars()
 	}
 	adapter := askusertools.NewChatAdapter(
 		al.askUserBroker,
@@ -45,6 +47,7 @@ func (al *AgentLoop) newAskUserTool(msgBus interfaces.MessageBus) *askusertools.
 		},
 		timeout,
 	)
+	adapter.SetMaxPromptRunes(promptRunes)
 	return askusertools.NewTool(adapter)
 }
 

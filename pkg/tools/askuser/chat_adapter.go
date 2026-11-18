@@ -8,12 +8,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // DefaultTimeout is used when the adapter is configured without a timeout.
 const DefaultTimeout = 5 * time.Minute
+
+// DefaultMaxPromptRunes is the default upper bound for one rendered question
+// prompt. It fits the smallest common chat limits (Discord: 2000 characters,
+// Telegram: 4096) with a small margin for the framing text.
+const DefaultMaxPromptRunes = 1900
 
 // SendFunc delivers one ask_user prompt to the user.
 type SendFunc func(ctx context.Context, channel, chatID, content string) error
@@ -150,6 +156,8 @@ type ChatAdapter struct {
 	broker  *Broker
 	send    SendFunc
 	timeout time.Duration
+
+	maxPromptRunes int
 }
 
 // NewChatAdapter builds a text/chat adapter. A non-positive timeout falls back
@@ -158,7 +166,28 @@ func NewChatAdapter(broker *Broker, send SendFunc, timeout time.Duration) *ChatA
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	return &ChatAdapter{broker: broker, send: send, timeout: timeout}
+	return &ChatAdapter{
+		broker:         broker,
+		send:           send,
+		timeout:        timeout,
+		maxPromptRunes: DefaultMaxPromptRunes,
+	}
+}
+
+// SetMaxPromptRunes overrides the per-question prompt budget. Non-positive
+// values restore the default.
+func (a *ChatAdapter) SetMaxPromptRunes(limit int) {
+	if limit <= 0 {
+		limit = DefaultMaxPromptRunes
+	}
+	a.maxPromptRunes = limit
+}
+
+func (a *ChatAdapter) promptRuneLimit() int {
+	if a.maxPromptRunes <= 0 {
+		return DefaultMaxPromptRunes
+	}
+	return a.maxPromptRunes
 }
 
 // Collect is the adapter entry point. It keeps one waiter registered for the
@@ -193,6 +222,21 @@ func (a *ChatAdapter) Collect(ctx context.Context, questions []Question) (Adapte
 		toolshared.ToolSenderID(ctx),
 		toolshared.ToolSessionKey(ctx),
 	)
+
+	// Reject an oversized prompt before any question is delivered, so a
+	// partial batch is never shown to the user.
+	limit := a.promptRuneLimit()
+	for index, question := range questions {
+		rendered := utf8.RuneCountInString(formatPrompt(index, len(questions), question))
+		if rendered > limit {
+			return AdapterResult{}, fmt.Errorf(
+				"question %d prompt is too long for this channel: %d characters, limit %d",
+				index+1,
+				rendered,
+				limit,
+			)
+		}
+	}
 	waiting, err := a.broker.register(key)
 	if err != nil {
 		return AdapterResult{}, err

@@ -426,6 +426,7 @@ func DefaultConfig() *Config {
 			AskUser: AskUserToolsConfig{
 				ToolConfig:     ToolConfig{Enabled: true},
 				TimeoutSeconds: DefaultAskUserTimeoutSeconds,
+				MaxPromptChars: DefaultAskUserMaxPromptChars,
 			},
 			Exec: ExecConfig{
 				ToolConfig: ToolConfig{

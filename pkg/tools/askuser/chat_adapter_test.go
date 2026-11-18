@@ -434,3 +434,66 @@ func TestChatAdapterIgnoresRepliesForOtherAgentOrSession(t *testing.T) {
 		})
 	}
 }
+
+func TestChatAdapterRejectsOversizedPromptBeforeDelivery(t *testing.T) {
+	broker := NewBroker()
+	adapter := NewChatAdapter(broker, nil, 20*time.Millisecond)
+	sent := 0
+	adapter.send = func(context.Context, string, string, string) error {
+		sent++
+		return nil
+	}
+	questions := []Question{{
+		ID:      "q0",
+		Text:    "Pick",
+		Choices: []string{strings.Repeat("a", 1000), strings.Repeat("b", 1000)},
+	}}
+
+	_, err := adapter.Collect(chatContext(), questions)
+	if err == nil {
+		t.Fatal("oversized prompt accepted")
+	}
+	if !strings.Contains(err.Error(), "prompt is too long") || !strings.Contains(err.Error(), "1900") {
+		t.Fatalf("error = %v", err)
+	}
+	if sent != 0 {
+		t.Fatalf("sent %d prompts before validation failed", sent)
+	}
+
+	// The failed interaction must not leave a waiter registered.
+	result, err := adapter.Collect(chatContext(), []Question{{ID: "q0", Text: "Short"}})
+	if err != nil {
+		t.Fatalf("second interaction: %v", err)
+	}
+	if result.Outcome != OutcomeTimedOut {
+		t.Fatalf("outcome = %s", result.Outcome)
+	}
+	if sent != 1 {
+		t.Fatalf("sent = %d, want 1", sent)
+	}
+}
+
+func TestChatAdapterMaxPromptRunesOverride(t *testing.T) {
+	broker := NewBroker()
+	adapter := NewChatAdapter(broker, nil, 20*time.Millisecond)
+	adapter.SetMaxPromptRunes(5000)
+	sent := 0
+	adapter.send = func(context.Context, string, string, string) error {
+		sent++
+		return nil
+	}
+	result, err := adapter.Collect(chatContext(), []Question{{
+		ID:      "q0",
+		Text:    "Pick",
+		Choices: []string{strings.Repeat("a", 1000), strings.Repeat("b", 1000)},
+	}})
+	if err != nil {
+		t.Fatalf("override rejected the prompt: %v", err)
+	}
+	if result.Outcome != OutcomeTimedOut {
+		t.Fatalf("outcome = %s", result.Outcome)
+	}
+	if sent != 1 {
+		t.Fatalf("sent = %d, want 1", sent)
+	}
+}

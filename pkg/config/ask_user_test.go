@@ -21,3 +21,22 @@ func TestAskUserTimeoutOverride(t *testing.T) {
 		t.Fatalf("timeout = %v, want 90s", got)
 	}
 }
+
+func TestAskUserMaxPromptChars(t *testing.T) {
+	cfg := DefaultConfig()
+	if got := cfg.Tools.AskUser.GetMaxPromptChars(); got != DefaultAskUserMaxPromptChars {
+		t.Fatalf("default prompt chars = %d, want %d", got, DefaultAskUserMaxPromptChars)
+	}
+	cfg.Tools.AskUser.MaxPromptChars = 0
+	if got := cfg.Tools.AskUser.GetMaxPromptChars(); got != DefaultAskUserMaxPromptChars {
+		t.Fatalf("zero prompt chars = %d", got)
+	}
+	cfg.Tools.AskUser.MaxPromptChars = -5
+	if got := cfg.Tools.AskUser.GetMaxPromptChars(); got != DefaultAskUserMaxPromptChars {
+		t.Fatalf("negative prompt chars = %d", got)
+	}
+	cfg.Tools.AskUser.MaxPromptChars = 3000
+	if got := cfg.Tools.AskUser.GetMaxPromptChars(); got != 3000 {
+		t.Fatalf("override prompt chars = %d", got)
+	}
+}

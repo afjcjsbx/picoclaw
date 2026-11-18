@@ -64,7 +64,8 @@ func (t *Tool) Parameters() map[string]any {
 					"properties": map[string]any{
 						"question": map[string]any{
 							"type":        "string",
-							"description": "Question text. Must not be empty.",
+							"maxLength":   MaxQuestionLength,
+							"description": "Question text. Must not be empty. Keep it short enough to fit a chat message.",
 						},
 						"choices": map[string]any{
 							"type":        "array",

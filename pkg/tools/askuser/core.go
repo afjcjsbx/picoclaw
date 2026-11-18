@@ -17,9 +17,15 @@ const (
 	MaxQuestions = 5
 	// MaxChoices is the maximum number of selectable options per question.
 	MaxChoices = 4
+	// MaxQuestionLength is the maximum length of a question, in runes, measured
+	// after trimming surrounding whitespace.
+	MaxQuestionLength = 1000
 	// MaxChoiceLength is the maximum length of a single option, in runes,
 	// measured after trimming surrounding whitespace.
 	MaxChoiceLength = 8000
+	// MaxAnswerLength is the maximum length of a single user answer, in runes.
+	// Longer answers are truncated and the result carries a notice.
+	MaxAnswerLength = 2000
 
 	// RecommendedSuffix is appended to the first displayed option when a
 	// question offers at least two valid choices. It is presentation-only and
@@ -143,6 +149,12 @@ func NormalizeQuestions(raw any) ([]Question, error) {
 		if text == "" {
 			return nil, fmt.Errorf("questions[%d].question must not be empty", i)
 		}
+		if utf8.RuneCountInString(text) > MaxQuestionLength {
+			return nil, fmt.Errorf(
+				"questions[%d].question exceeds %d characters",
+				i, MaxQuestionLength,
+			)
+		}
 
 		choices, err := normalizeChoices(i, obj["choices"])
 		if err != nil {
@@ -248,6 +260,7 @@ func BuildDocument(questions []Question, result AdapterResult) (Document, error)
 		Outcome:   result.Outcome,
 		Notice:    result.Notice,
 	}
+	truncated := false
 
 	for _, question := range questions {
 		response := Response{
@@ -272,6 +285,9 @@ func BuildDocument(questions []Question, result AdapterResult) (Document, error)
 				return Document{}, err
 			}
 			if answered {
+				var wasTruncated bool
+				value, wasTruncated = truncateAnswer(value)
+				truncated = truncated || wasTruncated
 				response.Status = StatusAnswered
 				response.UserResponse = value
 			} else {
@@ -282,7 +298,44 @@ func BuildDocument(questions []Question, result AdapterResult) (Document, error)
 		document.Responses = append(document.Responses, response)
 	}
 
+	if truncated {
+		notice := fmt.Sprintf("user answers were truncated to %d characters", MaxAnswerLength)
+		if document.Notice == "" {
+			document.Notice = notice
+		} else {
+			document.Notice += " " + notice
+		}
+	}
+
 	return document, nil
+}
+
+// truncateAnswer caps a normalized answer at MaxAnswerLength runes. Multi-select
+// answers are capped item by item. The boolean reports whether anything was
+// shortened so the document can carry a notice.
+func truncateAnswer(value any) (any, bool) {
+	switch typed := value.(type) {
+	case string:
+		return truncateAnswerText(typed)
+	case []string:
+		truncated := false
+		capped := make([]string, len(typed))
+		for i, item := range typed {
+			cappedItem, wasTruncated := truncateAnswerText(item)
+			capped[i] = cappedItem
+			truncated = truncated || wasTruncated
+		}
+		return capped, truncated
+	default:
+		return value, false
+	}
+}
+
+func truncateAnswerText(value string) (string, bool) {
+	if utf8.RuneCountInString(value) <= MaxAnswerLength {
+		return value, false
+	}
+	return string([]rune(value)[:MaxAnswerLength]), true
 }
 
 func normalizeSingleAnswer(questionID string, raw any) (any, bool, error) {

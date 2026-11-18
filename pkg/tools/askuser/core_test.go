@@ -375,3 +375,63 @@ func TestMarshalErrorShape(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 }
+
+func TestNormalizeQuestionsQuestionLength(t *testing.T) {
+	ok := strings.Repeat("q", MaxQuestionLength)
+	questions, err := NormalizeQuestions([]any{map[string]any{"question": ok}})
+	if err != nil {
+		t.Fatalf("%d-character question rejected: %v", MaxQuestionLength, err)
+	}
+	if len(questions) != 1 {
+		t.Fatalf("questions = %d", len(questions))
+	}
+
+	_, err = NormalizeQuestions([]any{map[string]any{"question": ok + "q"}})
+	if err == nil {
+		t.Fatal("question over the limit accepted")
+	}
+	if !strings.Contains(err.Error(), "exceeds 1000 characters") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBuildDocumentTruncatesLongAnswers(t *testing.T) {
+	long := strings.Repeat("a", MaxAnswerLength+1)
+	questions := []Question{
+		{ID: "q0", Text: "Open"},
+		{ID: "q1", Text: "Multi", Choices: []string{"A", "B"}, MultiSelect: true},
+	}
+	document, err := BuildDocument(questions, AdapterResult{
+		Answers: map[string]any{
+			"q0": long,
+			"q1": []string{"A", long},
+		},
+		Outcome: OutcomeSubmitted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	single, _ := document.Responses[0].UserResponse.(string)
+	if len([]rune(single)) != MaxAnswerLength {
+		t.Fatalf("single answer length = %d, want %d", len([]rune(single)), MaxAnswerLength)
+	}
+	multi, _ := document.Responses[1].UserResponse.([]string)
+	if len(multi) != 2 || len([]rune(multi[1])) != MaxAnswerLength {
+		t.Fatalf("multi answer = %d items, second length %d", len(multi), len([]rune(multi[1])))
+	}
+	if !strings.Contains(document.Notice, "truncated") {
+		t.Fatalf("notice = %q", document.Notice)
+	}
+
+	// Within the limit nothing is truncated and no notice is added.
+	document, err = BuildDocument(questions[:1], AdapterResult{
+		Answers: map[string]any{"q0": "short"},
+		Outcome: OutcomeSubmitted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Notice != "" {
+		t.Fatalf("notice = %q", document.Notice)
+	}
+}

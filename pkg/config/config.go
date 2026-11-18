@@ -1253,10 +1253,18 @@ type AskUserToolsConfig struct {
 	// returning a timed_out result. The countdown starts when the first
 	// question is delivered. A non-positive value uses the default.
 	TimeoutSeconds int `json:"timeout_seconds" yaml:"-" env:"PICOCLAW_TOOLS_ASK_USER_TIMEOUT_SECONDS"`
+
+	// MaxPromptChars bounds the rendered prompt of a single question. It keeps
+	// long questions and options inside the message limits of common channels.
+	// A non-positive value uses the default.
+	MaxPromptChars int `json:"max_prompt_chars" yaml:"-" env:"PICOCLAW_TOOLS_ASK_USER_MAX_PROMPT_CHARS"`
 }
 
 // DefaultAskUserTimeoutSeconds is the default Ask User interaction timeout.
 const DefaultAskUserTimeoutSeconds = 300
+
+// DefaultAskUserMaxPromptChars is the default per-question prompt budget.
+const DefaultAskUserMaxPromptChars = 1900
 
 // GetTimeout returns the configured interaction timeout.
 func (c AskUserToolsConfig) GetTimeout() time.Duration {
@@ -1265,6 +1273,14 @@ func (c AskUserToolsConfig) GetTimeout() time.Duration {
 		seconds = DefaultAskUserTimeoutSeconds
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+// GetMaxPromptChars returns the per-question prompt budget in characters.
+func (c AskUserToolsConfig) GetMaxPromptChars() int {
+	if c.MaxPromptChars <= 0 {
+		return DefaultAskUserMaxPromptChars
+	}
+	return c.MaxPromptChars
 }
 
 type BraveConfig struct {
