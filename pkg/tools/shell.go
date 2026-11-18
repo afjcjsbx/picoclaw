@@ -44,11 +44,11 @@ type ExecTool struct {
 	workingDir           string
 	timeout              time.Duration
 	foregroundCap        time.Duration
-	denyPatterns         []*regexp.Regexp
-	hardlineDenyPatterns []*regexp.Regexp
-	customDenyPatterns   []*regexp.Regexp
-	customAllowPatterns  []*regexp.Regexp
-	customUnlockPatterns []*regexp.Regexp
+	denyPatterns         patternSet
+	hardlineDenyPatterns patternSet
+	customDenyPatterns   patternSet
+	customAllowPatterns  patternSet
+	customUnlockPatterns patternSet
 	// allowedPathPatterns are paths exec may read or modify. exec can mutate
 	// any path it receives, so callers must pass write grants, not a read-only
 	// allowlist.
@@ -460,14 +460,21 @@ func NewExecToolWithConfig(
 	baseEnv := newExecEnv(workingDir, execEnvSet, execEnvAllowlist)
 	resolvedWorkDir := resolveWorkspacePath(workingDir)
 	return &ExecTool{
-		workingDir:           workingDir,
-		timeout:              timeout,
-		foregroundCap:        maxForegroundTimeout,
-		denyPatterns:         denyPatterns,
-		hardlineDenyPatterns: hardlinePatterns,
-		customDenyPatterns:   customDenyPatterns,
-		customAllowPatterns:  customAllowPatterns,
-		customUnlockPatterns: customUnlockPatterns,
+		workingDir:    workingDir,
+		timeout:       timeout,
+		foregroundCap: maxForegroundTimeout,
+		denyPatterns: newPatternSetWithPrefilter(
+			denyPatterns, `$(`, "`", "|", "<<"),
+		hardlineDenyPatterns: newPatternSetWithPrefilter(
+			hardlinePatterns,
+			":", "mkfs", "diskpart", "format", "dd", ">", "rm", "kill",
+			"shutdown", "reboot", "poweroff", "pkill", "killall", "systemctl",
+			"stop-process", "spps", "taskkill", "picoclaw", "which", "command -v",
+			"type -p", "$picoclaw", "~/.picoclaw", "$home/.picoclaw",
+		),
+		customDenyPatterns:   newPatternSet(customDenyPatterns),
+		customAllowPatterns:  newPatternSet(customAllowPatterns),
+		customUnlockPatterns: newPatternSet(customUnlockPatterns),
 		allowedPathPatterns:  allowedPathPatterns,
 		restrictToWorkspace:  restrict,
 		allowRemote:          allowRemote,

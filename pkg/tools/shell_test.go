@@ -1926,7 +1926,7 @@ func TestWindows_PowerShellEncodingBypass(t *testing.T) {
 func TestWindowsDenyPatterns(t *testing.T) {
 	tool, err := NewExecToolWithConfig("", false, nil)
 	require.NoError(t, err)
-	tool.denyPatterns = append(tool.denyPatterns, windowsDenyPatterns...)
+	tool.denyPatterns = newPatternSet(append(tool.denyPatterns.patterns, windowsDenyPatterns...))
 
 	blocked := []string{
 		`del /f C:\work\file.txt`,

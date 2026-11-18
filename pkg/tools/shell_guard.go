@@ -18,7 +18,7 @@ import (
 // matches the whole command. These patterns exempt only the default deny set;
 // they do not affect the risk classifier.
 func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
-	return patternsMatchAny(t.customAllowPatterns, []string{lower})
+	return t.customAllowPatterns.matchAny([]string{lower})
 }
 
 // commandMatchesCustomUnlockPattern reports whether an operator unlock rule
@@ -26,23 +26,12 @@ func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
 // classifier and smart approvals; hardline, custom deny and the workspace
 // boundary still run.
 func (t *ExecTool) commandMatchesCustomUnlockPattern(lower string) bool {
-	return patternsMatchAny(t.customUnlockPatterns, []string{lower})
+	return t.customUnlockPatterns.matchAny([]string{lower})
 }
 
 // shellKillPIDPattern catches the common `kill <pid>` spelling so the block
 // message can point the model at the validated kill-pid action.
 var shellKillPIDPattern = regexp.MustCompile(`(?:^|[;&|]\s*)kill\s+(?:-\w+\s+)*[0-9]+`)
-
-func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
-	for _, pattern := range patterns {
-		for _, form := range forms {
-			if pattern.MatchString(form) {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // guardCommandContext decides whether a command may run. It returns "" to
 // allow it, or the block message. Layers run from the least to the most
@@ -126,14 +115,14 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	// Hardline patterns are an immutable floor: they apply even when the
 	// default deny set is disabled and no custom allow rule can exempt them.
 	// They are never sent to the Guardian model.
-	if patternsMatchAny(t.hardlineDenyPatterns, denyForms) {
+	if t.hardlineDenyPatterns.matchAny(denyForms) {
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
 	// Custom deny patterns always apply: they are user-specified security rules
 	// that must not be bypassed by custom allow patterns (#3079). Matching the
 	// canonical AST words also catches quote-spliced forms such as r''m.
-	if patternsMatchAny(t.customDenyPatterns, denyForms) {
+	if t.customDenyPatterns.matchAny(denyForms) {
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
@@ -150,7 +139,7 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		// Use the same canonical forms as the hardline/custom layers. This
 		// catches shell-equivalent spellings such as g\it, which the raw
 		// lowerForDeny form does not expose.
-		if patternsMatchAny(t.denyPatterns, denyForms) {
+		if t.denyPatterns.matchAny(denyForms) {
 			if shellKillPIDPattern.MatchString(lower) {
 				return "Command blocked by safety guard (dangerous pattern detected); " +
 					"use action=kill-pid with a PID owned by a tracked exec session, or action=kill with the sessionId"
