@@ -194,6 +194,9 @@ func ValidateExposePaths(items []config.ExposePath) error {
 		if !filepath.IsAbs(source) || !filepath.IsAbs(target) {
 			return fmt.Errorf("source and target must be absolute paths")
 		}
+		if _, err := os.Stat(source); err != nil {
+			return fmt.Errorf("expose_paths source %s is not accessible: %w", source, err)
+		}
 		if _, ok := seen[target]; ok {
 			return fmt.Errorf("duplicate expose_path target: %s", target)
 		}

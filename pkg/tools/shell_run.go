@@ -77,8 +77,8 @@ func shellCommand(command string) (string, []string, error) {
 // cwdProbeFile receives the final working directory from a wrapped foreground
 // command. A temp file keeps the probe out of stdout, so output truncation,
 // exit-status parsing and artifact tests see exactly the command's output.
-func newCwdProbeFile() (string, error) {
-	file, err := os.CreateTemp("", "picoclaw-cwd-*.txt")
+func newCwdProbeFile(dir string) (string, error) {
+	file, err := os.CreateTemp(dir, "picoclaw-cwd-*.txt")
 	if err != nil {
 		return "", err
 	}
@@ -88,6 +88,20 @@ func newCwdProbeFile() (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// startCommandError names the isolation failure mode explicitly. Isolation is
+// fail-closed: a sandbox that cannot start must not silently run the command
+// unisolated.
+func startCommandError(err error) string {
+	if isolation.CurrentConfig().Enabled {
+		return fmt.Sprintf(
+			"failed to start command under isolation: %v; isolation is fail-closed, "+
+				"disable isolation.enabled or fix isolation.expose_paths",
+			err,
+		)
+	}
+	return fmt.Sprintf("failed to start command: %v", err)
 }
 
 // shellQuote single-quotes a path for the POSIX shell.
@@ -157,7 +171,14 @@ func (t *ExecTool) runSync(
 	}
 	defer cancel()
 
-	probePath, probeErr := newCwdProbeFile()
+	probeDir := ""
+	if isolation.CurrentConfig().Enabled {
+		// The child runs under a path boundary. A probe in the host temp dir
+		// is outside that boundary on macOS, so the wrapped shell cannot write
+		// its cwd. Put it in the command's cwd (already exposed) instead.
+		probeDir = cwd
+	}
+	probePath, probeErr := newCwdProbeFile(probeDir)
 	if probeErr != nil {
 		probePath = ""
 	}
@@ -201,7 +222,7 @@ func (t *ExecTool) runSync(
 	if err := isolation.Start(cmd); err != nil {
 		_ = outputWriter.Close()
 		_ = outputReader.Close()
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+		return ErrorResult(startCommandError(err))
 	}
 
 	// The child inherited its own copy of the write end. Release the parent's
@@ -642,7 +663,7 @@ func (t *ExecTool) runBackground(
 		if session.ptyMaster != nil {
 			_ = session.ptyMaster.Close()
 		}
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+		return ErrorResult(startCommandError(err))
 	}
 
 	// The child inherited its own copies of the pipe/PTY write ends. The parent

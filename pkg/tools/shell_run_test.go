@@ -2,12 +2,16 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
@@ -31,7 +35,7 @@ func TestRecoverGoroutine(t *testing.T) {
 }
 
 func TestReadObservedCwd(t *testing.T) {
-	path, err := newCwdProbeFile()
+	path, err := newCwdProbeFile("")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.Remove(path) })
 
@@ -40,6 +44,23 @@ func TestReadObservedCwd(t *testing.T) {
 
 	require.NoError(t, os.Remove(path))
 	require.Empty(t, readObservedCwd(path))
+}
+
+func TestNewCwdProbeFileUsesRequestedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path, err := newCwdProbeFile(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Remove(path) })
+	require.True(t, strings.HasPrefix(path, dir), "probe %q is not under %q", path, dir)
+}
+
+func TestStartCommandErrorNamesIsolation(t *testing.T) {
+	isolation.Configure(&config.Config{Isolation: config.IsolationConfig{Enabled: true}})
+	t.Cleanup(func() { isolation.Configure(config.DefaultConfig()) })
+
+	message := startCommandError(errors.New("sandbox denied"))
+	require.Contains(t, message, "under isolation")
+	require.Contains(t, message, "fail-closed")
 }
 
 func TestWrapCommandForCwdSkipsLineContinuation(t *testing.T) {
