@@ -60,16 +60,14 @@ func getSessionManager() *SessionManager {
 }
 
 type ExecTool struct {
-	workingDir              string
-	timeout                 time.Duration
-	foregroundCap           time.Duration
-	denyPatterns            []*regexp.Regexp
-	hardlineDenyPatterns    []*regexp.Regexp
-	customDenyPatterns      []*regexp.Regexp
-	customAllowPatterns     []*regexp.Regexp
-	customUnlockPatterns    []*regexp.Regexp
-	customRiskAllowPatterns []*regexp.Regexp
-	riskAllowThreshold      shellguard.RiskLevel
+	workingDir           string
+	timeout              time.Duration
+	foregroundCap        time.Duration
+	denyPatterns         []*regexp.Regexp
+	hardlineDenyPatterns []*regexp.Regexp
+	customDenyPatterns   []*regexp.Regexp
+	customAllowPatterns  []*regexp.Regexp
+	customUnlockPatterns []*regexp.Regexp
 	// allowedPathPatterns are paths exec may read or modify. exec can mutate
 	// any path it receives, so callers must pass write grants, not a read-only
 	// allowlist.
@@ -385,8 +383,6 @@ func NewExecToolWithConfig(
 	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	customUnlockPatterns := make([]*regexp.Regexp, 0)
-	customRiskAllowPatterns := make([]*regexp.Regexp, 0)
-	riskAllowThreshold := shellguard.RiskMedium
 	var allowedPathPatterns []*regexp.Regexp
 	// Fail closed when no config is supplied. Callers that need remote exec
 	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
@@ -440,19 +436,6 @@ func NewExecToolWithConfig(
 		)
 		if err != nil {
 			return nil, err
-		}
-		customRiskAllowPatterns, err = compilePatterns(
-			execConfig.RiskAllowPatterns, compileFullMatchPattern, "custom risk allow",
-		)
-		if err != nil {
-			return nil, err
-		}
-		if execConfig.RiskAllowThreshold != "" {
-			parsed, err := shellguard.ParseRiskLevel(execConfig.RiskAllowThreshold)
-			if err != nil {
-				return nil, fmt.Errorf("invalid risk_allow_threshold: %w", err)
-			}
-			riskAllowThreshold = parsed
 		}
 	} else {
 		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
@@ -510,29 +493,27 @@ func NewExecToolWithConfig(
 
 	baseEnv := newExecEnv(workingDir, execEnvSet, execEnvAllowlist)
 	return &ExecTool{
-		workingDir:              workingDir,
-		timeout:                 timeout,
-		foregroundCap:           maxForegroundTimeout,
-		denyPatterns:            denyPatterns,
-		hardlineDenyPatterns:    hardlinePatterns,
-		customDenyPatterns:      customDenyPatterns,
-		customAllowPatterns:     customAllowPatterns,
-		customUnlockPatterns:    customUnlockPatterns,
-		customRiskAllowPatterns: customRiskAllowPatterns,
-		riskAllowThreshold:      riskAllowThreshold,
-		allowedPathPatterns:     allowedPathPatterns,
-		restrictToWorkspace:     restrict,
-		allowRemote:             allowRemote,
-		maxOutputChars:          maxOutputChars,
-		maxInlineResultChars:    maxInlineResultChars,
-		baseEnv:                 baseEnv,
-		baseEnvList:             buildEnvList(baseEnv),
-		state:                   newExecStateStore(),
-		sessionManager:          getSessionManager(),
-		riskGuard:               riskGuard,
-		approvalEnabled:         smartApprovals,
-		approvalReviewer:        reviewer,
-		blockBreaker:            newExecBlockBreaker(),
+		workingDir:           workingDir,
+		timeout:              timeout,
+		foregroundCap:        maxForegroundTimeout,
+		denyPatterns:         denyPatterns,
+		hardlineDenyPatterns: hardlinePatterns,
+		customDenyPatterns:   customDenyPatterns,
+		customAllowPatterns:  customAllowPatterns,
+		customUnlockPatterns: customUnlockPatterns,
+		allowedPathPatterns:  allowedPathPatterns,
+		restrictToWorkspace:  restrict,
+		allowRemote:          allowRemote,
+		maxOutputChars:       maxOutputChars,
+		maxInlineResultChars: maxInlineResultChars,
+		baseEnv:              baseEnv,
+		baseEnvList:          buildEnvList(baseEnv),
+		state:                newExecStateStore(),
+		sessionManager:       getSessionManager(),
+		riskGuard:            riskGuard,
+		approvalEnabled:      smartApprovals,
+		approvalReviewer:     reviewer,
+		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }
 

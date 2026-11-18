@@ -175,8 +175,7 @@ Exec 工具用于执行 shell 命令。
 | `enable_deny_patterns` | bool  | true   | 启用内置危险命令拦截         |
 | `custom_deny_patterns` | array | []     | 自定义拒绝模式（正则表达式），始终生效 |
 | `custom_allow_patterns` | array | []     | 整条命令匹配，仅豁免默认拒绝规则；自动锚定 |
-| `custom_risk_allow_patterns` | array | [] | 整条命令匹配，用于豁免风险分类器；受 `risk_allow_threshold` 限制 |
-| `risk_allow_threshold` | string | `"medium"` | 风险豁免允许的最高级别；`high`/`critical` 需显式设置 |
+| `custom_unlock_patterns` | array | []     | 整条命令匹配；显式信任的命令跳过默认拒绝、风险分类器和智能审批；硬性底线、自定义拒绝和工作区边界仍生效 |
 
 ### 禁用 Exec 工具
 
@@ -205,7 +204,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - **`enable_deny_patterns`**：设为 `false` 可禁用内置的默认危险命令拦截模式；硬性底线规则和 `custom_deny_patterns` 仍然生效
 - **`custom_deny_patterns`**：添加自定义拒绝正则模式；即使关闭内置拦截也始终生效，且不会被自定义允许规则豁免
 - **`custom_allow_patterns`**：整条命令匹配，仅豁免默认拒绝规则；不会豁免风险分类器
-- **`custom_risk_allow_patterns`**：整条命令匹配，用于豁免风险分类器；最高只能豁免到 `risk_allow_threshold`（默认 `medium`）
+- **`custom_unlock_patterns`**：整条命令匹配；显式信任的命令跳过默认拒绝、风险分类器和智能审批；硬性底线、自定义拒绝和工作区边界仍然生效
 
 ### 始终生效的硬性底线规则
 

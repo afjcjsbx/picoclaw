@@ -108,7 +108,6 @@ func TestSmartApprovalAllowsHighRiskBelowThresholdWithoutReview(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.RiskThreshold = "critical"
-	cfg.Tools.Exec.RiskAllowThreshold = "critical"
 
 	tool, reviewer := newSmartTestTool(t, cfg, approvalDeny)
 	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
@@ -253,16 +252,15 @@ func TestSmartApprovalDoesNotReviewCustomDeny(t *testing.T) {
 	}
 }
 
-func TestSmartApprovalCustomRiskAllowStillApplies(t *testing.T) {
+func TestSmartApprovalCustomUnlockStillApplies(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.DefaultConfig()
-	cfg.Tools.Exec.RiskAllowPatterns = []string{`^chmod \+x script\.sh$`}
-	cfg.Tools.Exec.RiskAllowThreshold = "high"
+	cfg.Tools.Exec.CustomUnlockPatterns = []string{`^chmod \+x script\.sh$`}
 	tool, reviewer := newSmartTestTool(t, cfg, approvalDeny)
 
 	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
-		t.Fatalf("guardCommand() = %q, want explicit risk allow", got)
+		t.Fatalf("guardCommand() = %q, want explicit unlock", got)
 	}
 	if reviewer.calls != 0 {
 		t.Fatalf("reviewer calls = %d, want 0", reviewer.calls)

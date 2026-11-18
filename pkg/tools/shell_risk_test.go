@@ -381,51 +381,23 @@ func TestShellTool_UserArgModifiers(t *testing.T) {
 	}
 }
 
-func TestShellTool_DefaultDenyAndRiskRequireSeparateAllows(t *testing.T) {
+func TestShellTool_CustomAllowAndUnlockLayers(t *testing.T) {
 	t.Parallel()
 
-	riskOnly := riskTestTool(t, config.ExecConfig{
-		RiskThreshold:      "medium",
-		RiskAllowThreshold: "high",
-		RiskAllowPatterns:  []string{`git\s+push\b.*`},
-	})
-	if got := riskOnly.guardCommand("git push origin main", t.TempDir()); !strings.Contains(got, "dangerous pattern") {
-		t.Fatalf("risk allow must not exempt the default deny layer, got %q", got)
-	}
-
-	both := riskTestTool(t, config.ExecConfig{
+	allowOnly := riskTestTool(t, config.ExecConfig{
 		RiskThreshold:       "medium",
-		RiskAllowThreshold:  "high",
 		CustomAllowPatterns: []string{`git\s+push\b.*`},
-		RiskAllowPatterns:   []string{`git\s+push\b.*`},
 	})
-	if got := both.guardCommand("git push origin main", t.TempDir()); got != "" {
-		t.Fatalf("explicit allows for both layers should permit the command, got %q", got)
+	if got := allowOnly.guardCommand("git push origin main", t.TempDir()); !strings.Contains(got, "risk classifier") {
+		t.Fatalf("custom allow must not exempt the risk classifier, got %q", got)
 	}
-}
 
-func TestShellTool_CustomRiskAllowPatternExemptsRisk(t *testing.T) {
-	t.Parallel()
-
-	tool := riskTestTool(t, config.ExecConfig{
-		RiskThreshold:      "medium",
-		RiskAllowThreshold: "high",
-		RiskAllowPatterns:  []string{`chmod \+x\b.*`},
+	unlocked := riskTestTool(t, config.ExecConfig{
+		RiskThreshold:        "medium",
+		CustomUnlockPatterns: []string{`git\s+push\b.*`},
 	})
-	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
-		t.Fatalf("custom risk allow pattern should exempt the risk classifier, got %q", got)
-	}
-}
-
-func TestShellTool_CustomRiskAllowRequiresExplicitHighThreshold(t *testing.T) {
-	t.Parallel()
-
-	tool := riskTestTool(t, config.ExecConfig{
-		RiskThreshold:     "medium",
-		RiskAllowPatterns: []string{`chmod \+x\b.*`},
-	})
-	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); !strings.Contains(got, "risk classifier") {
-		t.Fatalf("high risk must not be exempted at the default medium allow threshold, got %q", got)
+	if got := unlocked.guardCommand("git push origin main", t.TempDir()); got != "" {
+		t.Fatalf("custom unlock must permit the trusted command, got %q", got)
 	}
 }
 
@@ -468,36 +440,6 @@ func TestShellTool_BroadCustomAllowDoesNotExemptRisk(t *testing.T) {
 	}
 }
 
-func TestShellTool_RiskAllowThresholdBoundsExemption(t *testing.T) {
-	t.Parallel()
-
-	tool := riskTestTool(t, config.ExecConfig{
-		RiskThreshold:       "medium",
-		RiskAllowThreshold:  "high",
-		CustomAllowPatterns: []string{`.*`},
-		RiskAllowPatterns:   []string{`.*`},
-	})
-	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
-		t.Fatalf("high risk should be exempted at the high allow threshold, got %q", got)
-	}
-	if got := tool.guardCommand("chmod +x script.sh; rm -rf build", t.TempDir()); !strings.Contains(
-		got,
-		"risk classifier",
-	) {
-		t.Fatalf("a later critical command must not hide behind an earlier high-risk match, got %q", got)
-	}
-
-	critical := riskTestTool(t, config.ExecConfig{
-		RiskThreshold:       "medium",
-		RiskAllowThreshold:  "critical",
-		CustomAllowPatterns: []string{`.*`},
-		RiskAllowPatterns:   []string{`.*`},
-	})
-	if got := critical.guardCommand("rm -rf build", t.TempDir()); got != "" {
-		t.Fatalf("critical risk should be exempted only with the explicit critical allow threshold, got %q", got)
-	}
-}
-
 func TestShellTool_RiskDisabledWithDefaultDenyPatterns(t *testing.T) {
 	t.Parallel()
 
@@ -521,8 +463,6 @@ func TestShellTool_InvalidRiskConfigRejected(t *testing.T) {
 
 	tests := []config.ExecConfig{
 		{RiskThreshold: "bogus"},
-		{RiskAllowThreshold: "bogus"},
-		{RiskThreshold: "medium", RiskAllowPatterns: []string{"["}},
 		{RiskThreshold: "medium", RiskOverrides: map[string]string{"chmod": "bogus"}},
 		{
 			RiskThreshold: "medium",

@@ -19,37 +19,12 @@ func (t *ExecTool) commandMatchesCustomAllowPattern(lower string) bool {
 	return patternsMatchAny(t.customAllowPatterns, []string{lower})
 }
 
-func (t *ExecTool) commandMatchesCustomRiskAllowPattern(lower string) bool {
-	return patternsMatchAny(t.customRiskAllowPatterns, []string{lower})
-}
-
 // commandMatchesCustomUnlockPattern reports whether an operator unlock rule
-// matches the whole command. A match skips the default deny set, the allowlist,
-// the risk classifier and smart approvals; hardline, custom deny and the
-// workspace boundary still run.
+// matches the whole command. A match skips the default deny set, the risk
+// classifier and smart approvals; hardline, custom deny and the workspace
+// boundary still run.
 func (t *ExecTool) commandMatchesCustomUnlockPattern(lower string) bool {
 	return patternsMatchAny(t.customUnlockPatterns, []string{lower})
-}
-
-// riskAllowExempts reports whether a matching custom risk allow pattern covers
-// the whole command and the command stays within riskAllowThreshold. It uses a
-// second guard with that threshold so a later critical command cannot hide
-// behind an earlier high-risk match. Unknown commands stay ineligible, matching
-// the strict policy that only smart approvals may review them.
-func (t *ExecTool) riskAllowExempts(
-	command, lower string,
-	analysis shellguard.Analysis,
-) bool {
-	if t.riskGuard == nil || !t.commandMatchesCustomRiskAllowPattern(lower) {
-		return false
-	}
-	allowGuard := t.riskGuard.WithThreshold(t.riskAllowThreshold)
-	if allowGuard == nil {
-		return false
-	}
-	assessment := allowGuard.AssessFile(command, analysis.File)
-	return !assessment.Reject && !assessment.Unknown &&
-		shellguard.IsAllowed(assessment.Level, allowGuard.Threshold())
 }
 
 func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
@@ -82,8 +57,7 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
 //     check, then the AST path guard on Unix or the path scanner on Windows.
 //  7. Risk level: the AST classifier rates the command low to critical and
-//     rejects anything above risk_threshold, unless custom_risk_allow_patterns
-//     exempts it up to risk_allow_threshold. Commands the classifier cannot
+//     rejects anything above risk_threshold. Commands the classifier cannot
 //     resolve (dynamic command names, opaque shells, parse errors) are allowed
 //     by default; dynamic operands for destructive commands are still rejected.
 //  8. Smart approvals: only unknown commands (layer 7) are reviewed by the
@@ -212,20 +186,19 @@ func (t *ExecTool) guardCommandWithAnalysis(
 
 	// The AST classifier is the last built-in layer: it sees commands that the
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
-	// explicit custom risk allow pattern can exempt it, and only up to
-	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
-	// Known commands above the threshold are rejected. Unknown commands are
-	// allowed by default and go to the Guardian only when smart approvals is on.
+	// explicit custom unlock pattern can bypass it; custom_allow_patterns no
+	// longer does. Known commands above the threshold are rejected. Unknown
+	// commands are allowed by default and go to the Guardian only when smart
+	// approvals is on.
 	if t.riskGuard != nil && !unlocked {
 		assessment := t.riskGuard.AssessFile(cmd, parsed)
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
-		riskExempt := t.riskAllowExempts(cmd, lower, analysis)
 		if assessment.Unknown {
 			// Unknown commands are allowed by default. Smart approvals can
 			// still review them; without a reviewer the command runs.
-			if !riskExempt && t.approvalEnabled {
+			if t.approvalEnabled {
 				description := assessment.Reason
 				if description == "" {
 					description = "command risk could not be classified"
@@ -234,8 +207,7 @@ func (t *ExecTool) guardCommandWithAnalysis(
 					return blocked
 				}
 			}
-		} else if !riskExempt &&
-			!shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
+		} else if !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
 	}
