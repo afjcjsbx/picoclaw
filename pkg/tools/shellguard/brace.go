@@ -18,7 +18,7 @@ const (
 // it handles comma lists outside quotes, respects nested groups, and gives up
 // on ranges and very large expansions.
 func BraceExpand(command string) (string, bool) {
-	if !strings.Contains(command, "{") {
+	if !strings.Contains(command, "{") || !strings.Contains(command, ",") {
 		return "", false
 	}
 	expanded, changed := expandBraces(command, 0)
