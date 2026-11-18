@@ -11,6 +11,7 @@ The exec tool is used to execute shell commands.
 | `enable_deny_patterns` | bool | `true` | Enable the built-in dangerous-command blocking patterns |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
 | `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in default deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
+| `custom_unlock_patterns` | string[] | `[]` | Full-command unlock patterns (regular expressions, anchored automatically). A match skips the default deny set, the allowlist, the AST risk classifier and smart approvals, so an explicitly trusted command runs even when it is critical or unclassifiable. Hardline, custom deny and the workspace boundary still apply |
 | `custom_risk_allow_patterns` | string[] | `[]` | Full-command allow patterns for the AST risk classifier. A match exempts only commands at or below `risk_allow_threshold`; high and critical commands require an explicit threshold raise |
 | `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false` unless `approvals.mode` is `smart`. Empty means `medium` |
 | `risk_allow_threshold` | string | `"medium"` | Highest risk level `custom_risk_allow_patterns` may exempt: `low`, `medium`, `high` or `critical`. Set `high` or `critical` explicitly to allow those levels |
@@ -36,7 +37,7 @@ Smart approvals are configured in a top-level `approvals` block, not under `tool
 
 Environment variables use the `PICOCLAW_APPROVALS_` prefix: `PICOCLAW_APPROVALS_MODE`, `PICOCLAW_APPROVALS_MODEL`, `PICOCLAW_APPROVALS_SMART_TIMEOUT_SECONDS`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_RISK_ALLOW_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_RISK_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_RISK_ALLOW_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_RISK_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set`, `risk_overrides` and `arg_modifiers` are JSON-only because their values are structured.
 
 ### Risk classification
 
@@ -55,16 +56,16 @@ Commands above `risk_threshold` are rejected before any process starts, with a s
 Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
 ```
 
-A dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are rejected regardless of `risk_threshold`; set `enable_deny_patterns: false` to disable the built-in guard set, unless smart approvals are enabled (they keep the Unix classifier active for the Guardian gate).
+A dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default; with `approvals.mode: "smart"` they are sent to the Guardian. Set `enable_deny_patterns: false` to disable the built-in guard set, unless smart approvals are enabled (they keep the Unix classifier active for the Guardian gate).
 
 The classifier also:
 
-- rejects a command whose command word is dynamic (`"$cmd" -rf /`) because it cannot be resolved statically;
-- parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and rejects a shell that reads commands from stdin or a script file;
-- parses a literal `trap '...'` action recursively, and rejects an `xargs` invocation that launches a shell;
+- classifies a command whose command word is dynamic (`"$cmd" -rf /`) as unknown; the default policy allows it, while smart approvals can review it;
+- parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and treats a shell that reads commands from stdin or a script file as unknown;
+- parses a literal `trap '...'` action recursively, and treats an `xargs` invocation that launches a shell as unknown;
 - inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`, `flock`, `chrt`, `taskset`, `busybox`, `runuser`, `setpriv`, `capsh`, `machinectl`, `lxc`, `incus`) and classifies the command they launch; `runuser -c` and `flock -c` command strings are parsed as shell scripts;
 - inspects `virsh` verbs, lowering read-only ones such as `list`, `domstate` and `dumpxml` and keeping destructive verbs at `high`;
-- treats `env -S` as critical, because it splits a string into a command;
+- treats `env -S` as unknown, because it splits a string into a command;
 - classifies process-detaching and namespace commands (`setsid`, `daemon`, `daemonize`, `disown`, `unshare`, `nsenter`, `bwrap`) as `high`. This is an approval signal, not a containment boundary: the exec tool's process scope is responsible for killing detached descendants.
 
 Argument modifiers are applied after flag normalization (`rm -rf`, `rm -fr` and `rm -r -f` are equivalent; `-XPOST` and `--request=POST` match their spaced flag+value forms). Built-in examples include `rm -r` → `high`, `rm -rf` → `critical`, `git push` → `high`, `git push --force` → `critical`, `curl -X POST` → `high`, and `find -delete` → `high`.
@@ -106,9 +107,21 @@ Custom thresholds and modifiers:
 
 `risk_overrides` changes the base level but cannot suppress an argument modifier: with `rm` overridden to `medium`, plain `rm file` is allowed while `rm -rf build` is still `critical`.
 
-`custom_allow_patterns` and `custom_risk_allow_patterns` are anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. `custom_allow_patterns` exempts the default regex deny set only. To exempt the AST risk classifier, use `custom_risk_allow_patterns`; a match can exempt only commands at or below `risk_allow_threshold`, which defaults to `medium`. Set it to `high` or `critical` explicitly to exempt those levels. Hardline and custom deny patterns always win.
+`custom_allow_patterns`, `custom_unlock_patterns` and `custom_risk_allow_patterns` are anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. `custom_allow_patterns` exempts the default regex deny set only. To exempt the AST risk classifier, use `custom_risk_allow_patterns`; a match can exempt only commands at or below `risk_allow_threshold`, which defaults to `medium`. Set it to `high` or `critical` explicitly to exempt those levels. Hardline and custom deny patterns always win.
 
-Configurations that used `custom_allow_patterns` to exempt the risk classifier should move those patterns to `custom_risk_allow_patterns`. If the exempted commands are `high` or `critical`, also set `risk_allow_threshold` explicitly.
+`custom_unlock_patterns` is the explicit per-command override. A matching command skips the default deny set, the allowlist, the AST risk classifier and smart approvals, so it runs even when it would be classified as critical or as unknown. It does not bypass hardline patterns, custom deny patterns or the workspace boundary. Use an exact, anchored pattern for the trusted command; a broad pattern such as `.*` unlocks every command that does not hit the hardline or custom deny floor.
+
+```json
+{
+  "tools": {
+    "exec": {
+      "custom_unlock_patterns": ["^sh scripts/deploy\\.sh$"]
+    }
+  }
+}
+```
+
+Configurations that used `custom_allow_patterns` to exempt the risk classifier should move those patterns to `custom_risk_allow_patterns`. If the exempted commands are `high` or `critical`, also set `risk_allow_threshold` explicitly. Use `custom_unlock_patterns` instead when the intent is to allow one exact, explicitly trusted command regardless of its risk level while every other command keeps the default thresholds.
 
 ```json
 {
@@ -124,18 +137,18 @@ Configurations that used `custom_allow_patterns` to exempt the risk classifier s
 
 Limits worth knowing:
 
-- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is rejected instead.
+- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and allowed unless smart approvals reviews it. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
 - External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
 - Windows is skipped because exec runs PowerShell there; the built-in regex/PowerShell deny patterns still apply.
 
 ### Smart approvals
 
-`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Set it to `"smart"` to add a second opinion only for commands that the static guards cannot classify, without asking a model about every command:
+`approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Unknown commands run in this mode. Set it to `"smart"` to add a second opinion only for commands that the static guards cannot classify, without asking a model about every command:
 
 1. **Hardline and custom deny rules stay final.** Catastrophic operations such as `rm -rf /`, recursive deletion of `/etc`, `/usr`, `/home` or `/root`, `mkfs`, `dd if=`, `shutdown`, `reboot`, `poweroff`, fork bombs and `kill -1` are rejected directly. The Guardian is never consulted for them.
 2. **Default deny pattern hits stay blocked.** A command caught by the built-in regex set is rejected even in smart mode; the Guardian only reviews commands the risk classifier cannot resolve.
-3. **Risk levels keep following `risk_threshold`.** A command at or above `risk_threshold` is rejected even in smart mode, and one below it is allowed. The Guardian is not consulted for known risk levels.
-4. **Only unknown commands are reviewed.** On Unix, dynamic command names, opaque shells and unparseable scripts are flagged as unknown and sent to the Guardian instead of being rejected outright.
+3. **Known risk levels keep following `risk_threshold`.** A command at or above `risk_threshold` is rejected even in smart mode, and one below it is allowed. The Guardian is not consulted for known risk levels.
+4. **Only unknown commands are reviewed.** On Unix, dynamic command names, opaque shells and unparseable scripts are flagged as unknown and sent to the Guardian; with approvals off they are allowed.
 5. **Allowlist, workspace and path checks still run first.** The Guardian cannot approve a command that fails the allowlist or tries to escape the workspace.
 6. **The Guardian answers with one word.** `APPROVE` runs the command, `DENY` blocks it, and `ESCALATE` blocks it because manual approval is not implemented yet. Any other response is treated as `ESCALATE`.
 
@@ -289,7 +302,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 ## Functionality
 
 - **`enable_deny_patterns`**: Set to `false` to disable the built-in default dangerous-command patterns. The hardline floor and `custom_deny_patterns` still apply.
-- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow patterns cannot exempt them.
+- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow or unlock patterns cannot exempt them.
 
 ## Hardline Always-On Patterns
 

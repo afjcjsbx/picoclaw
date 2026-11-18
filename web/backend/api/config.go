@@ -426,6 +426,9 @@ func validateConfig(cfg *config.Config) []string {
 		errs = append(
 			errs,
 			validateRegexPatterns("tools.exec.custom_allow_patterns", cfg.Tools.Exec.CustomAllowPatterns)...)
+		errs = append(
+			errs,
+			validateRegexPatterns("tools.exec.custom_unlock_patterns", cfg.Tools.Exec.CustomUnlockPatterns)...)
 	}
 
 	return errs

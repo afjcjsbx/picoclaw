@@ -1526,6 +1526,14 @@ type ExecConfig struct {
 	CustomAllowPatterns []string `                                 json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
 	TimeoutSeconds      int      `                                 json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"`  // 0 means use default (180s)
 	MaxOutputChars      int      `                                 json:"max_output_chars"      env:"PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS"` // 0 means use default (50000 chars)
+
+	// CustomUnlockPatterns is a full-command operator allowlist that takes
+	// precedence over the default deny set, the allowlist, the AST risk
+	// classifier and smart approvals. Hardline patterns, custom deny patterns
+	// and the workspace boundary still apply. Use it only for specific
+	// commands the operator explicitly trusts.
+	CustomUnlockPatterns []string `json:"custom_unlock_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_UNLOCK_PATTERNS"`
+
 	// RiskThreshold is the highest risk level allowed when the built-in
 	// dangerous-command guard is enabled: low, medium, high or critical.
 	// Empty means medium.

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exec now supports `tools.exec.custom_unlock_patterns`: full-command regular expressions that let an explicitly trusted command skip the default deny set, the allowlist, the risk classifier and smart approvals. Every other command keeps the configured thresholds, and hardline, custom deny and the workspace boundary still apply.
 - Exec now breaks out of a retry loop on blocked commands: after three consecutive identical guard rejections in one conversation, the result carries a `HARD STOP` message telling the model to stop retrying, rewording or splitting the command and to report the blocker instead. The breaker is process-local and bounded (64 conversations, one 64-bit hash and a counter each), and resets on a different command, an allowed run or `/clear`.
 - `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
 - Exec remembers the cwd where a foreground command ended and reuses it in later calls of the same conversation. On Unix a shell wrapper appends a `pwd -P` marker, so `cd` inside the command is observed; the path is reported as `cwd` in the `[exec]` header and stored only when it is inside the workspace and still exists. The model-side `env` argument was removed because environment variables are not visible to the command guard; operators still control the child environment with `tools.exec.env_set` and `tools.exec.env_allowlist`, and per-command values use an inline `FOO=bar command` assignment.
@@ -16,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Exec no longer rejects commands the risk classifier cannot resolve. Dynamic command names, opaque shells and unparseable commands are allowed by default; `approvals.mode: "smart"` still sends them to the Guardian. Known risk levels above `risk_threshold` and dynamic operands for destructive commands remain blocked.
 - The exec tool description is about 40% shorter and renders the OS and shell in its first line. Windows gets PowerShell-specific chaining guidance and omits the Unix-only trailing-`&`, `nohup`, `setsid` and `disown` notes, so the model is not taught commands the platform rejects.
 - Exec (Unix): a trailing `&` now starts a tracked background session instead of leaving an untracked process whose output pipe is closed. A foreground command that times out now points the model at `background=true` for servers, daemons, and watch processes. Other detaching forms — an inner `&` (`a & b`, `a & # comment`) and `nohup`/`setsid`/`disown` in a foreground run — are rejected with guidance to use `background=true`, so no process escapes session tracking.
 - Background sessions now keep only a 100 KB rolling window in memory; the complete stream spills to an artifact (up to 5,000,000 bytes) as soon as the window overflows. `poll`, `wait`, `read` and `kill` return `artifactPath`/`artifactCapped`, so earlier output stays readable without 1 MB of RAM per session.

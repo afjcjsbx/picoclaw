@@ -34,8 +34,8 @@ func TestShellTool_RiskClassifierBlocksDefault(t *testing.T) {
 	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); !strings.Contains(got, "risk classifier") {
 		t.Fatalf("chmod +x should be blocked by the risk classifier, got %q", got)
 	}
-	if got := tool.guardCommand("x=rm; $x -rf /", t.TempDir()); !strings.Contains(got, "dynamic command name") {
-		t.Fatalf("variable indirection should be blocked, got %q", got)
+	if got := tool.guardCommand("rm -r build", t.TempDir()); !strings.Contains(got, "risk classifier") {
+		t.Fatalf("known high-risk command should be blocked, got %q", got)
 	}
 	if got := tool.guardCommand("ls -la", t.TempDir()); got != "" {
 		t.Fatalf("safe command should pass, got %q", got)
@@ -50,8 +50,6 @@ func TestShellTool_RiskNestedLaunchers(t *testing.T) {
 		"command rm -rf -v build",
 		"command chmod -v 777 script.sh",
 		"command ssh -v host",
-		"env -u NAME -S 'rm -rf build'",
-		"env -C /tmp -S 'rm -rf build'",
 		"busybox sh -c 'rm -rf build'",
 		"busybox rm -rf build",
 	}
@@ -77,12 +75,32 @@ func TestShellTool_RiskNestedLaunchers(t *testing.T) {
 	}
 }
 
-func TestShellTool_ParseFailureBlocked(t *testing.T) {
+func TestShellTool_UnknownCommandsAllowedByDefault(t *testing.T) {
+	t.Parallel()
+
+	tool := riskTestTool(t, config.ExecConfig{})
+	allowed := []string{
+		"sh script.sh",
+		"bash scripts/deploy.sh",
+		"x=echo; $x ok",
+		"xargs sh -c 'echo ok'",
+		`trap "$ACTION" EXIT`,
+		"env -S 'echo ok'",
+		"echo )",
+	}
+	for _, command := range allowed {
+		if got := tool.guardCommand(command, t.TempDir()); got != "" {
+			t.Errorf("unknown command %q should be allowed by default, got %q", command, got)
+		}
+	}
+}
+
+func TestShellTool_ParseFailureAllowedByRiskGuard(t *testing.T) {
 	t.Parallel()
 
 	unrestricted := riskTestTool(t, config.ExecConfig{})
-	if got := unrestricted.guardCommand("echo )", t.TempDir()); !strings.Contains(got, "could not be parsed") {
-		t.Fatalf("risk guard should reject a parse failure, got %q", got)
+	if got := unrestricted.guardCommand("echo )", t.TempDir()); got != "" {
+		t.Fatalf("risk guard should allow an unclassifiable command, got %q", got)
 	}
 
 	restricted, err := NewExecTool(t.TempDir(), true)
@@ -111,10 +129,10 @@ func TestShellTool_RiskClassifierExecute(t *testing.T) {
 
 	result = tool.Execute(ctx, map[string]any{
 		"action":  "run",
-		"command": "x=rm; $x -rf /",
+		"command": "x=echo; $x ok",
 	})
-	if !result.IsError || !strings.Contains(result.ForLLM, "dynamic command name") {
-		t.Fatalf("variable indirection should be rejected, got: %s", result.ForLLM)
+	if result.IsError {
+		t.Fatalf("variable indirection should be allowed as unknown, got: %s", result.ForLLM)
 	}
 
 	allowed := riskTestTool(t, config.ExecConfig{RiskThreshold: "high"})
@@ -234,6 +252,82 @@ func TestShellTool_RiskRmCalibration(t *testing.T) {
 	}
 	if got := high.guardCommand("rm -rf build", dir); !strings.Contains(got, "risk classifier") {
 		t.Fatalf("rm -rf should stay blocked at high, got %q", got)
+	}
+}
+
+func TestShellTool_CustomUnlockPatternsAllowListedCommands(t *testing.T) {
+	t.Parallel()
+
+	tool := riskTestTool(t, config.ExecConfig{
+		RiskThreshold: "medium",
+		CustomUnlockPatterns: []string{
+			`^sh script\.sh$`,
+			`^sh -c 'rm -rf build'$`,
+			`^chmod \+x build\.sh$`,
+			`^git push origin main$`,
+		},
+	})
+
+	for _, command := range []string{
+		"sh script.sh",
+		"sh -c 'rm -rf build'",
+		"chmod +x build.sh",
+		"git push origin main",
+	} {
+		if got := tool.guardCommand(command, t.TempDir()); got != "" {
+			t.Errorf("unlocked command %q blocked: %q", command, got)
+		}
+	}
+
+	for _, command := range []string{
+		"chmod +x other.sh",
+		"systemctl start nginx",
+	} {
+		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "risk classifier") {
+			t.Errorf("default threshold should still block %q, got %q", command, got)
+		}
+	}
+}
+
+func TestShellTool_CustomUnlockPatternsKeepSafetyFloors(t *testing.T) {
+	t.Parallel()
+
+	tool := riskTestTool(t, config.ExecConfig{
+		RiskThreshold:        "medium",
+		CustomUnlockPatterns: []string{`.*`},
+		CustomDenyPatterns:   []string{`^sh blocked\.sh$`},
+	})
+
+	if got := tool.guardCommand("rm -rf /", t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("unlock patterns must not bypass hardline, got %q", got)
+	}
+	if got := tool.guardCommand("sh blocked.sh", t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("unlock patterns must not bypass custom deny, got %q", got)
+	}
+}
+
+func TestShellTool_CustomUnlockPatternsKeepWorkspaceBoundary(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	cfg := &config.Config{
+		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
+		Tools: config.ToolsConfig{Exec: config.ExecConfig{
+			EnableDenyPatterns:   true,
+			CustomUnlockPatterns: []string{`^sh .*$`},
+		}},
+	}
+	tool, err := NewExecToolWithConfig(workspace, true, cfg)
+	if err != nil {
+		t.Fatalf("NewExecToolWithConfig: %v", err)
+	}
+
+	if got := tool.guardCommand("sh script.sh", workspace); got != "" {
+		t.Fatalf("unlocked in-workspace command blocked: %q", got)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.sh")
+	if got := tool.guardCommand("sh "+outside, workspace); got == "" {
+		t.Fatal("unlock patterns must not bypass the workspace boundary")
 	}
 }
 

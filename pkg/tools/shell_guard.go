@@ -27,6 +27,14 @@ func (t *ExecTool) commandMatchesCustomRiskAllowPattern(lower string) bool {
 	return patternsMatchAny(t.customRiskAllowPatterns, []string{lower})
 }
 
+// commandMatchesCustomUnlockPattern reports whether an operator unlock rule
+// matches the whole command. A match skips the default deny set, the allowlist,
+// the risk classifier and smart approvals; hardline, custom deny and the
+// workspace boundary still run.
+func (t *ExecTool) commandMatchesCustomUnlockPattern(lower string) bool {
+	return patternsMatchAny(t.customUnlockPatterns, []string{lower})
+}
+
 // riskAllowExempts reports whether a matching custom risk allow pattern covers
 // the whole command and the command stays within riskAllowThreshold. It uses a
 // second guard with that threshold so a later critical command cannot hide
@@ -61,18 +69,22 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //     self-protection). They apply even with enable_deny_patterns=false, no
 //     allow rule exempts them and the Guardian is never consulted.
 //  3. Custom deny patterns: always enforced and stronger than any allow rule.
-//  4. Default deny patterns: exempted only by custom_allow_patterns. A hit is
+//  4. Custom unlock patterns: full-command operator allowlist. A match skips
+//     the default deny set, the allowlist, the risk classifier and smart
+//     approvals; hardline, custom deny and the workspace boundary still run.
+//  5. Default deny patterns: exempted only by custom_allow_patterns. A hit is
 //     always rejected, also in smart mode.
-//  5. Allowlist: when allow patterns are set, the command must match one.
-//  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
+//  6. Allowlist: when allow patterns are set, the command must match one.
+//  7. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
 //     check, then the AST path guard on Unix or the path scanner on Windows.
-//  7. Risk level: the AST classifier rates the command low to critical and
+//  8. Risk level: the AST classifier rates the command low to critical and
 //     rejects anything above risk_threshold, unless custom_risk_allow_patterns
-//     exempts it up to risk_allow_threshold. Unparseable commands and dynamic
-//     command names count as unknown and are rejected whatever the threshold.
-//  8. Smart approvals: only commands whose risk cannot be classified (layer 7
-//     unknown) are reviewed by the Guardian model. APPROVE runs the command;
-//     DENY, ESCALATE and any error block it.
+//     exempts it up to risk_allow_threshold. Commands the classifier cannot
+//     resolve (dynamic command names, opaque shells, parse errors) are allowed
+//     by default; dynamic operands for destructive commands are still rejected.
+//  9. Smart approvals: only unknown commands (layer 8) are reviewed by the
+//     Guardian model. APPROVE runs the command; DENY, ESCALATE and any error
+//     block it. With approvals off, unknown commands run.
 func (t *ExecTool) guardCommandContext(ctx context.Context, command, cwd string) string {
 	return t.guardCommandWithAnalysis(ctx, command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
 }
@@ -129,11 +141,16 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
+	// An operator unlock rule is an explicit per-command exception. It skips
+	// the default deny set, the allowlist, the risk classifier and smart
+	// approvals, but never the hardline floor or the workspace boundary.
+	unlocked := t.commandMatchesCustomUnlockPattern(lower)
+
 	// Default deny patterns can be exempted by custom allow patterns, so
 	// operators can selectively permit normally-blocked commands. A hit is
 	// final: smart approvals only review commands that the risk classifier
 	// cannot resolve, never ones a known-dangerous pattern already matched.
-	if !t.commandMatchesCustomAllowPattern(lower) {
+	if !unlocked && !t.commandMatchesCustomAllowPattern(lower) {
 		// Use the same canonical forms as the hardline/custom layers. This
 		// catches shell-equivalent spellings such as g\it, which the raw
 		// lowerForDeny form does not expose.
@@ -142,7 +159,7 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		}
 	}
 
-	if len(t.allowPatterns) > 0 {
+	if !unlocked && len(t.allowPatterns) > 0 {
 		if !t.commandMatchesAllowPattern(lower) {
 			return "Command blocked by safety guard (not in allowlist)"
 		}
@@ -199,24 +216,28 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`. Only an
 	// explicit custom risk allow pattern can exempt it, and only up to
 	// riskAllowThreshold; custom_allow_patterns no longer bypasses this layer.
-	// Risk levels are authoritative in smart mode too: the Guardian only gets
-	// commands the classifier cannot resolve (unknown), never a known risk.
-	if t.riskGuard != nil {
+	// Known commands above the threshold are rejected. Unknown commands are
+	// allowed by default and go to the Guardian only when smart approvals is on.
+	if t.riskGuard != nil && !unlocked {
 		assessment := t.riskGuard.AssessFile(cmd, parsed)
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
 		riskExempt := t.riskAllowExempts(cmd, lower)
-		if assessment.Unknown && !riskExempt && t.approvalEnabled {
-			description := assessment.Reason
-			if description == "" {
-				description = "command risk could not be classified"
-			}
-			if blocked := t.reviewCommand(ctx, cmd, description); blocked != "" {
-				return blocked
+		if assessment.Unknown {
+			// Unknown commands are allowed by default. Smart approvals can
+			// still review them; without a reviewer the command runs.
+			if !riskExempt && t.approvalEnabled {
+				description := assessment.Reason
+				if description == "" {
+					description = "command risk could not be classified"
+				}
+				if blocked := t.reviewCommand(ctx, cmd, description); blocked != "" {
+					return blocked
+				}
 			}
 		} else if !riskExempt &&
-			(assessment.Unknown || !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold())) {
+			!shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}
 	}

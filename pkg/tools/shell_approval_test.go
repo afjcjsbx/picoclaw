@@ -147,6 +147,20 @@ func TestSmartApprovalSkipsSafeCommands(t *testing.T) {
 	}
 }
 
+func TestSmartApprovalSkipsUnlockedCommands(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Tools.Exec.CustomUnlockPatterns = []string{`^sh script\.sh$`}
+	tool, reviewer := newSmartTestTool(t, cfg, approvalDeny)
+	if got := tool.guardCommand("sh script.sh", t.TempDir()); got != "" {
+		t.Fatalf("guardCommand() = %q, want allowed by unlock pattern", got)
+	}
+	if reviewer.calls != 0 {
+		t.Fatalf("reviewer calls = %d, want 0", reviewer.calls)
+	}
+}
+
 func TestSmartApprovalUnavailableFailsClosed(t *testing.T) {
 	t.Parallel()
 
