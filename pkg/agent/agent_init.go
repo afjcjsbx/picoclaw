@@ -305,8 +305,6 @@ func registerSharedTools(
 		catalog := agent.ContextBuilder.SkillCatalog()
 		agent.Tools.Register(integrationtools.NewSkillsSearchTool(catalog))
 		agent.Tools.Register(integrationtools.NewSkillsReadTool(catalog))
-		_, hasSkillTools := agent.Tools.Get("skills_search")
-		agent.ContextBuilder.WithSkillDiscovery(hasSkillTools)
 
 		// Skill discovery and installation tools
 		skills_enabled := cfg.Tools.IsToolEnabled("skills")

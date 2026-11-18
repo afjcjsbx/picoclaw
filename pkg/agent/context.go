@@ -21,12 +21,9 @@ import (
 )
 
 type ContextBuilder struct {
-	workspace    string
-	skillsLoader *skills.SkillsLoader
-	skillCatalog *skills.Catalog
-	// skillDiscovery adds the skills_search/skills_read instructions to the
-	// prompt; it is on unless the agent has no such tools.
-	skillDiscovery bool
+	workspace      string
+	skillsLoader   *skills.SkillsLoader
+	skillCatalog   *skills.Catalog
 	memory         *MemoryStore
 	splitOnMarker  bool
 	agentDiscovery func(agentID string) []AgentDescriptor
@@ -151,7 +148,6 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 		workspace:      workspace,
 		skillsLoader:   loader,
 		skillCatalog:   skills.NewCatalog(loader),
-		skillDiscovery: true,
 		memory:         NewMemoryStore(workspace),
 		promptRegistry: NewPromptRegistry(),
 	}
@@ -161,14 +157,6 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 // skills_read tools.
 func (cb *ContextBuilder) SkillCatalog() *skills.Catalog {
 	return cb.skillCatalog
-}
-
-// WithSkillDiscovery sets whether the prompt tells the model to use the
-// skills_search and skills_read tools. Turn it off for agents without them.
-func (cb *ContextBuilder) WithSkillDiscovery(enabled bool) *ContextBuilder {
-	cb.skillDiscovery = enabled
-	cb.InvalidateCache()
-	return cb
 }
 
 func (cb *ContextBuilder) RegisterPromptSource(desc PromptSourceDescriptor) error {
@@ -469,7 +457,7 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 
 	// Skills are discovered on demand: the prompt only explains the tools, so
 	// it stays the same size however many skills are installed.
-	if opts.IncludeSkillCatalog && opts.IncludeToolUseRule && cb.skillDiscovery &&
+	if opts.IncludeSkillCatalog && opts.IncludeToolUseRule &&
 		promptAllowsTool(PromptBuildRequest{AllowedTools: opts.AllowedTools}, "skills_search") {
 		add(PromptPart{
 			ID:      "capability.skill_catalog",
