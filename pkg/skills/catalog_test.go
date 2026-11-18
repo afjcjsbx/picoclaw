@@ -127,6 +127,18 @@ func TestCatalogReadFullInstructions(t *testing.T) {
 	assert.Equal(t, "api notes", body)
 }
 
+func TestCatalogReadSkillMDIgnoresCase(t *testing.T) {
+	c, ws := newTestCatalog(t)
+	dir := writeSkill(t, ws, "alpha", "Handles giraffes", "the body")
+	if _, err := os.Stat(filepath.Join(dir, "skill.md")); err != nil {
+		t.Skip("case-sensitive filesystem: skill.md does not resolve to SKILL.md")
+	}
+
+	body, err := c.Read(context.Background(), "alpha", "skill.md")
+	require.NoError(t, err)
+	assert.Equal(t, "the body", body, "frontmatter stripped whatever the spelling")
+}
+
 func TestCatalogReadMissingSkill(t *testing.T) {
 	c, ws := newTestCatalog(t)
 	writeSkill(t, ws, "real", "A real skill", "x")

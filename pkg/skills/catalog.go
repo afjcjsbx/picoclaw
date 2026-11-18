@@ -273,7 +273,7 @@ func (c *Catalog) Read(ctx context.Context, name, relPath string) (string, error
 	if !utf8.Valid(data) {
 		return "", fmt.Errorf("%q is not a text file", relPath)
 	}
-	if relPath == "SKILL.md" {
+	if strings.EqualFold(relPath, "SKILL.md") { // case-insensitive filesystems open skill.md too
 		_, body := splitFrontmatter(string(data))
 		return body, nil
 	}
