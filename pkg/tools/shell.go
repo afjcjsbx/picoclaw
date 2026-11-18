@@ -89,50 +89,16 @@ type ExecTool struct {
 var _ AsyncExecutor = (*ExecTool)(nil)
 
 var (
+	// defaultDenyPatterns is the optional Unix deny set. The AST risk
+	// classifier is the source of truth for command danger; this set only
+	// covers shell constructs that hide a command from the AST: command
+	// substitution, backticks, pipe-to-shell and shell heredocs. Command names
+	// such as sudo, chmod, git push or docker run are classified by risk.go.
 	defaultDenyPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`\bdel\s+/[fq]\b`),
-		regexp.MustCompile(`\brmdir\s+/s\b`),
-		// Match disk wiping commands (must be followed by space/args)
-		regexp.MustCompile(
-			`(^|[^-\w])\b(format|mkfs|diskpart)\b\s`,
-		),
-		regexp.MustCompile(`\bdd\s+if=`),
-		// Block writes to block devices (all common naming schemes).
-		regexp.MustCompile(
-			`>\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d)`,
-		),
-		regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
-		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
 		regexp.MustCompile(`\$\([^)]+\)`),
-		regexp.MustCompile(`\$\{[^}]+\}`),
 		regexp.MustCompile("`[^`]+`"),
-		regexp.MustCompile(`\|\s*sh\b`),
-		regexp.MustCompile(`\|\s*bash\b`),
-		regexp.MustCompile(`<<\s*EOF`),
-		regexp.MustCompile(`\$\(\s*cat\s+`),
-		regexp.MustCompile(`\$\(\s*curl\s+`),
-		regexp.MustCompile(`\$\(\s*wget\s+`),
-		regexp.MustCompile(`\$\(\s*which\s+`),
-		regexp.MustCompile(`\bsudo\b`),
-		regexp.MustCompile(`\bchmod\s+[0-7]{3,4}\b`),
-		regexp.MustCompile(`\bchown\b`),
-		regexp.MustCompile(`\bpkill\b`),
-		regexp.MustCompile(`\bkillall\b`),
-		regexp.MustCompile(`\bkill\b`),
-		regexp.MustCompile(`\bcurl\b.*\|\s*(sh|bash)`),
-		regexp.MustCompile(`\bwget\b.*\|\s*(sh|bash)`),
-		regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
-		regexp.MustCompile(`\bpip\s+install\s+--user\b`),
-		regexp.MustCompile(`\bapt\s+(install|remove|purge)\b`),
-		regexp.MustCompile(`\byum\s+(install|remove)\b`),
-		regexp.MustCompile(`\bdnf\s+(install|remove)\b`),
-		regexp.MustCompile(`\bdocker\s+run\b`),
-		regexp.MustCompile(`\bdocker\s+exec\b`),
-		regexp.MustCompile(`\bgit\s+push\b`),
-		regexp.MustCompile(`\bgit\s+force\b`),
-		regexp.MustCompile(`\bssh\b.*@`),
-		regexp.MustCompile(`\beval\b`),
-		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
+		regexp.MustCompile(`\|&?\s*(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)\b`),
+		regexp.MustCompile(`\b(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)\b[^|;&\n]*<<`),
 	}
 
 	// hardlineDenyPatterns are catastrophic commands that stay blocked even when
@@ -169,9 +135,21 @@ var (
 		regexp.MustCompile(`\b(?:shutdown|reboot|poweroff)\b`),
 	}
 
-	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
-	// apply on Windows, where commands are executed via powershell -Command.
+	// windowsDenyPatterns contains the Windows-only regex floor. The AST risk
+	// classifier is POSIX-only and skipped on Windows, so the generic command
+	// patterns that risk.go covers on Unix stay here, next to the PowerShell
+	// specific patterns.
 	windowsDenyPatterns = []*regexp.Regexp{
+		// Generic command risks that risk.go classifies on Unix.
+		regexp.MustCompile(`\bdel\s+/[fq]\b`),
+		regexp.MustCompile(`\brmdir\s+/s\b`),
+		regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
+		regexp.MustCompile(`\bpip\s+install\s+--user\b`),
+		regexp.MustCompile(`\bdocker\s+(?:run|exec)\b`),
+		regexp.MustCompile(`\bgit\s+push\b`),
+		regexp.MustCompile(`\bgit\s+force\b`),
+		regexp.MustCompile(`\bssh\b.*@`),
+		regexp.MustCompile(`\b(?:kill|pkill|killall)\b`),
 		// The AST risk classifier is POSIX-only and skipped on Windows, so keep
 		// a regex floor for recursive/forced rm there.
 		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),

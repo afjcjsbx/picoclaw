@@ -18,12 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Exec no longer rejects commands the risk classifier cannot resolve. Dynamic command names, opaque shells and unparseable commands are allowed by default; `approvals.mode: "smart"` still sends them to the Guardian. Known risk levels above `risk_threshold` and dynamic operands for destructive commands remain blocked.
+- Exec on Unix now treats the AST risk classifier as the single source of truth for command danger. The regex default deny set only covers shell constructs the AST cannot inspect (command substitution, pipe-to-shell, shell heredocs); command patterns such as `sudo`, `chmod`, `git push` and `docker run` now follow `risk_threshold`. Windows keeps the equivalent generic command patterns in its Windows-only regex floor because the classifier is POSIX-only.
 - The exec tool description is about 40% shorter and renders the OS and shell in its first line. Windows gets PowerShell-specific chaining guidance and omits the Unix-only trailing-`&`, `nohup`, `setsid` and `disown` notes, so the model is not taught commands the platform rejects.
 - Exec (Unix): a trailing `&` now starts a tracked background session instead of leaving an untracked process whose output pipe is closed. A foreground command that times out now points the model at `background=true` for servers, daemons, and watch processes. Other detaching forms — an inner `&` (`a & b`, `a & # comment`) and `nohup`/`setsid`/`disown` in a foreground run — are rejected with guidance to use `background=true`, so no process escapes session tracking.
 - Background sessions now keep only a 100 KB rolling window in memory; the complete stream spills to an artifact (up to 5,000,000 bytes) as soon as the window overflows. `poll`, `wait`, `read` and `kill` return `artifactPath`/`artifactCapped`, so earlier output stays readable without 1 MB of RAM per session.
 - A background run without `notify=true` now says that no completion message will be sent and points at `wait`/`poll`/`read`/`kill`, so the model no longer assumes it will be woken when a bounded job ends.
 - Foreground results now include an `exitNote` for well-known non-error statuses: `grep`/`rg` exit 1 (no matches), `diff` exit 1 (files differ), `test`/`[` exit 1 (false) and `git` exit 1 (often normal). This avoids turns spent investigating expected results.
-- The exec guard now parses a command once and shares the AST for quoted-heredoc stripping, canonical deny forms, workspace validation and risk classification.
+- The exec guard now parses a command once and shares the AST for quoted-heredoc stripping, canonical deny forms, workspace validation and risk classification. Fixed rewrites such as `$IFS` use a normalized risk parse, so an obfuscated command name cannot fall back to an allowed unknown.
 
 ### Security
 

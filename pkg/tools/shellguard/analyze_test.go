@@ -11,6 +11,9 @@ func TestAnalyzeSharesParse(t *testing.T) {
 	if analysis.File == nil {
 		t.Fatal("Analyze() returned a nil file for a valid command")
 	}
+	if analysis.RiskFile != analysis.File {
+		t.Fatal("RiskFile should share File when no fixed rewrite is needed")
+	}
 	if !strings.Contains(analysis.StrippedHeredoc, "[quoted heredoc omitted]") {
 		t.Fatalf("StrippedHeredoc = %q, want the placeholder", analysis.StrippedHeredoc)
 	}
@@ -29,5 +32,21 @@ func TestAnalyzeFlagsFixedRewrites(t *testing.T) {
 	analysis := Analyze("echo ${IFS}hi")
 	if analysis.CanonicalExact {
 		t.Fatal("CanonicalExact = true for a command with ${IFS}")
+	}
+}
+
+func TestAnalyzeNormalizesRiskFile(t *testing.T) {
+	const command = "git${IFS}push origin main"
+	analysis := Analyze(command)
+	if analysis.RiskFile == nil {
+		t.Fatal("Analyze() returned a nil RiskFile")
+	}
+	if analysis.RiskFile == analysis.File {
+		t.Fatal("RiskFile should be the normalized parse for a fixed rewrite")
+	}
+
+	assessment := mustGuard(t, "medium").AssessFile(command, analysis.RiskFile)
+	if assessment.Level != RiskHigh {
+		t.Fatalf("RiskFile assessment = %s, want high for git push", assessment.Level)
 	}
 }

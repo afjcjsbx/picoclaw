@@ -52,8 +52,9 @@ func patternsMatchAny(patterns []*regexp.Regexp, forms []string) bool {
 //  4. Custom unlock patterns: full-command operator exceptions. A match skips
 //     the default deny set, the risk classifier and smart approvals; hardline,
 //     custom deny and the workspace boundary still run.
-//  5. Default deny patterns: exempted only by custom_allow_patterns. A hit is
-//     always rejected, also in smart mode.
+//  5. Default deny patterns: the shell constructs the AST cannot inspect
+//     (command substitution, pipe-to-shell, shell heredocs). Exempted only by
+//     custom_allow_patterns; a hit is always rejected, also in smart mode.
 //  6. Workspace boundary (restrict_to_workspace): a byte-level path-traversal
 //     check, then the AST path guard on Unix or the path scanner on Windows.
 //  7. Risk level: the AST classifier rates the command low to critical and
@@ -137,9 +138,10 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		}
 	}
 
-	// The workspace and risk passes share the same AST. CheckWorkspaceFile
-	// re-parses only when fixed shell rewrites changed the word boundaries.
+	// The workspace and risk passes share the same parse unless fixed rewrites
+	// changed word boundaries; RiskFile then holds the normalized parse.
 	parsed := analysis.File
+	riskFile := analysis.RiskFile
 
 	if t.restrictToWorkspace {
 		// The AST pass understands ... components, but these dotted variants
@@ -191,7 +193,7 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	// commands are allowed by default and go to the Guardian only when smart
 	// approvals is on.
 	if t.riskGuard != nil && !unlocked {
-		assessment := t.riskGuard.AssessFile(cmd, parsed)
+		assessment := t.riskGuard.AssessFile(cmd, riskFile)
 		if assessment.Reject {
 			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
 		}

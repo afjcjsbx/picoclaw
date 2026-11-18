@@ -1516,8 +1516,10 @@ type ArgModifierConfig struct {
 
 // ExecConfig configures shell command execution.
 //
-// EnableDenyPatterns only disables the optional built-in default deny set;
-// hardline patterns and CustomDenyPatterns still apply when it is false.
+// EnableDenyPatterns disables the optional built-in guard set: the Unix
+// shell-construct deny patterns and the AST risk classifier. Hardline patterns
+// and CustomDenyPatterns still apply when it is false. Smart approvals keep the
+// Unix classifier active for the Guardian gate.
 type ExecConfig struct {
 	ToolConfig          `         envPrefix:"PICOCLAW_TOOLS_EXEC_"`
 	EnableDenyPatterns  bool     `                                 json:"enable_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`

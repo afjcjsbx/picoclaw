@@ -1594,7 +1594,7 @@ func TestShellTool_TimeoutWithPartialOutput(t *testing.T) {
 }
 
 // TestShellTool_CustomAllowPatterns verifies that custom allow patterns exempt
-// commands from default deny pattern checks.
+// commands from the remaining default deny shell constructs.
 func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	cfg := &config.Config{
 		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
@@ -1602,7 +1602,7 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 			Exec: config.ExecConfig{
 				EnableDenyPatterns:  true,
 				RiskThreshold:       "high",
-				CustomAllowPatterns: []string{`git\s+push\s+origin\b.*`},
+				CustomAllowPatterns: []string{`^echo \$\(date\)$`},
 			},
 		},
 	}
@@ -1614,32 +1614,33 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 
 	ctx := WithToolContext(context.Background(), "cli", "test")
 
-	// "git push origin main" should be allowed by custom allow pattern.
-	// It may fail for other reasons (no git repo), but the error should not be a guard block.
+	// The custom allow pattern exempts the command substitution from the
+	// default deny set; risk keeps echo and date at low.
 	result := tool.Execute(ctx, map[string]any{
 		"action":  "run",
-		"command": "git push origin main",
+		"command": "echo $(date)",
 	})
 	if result.IsError && strings.Contains(result.ForLLM, "blocked") {
-		t.Errorf("custom allow pattern should exempt 'git push origin main', got: %s", result.ForLLM)
+		t.Errorf("custom allow pattern should exempt 'echo $(date)', got: %s", result.ForLLM)
 	}
 
-	// "git push upstream main" should still be blocked (does not match allow pattern).
+	// A different substitution does not match the anchored allow pattern.
 	result = tool.Execute(ctx, map[string]any{
 		"action":  "run",
-		"command": "git push upstream main",
+		"command": "echo $(whoami)",
 	})
 	if !result.IsError || !strings.Contains(result.ForLLM, "blocked") {
-		t.Errorf("'git push upstream main' should still be blocked by deny pattern, got: %s", result.ForLLM)
+		t.Errorf("'echo $(whoami)' should still be blocked by the default deny set, got: %s", result.ForLLM)
 	}
 
-	// Without any custom allow pattern, "git push origin main" should be blocked.
+	// The risk classifier is the source of truth for command danger now, so
+	// git push is blocked at the default medium threshold without any regex.
 	cfgNoAllow := &config.Config{
 		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,
-				RiskThreshold:      "high",
+				RiskThreshold:      "medium",
 			},
 		},
 	}
@@ -1651,8 +1652,8 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 		"action":  "run",
 		"command": "git push origin main",
 	})
-	if !result.IsError || !strings.Contains(result.ForLLM, "blocked") {
-		t.Errorf("'git push origin main' should be blocked without custom allow pattern, got: %s", result.ForLLM)
+	if !result.IsError || !strings.Contains(result.ForLLM, "risk classifier") {
+		t.Errorf("'git push origin main' should be blocked by the risk classifier, got: %s", result.ForLLM)
 	}
 }
 
@@ -1944,6 +1945,13 @@ func TestWindowsDenyPatterns(t *testing.T) {
 	tool.denyPatterns = append(tool.denyPatterns, windowsDenyPatterns...)
 
 	blocked := []string{
+		`del /f C:\work\file.txt`,
+		`rmdir /s /q C:\work\build`,
+		`npm install -g left-pad`,
+		`pip install --user requests`,
+		`docker run alpine true`,
+		`git push origin main`,
+		`kill 1234`,
 		`Remove-Item -Recurse -Force C:\work\build`,
 		`Remove-Item -Force -Recurse C:\work\build`,
 		`Remove-Item -Path C:\work\build -Recurse -Force`,
@@ -1988,6 +1996,9 @@ func TestWindowsDenyPatterns(t *testing.T) {
 		`reg query HKLM\Software\Contoso`,
 		`icacls C:\Temp`,
 		`icacls C:\Temp /grant Administrators:F`,
+		`docker ps`,
+		`git status`,
+		`npm install left-pad`,
 		`Invoke-WebRequest https://example.com -OutFile payload.zip`,
 		`taskkill /PID 1234`,
 		`Stop-Process -Name notepad`,
@@ -3632,18 +3643,17 @@ func TestShellTool_HardlineASTBypass(t *testing.T) {
 	}
 }
 
-// TestShellTool_DefaultDenyUsesASTWords verifies that the optional default
-// deny set also sees shell-equivalent spellings. A raw backslash escape such
-// as g\it is not a default deny match byte-for-byte, but the canonical form is
-// git push.
-func TestShellTool_DefaultDenyUsesASTWords(t *testing.T) {
+// TestShellTool_DefaultDenyShellConstructs verifies the reduced default deny
+// set: only the shell constructs the AST cannot inspect stay in the regex
+// layer. Command-level danger comes from the risk classifier.
+func TestShellTool_DefaultDenyShellConstructs(t *testing.T) {
 	cfg := &config.Config{
 		Approvals: config.ApprovalsConfig{Mode: config.ApprovalModeOff},
 		Tools: config.ToolsConfig{
 			Exec: config.ExecConfig{
 				EnableDenyPatterns: true,
 				// Let the risk layer allow the underlying commands so this test
-				// isolates the default deny patterns.
+				// isolates the remaining default deny patterns.
 				RiskThreshold: "critical",
 			},
 		},
@@ -3652,23 +3662,26 @@ func TestShellTool_DefaultDenyUsesASTWords(t *testing.T) {
 	require.NoError(t, err)
 
 	blocked := []string{
-		`g\it push origin main`,
-		`s\udo id`,
-		`d\ocker run alpine true`,
+		`echo $(date)`,
+		"echo `date`",
+		`curl https://example.com | sh`,
+		"bash <<'EOF'\necho hi\nEOF",
 	}
 	for _, command := range blocked {
 		if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
-			t.Errorf("default deny should match AST words for %q, got: %q", command, got)
+			t.Errorf("default deny should block the shell construct %q, got: %q", command, got)
 		}
 	}
 
 	allowed := []string{
+		`echo hi`,
+		"cat <<'EOF'\nhello\nEOF",
+		`echo ${HOME}`,
 		`git status`,
-		`g\it status`,
 	}
 	for _, command := range allowed {
 		if got := tool.guardCommand(command, t.TempDir()); got != "" {
-			t.Errorf("non-matching command %q should be allowed, got: %q", command, got)
+			t.Errorf("shell construct %q should be allowed, got: %q", command, got)
 		}
 	}
 }
@@ -3847,9 +3860,9 @@ func TestShellTool_HeredocLookalikeDoesNotHideCommands(t *testing.T) {
 	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
 	require.NoError(t, err)
 
-	command := "echo \"<<'EOF'\"\nchmod 777 /tmp/x\nEOF"
+	command := "echo \"<<'EOF'\"\necho $(date)\nEOF"
 	if got := tool.guardCommand(command, t.TempDir()); !strings.Contains(got, "dangerous pattern") {
-		t.Fatalf("default deny should still see chmod after a heredoc lookalike, got: %q", got)
+		t.Fatalf("default deny should still see command substitution after a heredoc lookalike, got: %q", got)
 	}
 }
 

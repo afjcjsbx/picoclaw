@@ -352,6 +352,29 @@ func TestShellTool_RiskThresholdCanBeRaised(t *testing.T) {
 	}
 }
 
+func TestShellTool_RiskThresholdControlsGitPush(t *testing.T) {
+	t.Parallel()
+
+	medium := riskTestTool(t, config.ExecConfig{RiskThreshold: "medium"})
+	if got := medium.guardCommand("git push origin main", t.TempDir()); !strings.Contains(got, "risk classifier") {
+		t.Fatalf("medium threshold should block git push through the risk classifier, got %q", got)
+	}
+
+	high := riskTestTool(t, config.ExecConfig{RiskThreshold: "high"})
+	if got := high.guardCommand("git push origin main", t.TempDir()); got != "" {
+		t.Fatalf("high threshold should allow git push now that the regex layer does not block it, got %q", got)
+	}
+}
+
+func TestShellTool_RiskNormalizesIFSObfuscation(t *testing.T) {
+	t.Parallel()
+
+	tool := riskTestTool(t, config.ExecConfig{RiskThreshold: "medium"})
+	if got := tool.guardCommand("git${IFS}push origin main", t.TempDir()); !strings.Contains(got, "risk classifier") {
+		t.Fatalf("normalized risk parse should block git${IFS}push, got %q", got)
+	}
+}
+
 func TestShellTool_RiskOverrides(t *testing.T) {
 	t.Parallel()
 
@@ -418,13 +441,13 @@ func TestShellTool_CustomAllowPatternsAreAnchored(t *testing.T) {
 
 	tool := riskTestTool(t, config.ExecConfig{
 		RiskThreshold:       "high",
-		CustomAllowPatterns: []string{`git`},
+		CustomAllowPatterns: []string{`echo`},
 	})
-	if got := tool.guardCommand("git", t.TempDir()); got != "" {
+	if got := tool.guardCommand("echo", t.TempDir()); got != "" {
 		t.Fatalf("anchored custom allow should match the exact command, got %q", got)
 	}
-	if got := tool.guardCommand("git push origin main", t.TempDir()); !strings.Contains(got, "dangerous pattern") {
-		t.Fatalf("bare git allow must not exempt git push, got %q", got)
+	if got := tool.guardCommand("echo $(date)", t.TempDir()); !strings.Contains(got, "dangerous pattern") {
+		t.Fatalf("bare echo allow must not exempt command substitution, got %q", got)
 	}
 }
 

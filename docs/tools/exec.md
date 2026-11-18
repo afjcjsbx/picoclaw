@@ -8,9 +8,9 @@ The exec tool is used to execute shell commands.
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable the exec tool |
-| `enable_deny_patterns` | bool | `true` | Enable the built-in dangerous-command blocking patterns |
+| `enable_deny_patterns` | bool | `true` | Enable the built-in shell-construct deny set (command substitution, pipe-to-shell, shell heredocs) and the AST risk classifier |
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
-| `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in default deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
+| `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in shell-construct deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
 | `custom_unlock_patterns` | string[] | `[]` | Full-command unlock patterns (regular expressions, anchored automatically). A match skips the default deny set, the AST risk classifier and smart approvals, so an explicitly trusted command runs even when it is critical or unclassifiable. Hardline, custom deny and the workspace boundary still apply |
 | `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false` unless `approvals.mode` is `smart`. Empty means `medium` |
 | `risk_overrides` | object | `{}` | Base risk level per command (command name to level), replacing the built-in table. Argument modifiers can still elevate it |
@@ -40,6 +40,8 @@ Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXE
 ### Risk classification
 
 When the built-in guard is enabled (`enable_deny_patterns: true`, the default), PicoClaw parses every Unix command with `mvdan.cc/sh/v3/syntax` before execution and classifies each simple command in the AST. Pipelines, `&&`/`||`/`;` lists, loops, functions and command substitutions are all walked. This catches indirection that regex deny lists cannot resolve, for example `x=rm; $x -rf /` or `"r"'m' -rf /`.
+
+On Unix the AST classifier is the **single source of truth for command danger**. The regex default deny set only covers shell constructs that hide a command from the AST: command substitution, pipe-to-shell and shell heredocs. Command names such as `sudo`, `chmod`, `git push` or `docker run` follow `risk_threshold`; use `risk_overrides` or `custom_unlock_patterns` to tune them.
 
 | Level | Meaning | Examples |
 |-------|---------|----------|
@@ -85,7 +87,7 @@ Tools that expose both read-only and destructive operations are classified by ve
 
 Block-device, volume and cloud operations are explicitly classified: `wipefs`, `blkdiscard`, `lvremove`, `cryptsetup luksFormat`/`erase`, `zpool destroy`, `zfs destroy`, `mdadm --zero-superblock` and `terraform destroy` are `critical`; `cryptsetup`, `zpool`, `zfs`, `mdadm`, `terraform apply` and `helm uninstall` are `high`; `aws s3 rm`/`rb`, `aws ec2 terminate-instances` and similar delete verbs are `high`.
 
-`rm` is no longer in the default regex deny list: the risk levels above are the source of truth. The hardline rule for recursive deletion of `/` still applies.
+`rm` is not in the default deny set: the risk levels above are the source of truth. The hardline rule for recursive deletion of `/` still applies.
 
 Custom thresholds and modifiers:
 
@@ -119,31 +121,20 @@ Custom thresholds and modifiers:
 }
 ```
 
-Configurations that need to allow a command the risk classifier rejects should use `custom_unlock_patterns` for that exact command, or tune `risk_threshold`/`risk_overrides` globally. `custom_allow_patterns` remains the narrow legacy exemption for the default regex deny set; it never exempts the risk classifier.
-
-```json
-{
-  "tools": {
-    "exec": {
-      "custom_allow_patterns": ["^git status$"],
-      "custom_unlock_patterns": ["^sh scripts/deploy\\.sh$"]
-    }
-  }
-}
-```
+Configurations that need to allow a command the risk classifier rejects should use `custom_unlock_patterns` for that exact command, or tune `risk_threshold`/`risk_overrides` globally. `custom_allow_patterns` remains the narrow legacy exemption for the default shell-construct set (command substitution, pipe-to-shell, shell heredocs); it never exempts the risk classifier.
 
 Limits worth knowing:
 
 - The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and allowed unless smart approvals reviews it. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
 - External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
-- Windows is skipped because exec runs PowerShell there; the built-in regex/PowerShell deny patterns still apply.
+- Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps the generic command patterns that the AST covers on Unix (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
 
 ### Smart approvals
 
 `approvals.mode` defaults to `"off"`: the static guards are the final decision and exec makes no extra model call. Unknown commands run in this mode. Set it to `"smart"` to add a second opinion only for commands that the static guards cannot classify, without asking a model about every command:
 
 1. **Hardline and custom deny rules stay final.** Catastrophic operations such as `rm -rf /`, recursive deletion of `/etc`, `/usr`, `/home` or `/root`, `mkfs`, `dd if=`, `shutdown`, `reboot`, `poweroff`, fork bombs and `kill -1` are rejected directly. The Guardian is never consulted for them.
-2. **Default deny pattern hits stay blocked.** A command caught by the built-in regex set is rejected even in smart mode; the Guardian only reviews commands the risk classifier cannot resolve.
+2. **Default deny shell-construct hits stay blocked.** A command caught by the built-in regex set is rejected even in smart mode; the Guardian only reviews commands the risk classifier cannot resolve.
 3. **Known risk levels keep following `risk_threshold`.** A command at or above `risk_threshold` is rejected even in smart mode, and one below it is allowed. The Guardian is not consulted for known risk levels.
 4. **Only unknown commands are reviewed.** On Unix, dynamic command names, opaque shells and unparseable scripts are flagged as unknown and sent to the Guardian; with approvals off they are allowed.
 5. **Workspace and path checks still run first.** The Guardian cannot approve a command that tries to escape the workspace.
@@ -299,7 +290,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 ## Functionality
 
-- **`enable_deny_patterns`**: Set to `false` to disable the built-in default dangerous-command patterns. The hardline floor and `custom_deny_patterns` still apply.
+- **`enable_deny_patterns`**: Set to `false` to disable the optional built-in guard set (the shell-construct deny patterns and the AST risk classifier). The hardline floor and `custom_deny_patterns` still apply.
 - **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow or unlock patterns cannot exempt them.
 
 ## Hardline Always-On Patterns
@@ -330,23 +321,17 @@ Expansion uses the child shell's `HOME`. Quoted literals such as `echo '$HOME'` 
 
 This is a static best-effort layer, not an OS sandbox: child processes, scripts loaded after startup, file contents, dynamic operands and globs that expand to outside-pointing symlinks are outside its reach. Symlinks are resolved against the filesystem at validation time, so a symlink created or retargeted later in the same command is not visible to the static pass. Use containers, VMs, or a dedicated user for untrusted workloads. The AST pass runs only when workspace restriction is enabled, only for the command being executed, and keeps no persistent state, goroutines or polling timers. When the risk classifier is also enabled, both passes share one parse of the command; commands containing ANSI-C quoting or line continuations are re-parsed after normalization because those rewrites can change word boundaries.
 
-## Default Blocked Command Patterns
+## Default Blocked Shell Constructs
 
-These patterns are enabled by default and can be disabled with `enable_deny_patterns: false`:
+On Unix the AST risk classifier is the source of truth for command danger. The regex default deny set only covers constructs it cannot inspect; these patterns are enabled by default and can be disabled with `enable_deny_patterns: false`:
 
-- Delete commands: `del /f/q`, `rmdir /s` (Unix `rm` is classified by the risk guard: plain `rm` is `medium`, `rm -r` is `high`, `rm -rf` is `critical`)
-- Disk operations: broad `format`/`mkfs`/`diskpart`/`dd if=` detection (the hardline subset above stays blocked)
-- System operations: broad `shutdown`/`reboot`/`poweroff` detection (the hardline subset above stays blocked)
-- Command substitution: `$()`, `${}`, backticks
-- Pipe to shell: `| sh`, `| bash`
-- Privilege escalation: `sudo`, `chmod`, `chown`
-- Process control: `pkill`, `killall`, `kill -9`
-- Remote operations: `curl | sh`, `wget | sh`, `ssh`
-- Package management: `apt`, `yum`, `dnf`, `npm install -g`, `pip install --user`
-- Containers: `docker run`, `docker exec`
-- Git: `git push`, `git force`
-- Windows PowerShell: recursive `Remove-Item` (including `rm`/`ri`/`del` aliases), `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, download-and-execute pipelines such as `iwr ... | iex`, `taskkill /F`, and `Stop-Process -Force`
-- Other: `eval`, `source *.sh`
+- Command substitution: `$()`, backticks
+- Pipe to shell: `| sh`, `| bash` (and the other POSIX shells)
+- Shell heredoc: `sh <<EOF`, `bash <<'EOF'`
+
+Command-level dangers such as `sudo`, `chmod`, `chown`, `kill`, `git push`, `docker run`, package installs, `eval` and `source` are classified by the risk table. Use `risk_threshold`, `risk_overrides`, `arg_modifiers` or `custom_unlock_patterns` to tune them.
+
+Windows has no AST classifier, so its regex floor keeps the equivalent generic command patterns plus the PowerShell-specific checks: recursive `Remove-Item` (including `rm`/`ri`/`del` aliases), `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, download-and-execute pipelines such as `iwr ... | iex`, `taskkill /F`, and `Stop-Process -Force`.
 
 ## Repeated Blocked Commands
 
