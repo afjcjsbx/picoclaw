@@ -1101,7 +1101,3 @@ func (t *ExecTool) rememberCwd(ctx context.Context, cwd string) {
 func (t *ExecTool) SetTimeout(timeout time.Duration) {
 	t.timeout = timeout
 }
-
-func (t *ExecTool) SetRestrictToWorkspace(restrict bool) {
-	t.restrictToWorkspace = restrict
-}

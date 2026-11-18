@@ -1153,7 +1153,7 @@ func TestShellTool_RestrictToWorkspace(t *testing.T) {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
 
-	tool.SetRestrictToWorkspace(true)
+	tool.restrictToWorkspace = true
 
 	ctx := context.Background()
 	args := map[string]any{
