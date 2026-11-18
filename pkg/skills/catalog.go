@@ -95,13 +95,6 @@ func (c *Catalog) Resolve(name string) (string, bool) {
 	return s.entries[i].Name, true
 }
 
-// Invalidate forces the next call to rescan the skill roots.
-func (c *Catalog) Invalidate() {
-	c.mu.Lock()
-	c.checked = time.Time{}
-	c.mu.Unlock()
-}
-
 func (c *Catalog) current() *catalogSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()

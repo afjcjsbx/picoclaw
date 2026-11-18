@@ -682,7 +682,6 @@ func (cb *ContextBuilder) InvalidateCache() {
 	cb.cachedSystemPrompt = ""
 	cb.cachedAt = time.Time{}
 	cb.existedAtCache = nil
-	cb.skillCatalog.Invalidate()
 
 	logger.DebugCF("agent", "System prompt cache invalidated", nil)
 }
