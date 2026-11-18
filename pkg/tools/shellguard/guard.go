@@ -70,7 +70,8 @@ func NewGuard(
 
 // Assessment is the static risk evaluation of a command. Unknown marks a
 // command that cannot be classified statically (dynamic command names, opaque
-// shells, or parse errors); smart approval routes those to the Guardian model.
+// shells, or parse errors); smart approval routes those to the Guardian model,
+// while the default policy allows them.
 type Assessment struct {
 	Level   RiskLevel
 	Command string
@@ -123,7 +124,8 @@ func (g *Guard) AssessFile(command string, file *syntax.File) Assessment {
 
 // Check parses command and returns a BlockedError when any simple command in it
 // exceeds the configured threshold. A nil result means the command may run.
-// A shell that reads commands from stdin or a script file stays opaque.
+// Check is the strict helper: unknown commands are rejected. The exec tool uses
+// AssessFile and applies its own default-allow policy for unknown commands.
 func (g *Guard) Check(command string) *BlockedError {
 	if g == nil {
 		return nil

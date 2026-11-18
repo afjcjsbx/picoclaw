@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Exec no longer rejects commands the risk classifier cannot resolve. Dynamic command names, opaque shells and unparseable commands are allowed by default; `approvals.mode: "smart"` still sends them to the Guardian. Known risk levels above `risk_threshold` and dynamic operands for destructive commands remain blocked.
 - The exec tool description is about 40% shorter and renders the OS and shell in its first line. Windows gets PowerShell-specific chaining guidance and omits the Unix-only trailing-`&`, `nohup`, `setsid` and `disown` notes, so the model is not taught commands the platform rejects.
 - Exec (Unix): a trailing `&` now starts a tracked background session instead of leaving an untracked process whose output pipe is closed. A foreground command that times out now points the model at `background=true` for servers, daemons, and watch processes. Other detaching forms — an inner `&` (`a & b`, `a & # comment`) and `nohup`/`setsid`/`disown` in a foreground run — are rejected with guidance to use `background=true`, so no process escapes session tracking.
 - Background sessions now keep only a 100 KB rolling window in memory; the complete stream spills to an artifact (up to 5,000,000 bytes) as soon as the window overflows. `poll`, `wait`, `read` and `kill` return `artifactPath`/`artifactCapped`, so earlier output stays readable without 1 MB of RAM per session.
