@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/creack/pty"
@@ -22,6 +23,12 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
+
+// execCopyBufferPool reuses the 32 KB buffer io.Copy would allocate for every
+// foreground command. The buffer is only used by the pipe drain goroutine.
+var execCopyBufferPool = sync.Pool{
+	New: func() any { return make([]byte, 32*1024) },
+}
 
 // withNote appends one model-facing note to another without leaving a double
 // space when the first one is empty.
@@ -234,7 +241,9 @@ func (t *ExecTool) runSync(
 		defer close(readDone)
 		// Strip ANSI sequences while draining so the in-memory window, the
 		// spilled artifact and the truncation budget all see visible text.
-		_, _ = io.Copy(collector, &ansiReader{src: outputReader})
+		buffer := execCopyBufferPool.Get().([]byte)
+		_, _ = io.CopyBuffer(collector, &ansiReader{src: outputReader}, buffer)
+		execCopyBufferPool.Put(buffer)
 		_ = outputReader.Close()
 	}()
 

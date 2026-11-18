@@ -172,17 +172,23 @@ func (t *ExecTool) guardCommandWithAnalysis(
 			return "Command blocked by safety guard (path traversal detected)"
 		}
 
-		cwdPath, err := filepath.Abs(cwd)
-		if err != nil {
-			return ""
-		}
-		// Resolve symlinks in the workspace root too. Candidate paths are
-		// resolved with EvalSymlinks before the containment check, so comparing
-		// them against an unresolved root reports every relative path as an
-		// escape whenever the workspace path contains a symlink (for example
-		// /var -> /private/var on macOS, or a symlinked project directory).
-		if resolved, err := filepath.EvalSymlinks(cwdPath); err == nil {
-			cwdPath = resolved
+		cwdPath := ""
+		if t.isDefaultCwd(cwd) {
+			cwdPath = t.resolvedWorkDir
+		} else {
+			abs, err := filepath.Abs(cwd)
+			if err != nil {
+				return ""
+			}
+			cwdPath = abs
+			// Resolve symlinks in the workspace root too. Candidate paths are
+			// resolved with EvalSymlinks before the containment check, so comparing
+			// them against an unresolved root reports every relative path as an
+			// escape whenever the workspace path contains a symlink (for example
+			// /var -> /private/var on macOS, or a symlinked project directory).
+			if resolved, err := filepath.EvalSymlinks(cwdPath); err == nil {
+				cwdPath = resolved
+			}
 		}
 
 		if runtime.GOOS == "windows" {

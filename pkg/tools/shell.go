@@ -62,6 +62,7 @@ type ExecTool struct {
 	// command does not rebuild and sort the environment on every call.
 	baseEnv          map[string]string
 	baseEnvList      []string
+	resolvedWorkDir  string
 	state            *execStateStore
 	sessionManager   *SessionManager
 	riskGuard        *shellguard.Guard
@@ -457,6 +458,7 @@ func NewExecToolWithConfig(
 	hardlinePatterns = append(hardlinePatterns, selfProtectionHardlinePatterns()...)
 
 	baseEnv := newExecEnv(workingDir, execEnvSet, execEnvAllowlist)
+	resolvedWorkDir := resolveWorkspacePath(workingDir)
 	return &ExecTool{
 		workingDir:           workingDir,
 		timeout:              timeout,
@@ -473,6 +475,7 @@ func NewExecToolWithConfig(
 		maxInlineResultChars: maxInlineResultChars,
 		baseEnv:              baseEnv,
 		baseEnvList:          buildEnvList(baseEnv),
+		resolvedWorkDir:      resolvedWorkDir,
 		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
 		riskGuard:            riskGuard,
@@ -929,7 +932,19 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 // produced by `pwd -P` compare correctly on systems where the workspace itself
 // lives behind a symlink (for example /var -> /private/var on macOS).
 func (t *ExecTool) resolvedWorkspace() string {
-	workspace := t.workingDir
+	if t.resolvedWorkDir != "" {
+		return t.resolvedWorkDir
+	}
+	return resolveWorkspacePath(t.workingDir)
+}
+
+// resolveWorkspacePath canonicalizes the workspace once. The guard runs on
+// every command, so repeating Abs+EvalSymlinks here dominated the allocation
+// profile for a short command.
+func resolveWorkspacePath(workspace string) string {
+	if workspace == "" {
+		return ""
+	}
 	if abs, err := filepath.Abs(workspace); err == nil {
 		workspace = abs
 	}
@@ -937,6 +952,10 @@ func (t *ExecTool) resolvedWorkspace() string {
 		workspace = resolved
 	}
 	return workspace
+}
+
+func (t *ExecTool) isDefaultCwd(cwd string) bool {
+	return cwd != "" && cwd == t.workingDir && t.resolvedWorkDir != ""
 }
 
 // validateCwd applies the workspace and allow-path policy to a cwd. It is the
@@ -968,6 +987,9 @@ func (t *ExecTool) validateCwd(cwd string) (string, error) {
 func (t *ExecTool) acceptObservedCwd(cwd string) bool {
 	if cwd == "" || !filepath.IsAbs(cwd) {
 		return false
+	}
+	if t.isDefaultCwd(cwd) || cwd == t.resolvedWorkspace() {
+		return true
 	}
 	info, err := os.Stat(cwd)
 	if err != nil || !info.IsDir() {
