@@ -95,3 +95,16 @@ func TestInterpreterIgnoresNonInterpreters(t *testing.T) {
 		}
 	}
 }
+
+func TestInterpreterBlocksBareRootAndHomePaths(t *testing.T) {
+	for _, command := range []string{
+		`python3 -c "import shutil; shutil.rmtree('/')"`,
+		`python3 -c "import os; os.system('rm -rf /')"`,
+		`perl -e 'system("rm -rf ~")'`,
+		`node -e "require('child_process').execSync('rm -rf /')"`,
+	} {
+		if err := checkInterpreter(t, command); err == nil {
+			t.Errorf("expected blocked: %s", command)
+		}
+	}
+}

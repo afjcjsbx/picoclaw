@@ -59,7 +59,8 @@ var interpreterFlags = map[string]string{
 var interpreterOperationMarkers = []string{
 	"rmtree", "remove_tree", "unlink", "rmdir", "rm_sync", "rmsync",
 	"os.remove", "os.rename", "os.replace", "shutil.move", "fileutils.rm",
-	"writefile", "writefilesync", "appendfile", "createwriteStream",
+	"writefile", "writefilesync", "appendfile", "createwritestream",
+	"write.csv", "write.table", "saverds", "file.write", "file.delete",
 	"open(", "fopen(", "io.open(", "path(", "files.", "fileutils.",
 	"system(", "popen", "subprocess", "os.system", "os.exec", "osexec",
 	"child_process", "execsync", "execfile", "spawn(", "eval(",
@@ -72,7 +73,7 @@ var interpreterOperationMarkers = []string{
 // prefix avoids URLs: the slash in `https://` is preceded by a colon, which is
 // not in the prefix class.
 var interpreterPathPattern = regexp.MustCompile(
-	`(?:^|[\s'"=(,:;\[])((?:/|\.\./|~/|\$HOME(?:/|["'])|~)[^\s'"` + "`" + `;,)\]}>]+)`,
+	`(?:^|[\s'"=(,:;\[])((?:/|\.\./|~/|\$HOME(?:/|["'])|~)[^\s'"` + "`" + `;,)\]}>]*)`,
 )
 
 // CheckInterpreterFile rejects inline interpreter code that combines a
