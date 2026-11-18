@@ -1697,36 +1697,20 @@ func TestShellTool_FileURISandboxing(t *testing.T) {
 		t.Fatalf("unable to configure exec tool: %s", err)
 	}
 
-	// These file:// URIs should be blocked if they reference paths outside the workspace.
-	// Unlike web URLs (http://, https://, ftp://), file:// URIs can be used to escape the sandbox.
+	// file:// URIs point at the local filesystem and cannot be validated by the
+	// static path guard, so the workspace pass rejects them fail-closed even
+	// when they name a path inside the workspace.
 	blockedCommands := []string{
 		"cat file:///etc/passwd",
 		"cat file:///etc/hosts",
 		"cat file:///root/.ssh/id_rsa",
+		"cat file://" + filepath.Join(tmpDir, "test.txt"),
 	}
 
 	for _, cmd := range blockedCommands {
 		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
-		if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
-			t.Errorf("file:// URI outside workspace should be blocked: %s", cmd)
-		}
-	}
-
-	// These file:// URIs should be allowed if they reference paths inside the workspace.
-	// Create a test file inside the temp directory
-	testFile := filepath.Join(tmpDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("test content"), 0o644); err != nil {
-		t.Fatalf("failed to create test file: %s", err)
-	}
-
-	allowedCommands := []string{
-		"cat file://" + testFile,
-	}
-
-	for _, cmd := range allowedCommands {
-		result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
-		if result.IsError && strings.Contains(result.ForLLM, "path outside working dir") {
-			t.Errorf("file:// URI inside workspace should be allowed: %s\n  error: %s", cmd, result.ForLLM)
+		if !result.IsError || !strings.Contains(result.ForLLM, "file URL cannot be validated") {
+			t.Errorf("file:// URI should be blocked fail-closed: %s", cmd)
 		}
 	}
 }

@@ -50,19 +50,6 @@ func (t *ExecTool) guardWindowsWorkspacePaths(command, cwdPath string) string {
 			}
 		}
 
-		// Skip scheme-less URL paths like "wttr.in/Beijing". A local entry
-		// with the same name still goes through full validation (#2965).
-		if loc[0] > 0 && raw[0] == '/' {
-			j := loc[0] - 1
-			for j >= 0 && !isShellTokenBoundary(cmd[j]) {
-				j--
-			}
-			token := cmd[j+1 : loc[0]]
-			if looksLikeDomain(token) && !localPathExists(cwdPath, token) {
-				continue
-			}
-		}
-
 		// A regex match can contain several tokens when shell separators are
 		// not surrounded by whitespace ("2>/dev/null;echo b").
 		for _, pathText := range commandPathTextsFromMatch(cmd, loc[0], loc[1]) {
@@ -224,57 +211,4 @@ func isShellTokenBoundary(b byte) bool {
 		return true
 	}
 	return false
-}
-
-// looksLikeDomain returns true when s looks like a DNS domain name: it contains
-// at least one dot, starts with an alphanumeric character, and does not end
-// with a common file extension.
-func looksLikeDomain(s string) bool {
-	if len(s) < 3 || !strings.ContainsRune(s, '.') {
-		return false
-	}
-	first := s[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || (first >= '0' && first <= '9')) {
-		return false
-	}
-	// Exclude tokens ending with common file/programming extensions,
-	// e.g. "script.py", "main.go", "app.exe".
-	if idx := strings.LastIndexByte(s, '.'); idx >= 0 {
-		ext := strings.ToLower(s[idx+1:])
-		if commonFileExtension(ext) {
-			return false
-		}
-	}
-	return true
-}
-
-// commonFileExtension returns true when ext is a file extension that strongly
-// indicates a local file rather than a domain TLD.
-func commonFileExtension(ext string) bool {
-	switch ext {
-	case "py", "js", "ts", "tsx", "jsx", "go", "rs", "rb", "php",
-		"java", "c", "cpp", "h", "hpp", "cs", "swift", "kt", "scala",
-		"sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
-		"txt", "md", "rst", "log", "json", "yaml", "yml", "toml",
-		"xml", "html", "css", "scss", "ini", "cfg", "conf", "env",
-		"exe", "dll", "so", "dylib", "lib", "a", "o", "obj",
-		"zip", "tar", "gz", "bz2", "xz", "7z", "rar",
-		"png", "jpg", "jpeg", "gif", "svg", "ico", "bmp", "webp",
-		"mp3", "mp4", "wav", "avi", "mov", "mkv", "flac",
-		"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-		"pub", "pem", "key", "crt", "cer", "p12", "pfx",
-		"bak", "tmp", "swp", "lock",
-		"ttf", "otf", "woff", "woff2", "eot",
-		"deb", "rpm", "apk", "msi", "dmg",
-		"sql", "sqlite", "db":
-		return true
-	}
-	return false
-}
-
-// localPathExists returns true when the given token resolves to an existing
-// filesystem entry relative to cwd.
-func localPathExists(cwd, token string) bool {
-	info, err := os.Lstat(filepath.Join(cwd, token))
-	return err == nil && info != nil
 }

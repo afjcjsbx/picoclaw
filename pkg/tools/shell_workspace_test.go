@@ -99,7 +99,7 @@ func TestShellTool_WorkspaceHomeExpansionBlocked(t *testing.T) {
 		t.Run(command, func(t *testing.T) {
 			result := runWorkspaceGuardCommand(t, tool, command)
 			require.True(t, result.IsError, "expected %q to be blocked: %s", command, result.ForLLM)
-			require.Contains(t, result.ForLLM, "path outside working dir",
+			require.Contains(t, result.ForLLM, "blocked by safety guard",
 				"expected workspace guard to block %q: %s", command, result.ForLLM)
 		})
 	}
@@ -168,7 +168,6 @@ func TestShellTool_WorkspaceDirectoryChangeBlocked(t *testing.T) {
 		"builtin cd sub",
 		"pushd sub",
 		"pushd sub && popd",
-		"env -C sub true",
 		"sh -c 'cd sub && echo ok'",
 		"exec true",
 		"find . -exec sh -c 'cd sub && echo ok' {} \\;",
@@ -318,7 +317,6 @@ func TestShellTool_WorkspaceEffectiveCwdEscapeBlocked(t *testing.T) {
 	}{
 		{"cd sub; cat inside.txt", "inside-ok"},
 		{"cd sub; cd nested; cat inside.txt", "nested-ok"},
-		{"env -C sub cat inside.txt", "inside-ok"},
 	}
 	for _, tc := range allowed {
 		t.Run(tc.command, func(t *testing.T) {

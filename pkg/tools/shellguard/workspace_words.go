@@ -63,18 +63,17 @@ func (s *workspaceState) addParts(out *word, parts []syntax.WordPart) {
 				if atPathStart(out.text) {
 					out.homePath = true
 				}
-				home, ok := s.effectiveHome()
-				if !ok {
+				if s.policy.Home == "" {
 					out.dynamic = true
 					continue
 				}
-				out.text += home
+				out.text += s.policy.Home
 			case "PWD":
 				if atPathStart(out.text) {
 					out.homePath = true
 				}
 				cwd := s.currentCwd()
-				if cwd == "" || s.pwdOverridden {
+				if cwd == "" {
 					out.dynamic = true
 					continue
 				}
@@ -94,8 +93,8 @@ func (s *workspaceState) addParts(out *word, parts []syntax.WordPart) {
 }
 
 func (s *workspaceState) appendTilde(out *word, rest string) {
-	home, ok := s.effectiveHome()
-	if !ok {
+	home := s.policy.Home
+	if home == "" {
 		out.dynamic = true
 		return
 	}

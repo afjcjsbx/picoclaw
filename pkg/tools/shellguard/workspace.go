@@ -19,8 +19,6 @@ type WorkspacePolicy struct {
 	// CDPath reports that the child shell inherits a non-empty CDPATH, so a
 	// relative cd target may resolve outside the current directory.
 	CDPath bool
-	// PWDUnset reports that $PWD is no longer trusted to equal Cwd.
-	PWDUnset bool
 	// CwdChanged reports that the shell has already changed directory before
 	// the script is inspected, so bare relative operands can be symlinks under
 	// a directory other than Cwd.
@@ -99,10 +97,8 @@ func checkWorkspaceText(command string, policy WorkspacePolicy, depth int) error
 
 func checkWorkspaceFile(file *syntax.File, policy WorkspacePolicy, depth int) error {
 	state := workspaceState{
-		policy:        policy,
-		cdpathSet:     policy.CDPath,
-		pwdOverridden: policy.PWDUnset,
-		cwdChanged:    policy.CwdChanged,
+		policy:     policy,
+		cwdChanged: policy.CwdChanged,
 	}
 	if policy.Cwd != "" {
 		state.cwds = []string{policy.Cwd}
@@ -134,40 +130,16 @@ type workspaceState struct {
 	// cwdChanged is set when the shell has changed directory, including a
 	// change carried in from an enclosing script.
 	cwdChanged bool
-	// homeChanged marks HOME as assigned or unset. Tilde/$HOME then follows a
-	// value this pass cannot trust across subshells, functions and branches,
-	// so expansion is rejected instead of risking a scope leak.
-	homeChanged bool
-	// pwdOverridden marks a dynamic or static PWD assignment. $PWD is then
-	// no longer trusted to match the real current directory.
-	pwdOverridden bool
-	// cdpathSet marks a CDPATH assignment. Relative cd targets may then
-	// resolve through CDPATH instead of the current directory.
-	cdpathSet bool
 }
 
-func (s *workspaceState) effectiveHome() (string, bool) {
-	if s.homeChanged {
-		return "", false
-	}
-	return s.policy.Home, s.policy.Home != ""
-}
-
-// nestedPolicy carries HOME/PWD/CDPATH invalidation and the effective working
-// directory into scripts that run in the same environment (eval, sh -c,
-// heredocs and exec wrappers).
+// nestedPolicy carries the effective working directory into scripts that run
+// in the same environment (sh -c, heredocs and wrapper commands). Path
+// environment assignments are rejected, so HOME and CDPATH stay at the values
+// the policy was built with.
 func (s *workspaceState) nestedPolicy() WorkspacePolicy {
 	policy := s.policy
-	home, ok := s.effectiveHome()
-	if !ok {
-		policy.Home = ""
-	} else {
-		policy.Home = home
-	}
 	policy.Cwd = s.currentCwd()
 	policy.CwdChanged = s.hasCwdCandidates()
-	policy.CDPath = s.cdpathSet
-	policy.PWDUnset = s.pwdOverridden
 	return policy
 }
 
@@ -274,27 +246,11 @@ func (s *workspaceState) checkCall(
 		args[i] = s.expandWord(arg, false)
 	}
 
-	// env -C changes the cwd only for the command it launches. Add the target
-	// as a temporary candidate before checking the rest of the argv, so its
-	// relative operands are not mistakenly resolved against the outer cwd.
-	if len(args) > 0 && baseCommand(args[0].text) == "env" {
-		if target, ok := envChdirTarget(args[1:]); ok &&
-			!target.dynamic && target.text != "" && target.text != "-" {
-			if err := s.checkDirTarget(target, false); err != nil {
-				return err
-			}
-			saved := append([]string(nil), s.cwds...)
-			s.addCwd(s.resolveCwd(target.text))
-			defer func() { s.cwds = saved }()
-		}
-	}
-
 	for _, arg := range args {
 		if err := s.checkWord(arg, false); err != nil {
 			return err
 		}
 	}
-	s.noteUnset(args)
 	return s.checkSimple(args, redirs, depth, true)
 }
 
@@ -313,6 +269,9 @@ func (s *workspaceState) checkSimple(
 	if len(args) == 0 {
 		return nil
 	}
+	if err := s.checkUnset(args); err != nil {
+		return err
+	}
 	// Surface flags are checked even when the command name is dynamic: a
 	// command such as `$CMD -C ..` must still not point outside the workspace.
 	if err := s.checkPathFlags(args); err != nil {
@@ -327,41 +286,29 @@ func (s *workspaceState) checkSimple(
 	return s.checkNested(args, redirs, depth)
 }
 
-func (s *workspaceState) noteUnset(args []word) {
+// checkUnset rejects unsetting the variables the path guard relies on. The
+// shell would otherwise be free to change the value without this pass seeing
+// it, and the child environment is shared with nested scripts.
+func (s *workspaceState) checkUnset(args []word) error {
 	if len(args) == 0 || baseCommand(args[0].text) != "unset" {
-		return
+		return nil
 	}
 	for _, arg := range args[1:] {
-		if arg.dynamic {
-			// The variable name is unknown; it could be HOME or PWD.
-			s.homeChanged = true
-			s.pwdOverridden = true
-			continue
-		}
-		switch arg.text {
-		case "HOME":
-			s.homeChanged = true
-		case "PWD":
-			s.pwdOverridden = true
+		if arg.dynamic || isPathEnvName(arg.text) {
+			return newWorkspaceError("path environment override cannot be validated under workspace restriction")
 		}
 	}
+	return nil
 }
 
 func (s *workspaceState) checkAssignment(assign *syntax.Assign) error {
 	if assign == nil {
 		return nil
 	}
+	if assign.Name != nil && isPathEnvName(assign.Name.Value) {
+		return newWorkspaceError("path environment override cannot be validated under workspace restriction")
+	}
 	if assign.Array != nil {
-		if assign.Name != nil {
-			switch assign.Name.Value {
-			case "HOME":
-				s.homeChanged = true
-			case "PWD", "OLDPWD", "CDPATH":
-				return newWorkspaceError(
-					"path array assignment cannot be validated under workspace restriction",
-				)
-			}
-		}
 		for _, elem := range assign.Array.Elems {
 			if elem == nil || elem.Value == nil {
 				continue
@@ -374,59 +321,19 @@ func (s *workspaceState) checkAssignment(assign *syntax.Assign) error {
 	if assign.Value == nil {
 		return nil
 	}
-
 	value := s.expandWord(assign.Value, true)
-	if assign.Name != nil {
-		switch assign.Name.Value {
-		case "HOME":
-			// The value itself is not a file access. Mark HOME as changed so
-			// later ~/$HOME expansion is rejected without trusting the
-			// assignment's scope.
-			s.homeChanged = true
-			return nil
-		case "PWD":
-			if value.dynamic {
-				return newWorkspaceError(
-					"dynamic path assignment cannot be validated under workspace restriction",
-				)
-			}
-			s.pwdOverridden = true
-			if value.text == "" {
-				return nil
-			}
-			return s.checkPath(value.text)
-		case "OLDPWD":
-			if value.dynamic {
-				return newWorkspaceError(
-					"dynamic path assignment cannot be validated under workspace restriction",
-				)
-			}
-			if value.text == "" {
-				return nil
-			}
-			return s.checkPath(value.text)
-		case "CDPATH":
-			if value.dynamic {
-				return newWorkspaceError(
-					"dynamic path assignment cannot be validated under workspace restriction",
-				)
-			}
-			s.cdpathSet = true
-			for _, entry := range strings.Split(value.text, ":") {
-				if entry == "" {
-					continue
-				}
-				if err := s.checkPath(entry); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
 	if value.homePath {
 		return s.checkWord(value, false)
 	}
 	return nil
+}
+
+func isPathEnvName(name string) bool {
+	switch name {
+	case "HOME", "PWD", "OLDPWD", "CDPATH":
+		return true
+	}
+	return false
 }
 
 func (s *workspaceState) checkRedirects(redirs []*syntax.Redirect) error {
@@ -535,8 +442,8 @@ func relativePathCandidate(text string) (string, bool) {
 // checkPath validates a path against every directory the command may have
 // changed into. A path that escapes from any candidate cwd is rejected.
 func (s *workspaceState) checkPath(path string) error {
-	if filePath, ok := fileURLPath(path); ok {
-		path = filePath
+	if isFileURL(path) {
+		return newWorkspaceError("file URL cannot be validated under workspace restriction")
 	}
 	if isWorkspaceURL(path) {
 		return nil
@@ -601,21 +508,9 @@ func isWorkspaceURL(text string) bool {
 	return false
 }
 
-// fileURLPath extracts the local path from a file: URI so it is checked like a
-// plain absolute path. Web schemes are exempt from workspace checks, but file:
-// URIs point at the local filesystem and must stay inside the boundary.
-func fileURLPath(text string) (string, bool) {
-	if !strings.HasPrefix(strings.ToLower(text), "file:") {
-		return "", false
-	}
-	rest := text[len("file:"):]
-	rest = strings.TrimPrefix(rest, "//")
-	if !strings.HasPrefix(rest, "/") {
-		slash := strings.IndexByte(rest, '/')
-		if slash < 0 {
-			return "", false
-		}
-		rest = rest[slash:]
-	}
-	return rest, true
+// isFileURL marks file: URIs as unresolvable. They point at the local
+// filesystem, so exempting them like web URLs would let curl read outside the
+// workspace; rejecting them keeps the static guard fail-closed.
+func isFileURL(text string) bool {
+	return strings.HasPrefix(strings.ToLower(text), "file:")
 }

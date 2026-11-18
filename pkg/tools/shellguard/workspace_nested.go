@@ -1,6 +1,10 @@
 package shellguard
 
-import "mvdan.cc/sh/v3/syntax"
+import (
+	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
+)
 
 func (s *workspaceState) checkNested(
 	args []word,
@@ -62,32 +66,46 @@ func (s *workspaceState) checkNested(
 		if opts.dynamic {
 			return newWorkspaceError("dynamic command cannot be validated under workspace restriction")
 		}
+		if opts.hasChdir {
+			return newWorkspaceError("env -C cannot be validated under workspace restriction")
+		}
+		if opts.ignoreEnv || opts.unsetDynamic {
+			return newWorkspaceError("environment clearing cannot be validated under workspace restriction")
+		}
+		for _, name := range opts.unset {
+			if isPathEnvName(name) {
+				return newWorkspaceError("path environment override cannot be validated under workspace restriction")
+			}
+		}
+		for _, assignment := range opts.assignments {
+			envName, _, _ := strings.Cut(assignment.text, "=")
+			if isPathEnvName(envName) {
+				return newWorkspaceError("path environment override cannot be validated under workspace restriction")
+			}
+		}
 		if len(opts.command) == 0 {
 			return nil
-		}
-		if opts.hasChdir && !opts.chdir.dynamic && opts.chdir.text != "" && opts.chdir.text != "-" {
-			saved := append([]string(nil), s.cwds...)
-			s.addCwd(s.resolveCwd(opts.chdir.text))
-			err := s.checkSimple(opts.command, nil, depth+1, false)
-			s.cwds = saved
-			return err
 		}
 		return s.checkSimple(opts.command, nil, depth+1, false)
 	}
 
 	switch name {
-	case "eval":
-		script, ok := joinLiteralWords(args[1:])
-		if !ok {
-			return newWorkspaceError("dynamic eval cannot be validated under workspace restriction")
-		}
-		return checkWorkspaceScript(script, s.nestedPolicy(), depth+1)
-	case "trap":
-		return s.checkTrap(args[1:], depth)
+	case "eval", "trap":
+		// These execute a string the static pass cannot follow without
+		// reimplementing the shell; fail closed under workspace restriction.
+		return newWorkspaceError(name + " cannot be validated under workspace restriction")
 	case "exec":
-		return s.checkExec(args[1:], depth)
+		if nested, ok := execCommand(args[1:]); ok {
+			return s.checkSimple(nested, nil, depth+1, false)
+		}
+		return nil
 	case "find":
-		return s.checkFindExec(args[1:], depth)
+		for _, nested := range findExecCommands(args[1:]) {
+			if err := s.checkSimple(nested, nil, depth+1, false); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	if spec, ok := wrapperSpecs[name]; ok {
@@ -101,49 +119,6 @@ func (s *workspaceState) checkNested(
 		}
 		if found && len(nested) > 0 {
 			return s.checkSimple(nested, nil, depth+1, false)
-		}
-	}
-	return nil
-}
-
-// envChdirTarget returns the directory passed to env -C/--chdir.
-func envChdirTarget(args []word) (word, bool) {
-	opts := parseEnvArgs(args)
-	if !opts.hasChdir {
-		return word{}, false
-	}
-	return word{text: opts.chdir.text, dynamic: opts.chdir.dynamic}, true
-}
-
-func (s *workspaceState) checkTrap(args []word, depth int) error {
-	action, found, dynamic := trapAction(args)
-	if dynamic {
-		return newWorkspaceError("dynamic trap action cannot be validated under workspace restriction")
-	}
-	if !found {
-		return nil
-	}
-	return checkWorkspaceScript(action.text, s.nestedPolicy(), depth+1)
-}
-
-// checkExec inspects the command that exec replaces the shell with. exec is
-// both a shell builtin and an execve wrapper, so a nested shell script would
-// otherwise escape the AST pass.
-func (s *workspaceState) checkExec(args []word, depth int) error {
-	nested, ok := execCommand(args)
-	if !ok {
-		return nil
-	}
-	return s.checkSimple(nested, nil, depth+1, false)
-}
-
-// checkFindExec inspects commands launched by find -exec/-execdir/-ok/-okdir.
-// find runs them directly, so a nested sh -c script is just as reachable as it
-// is from a top-level command.
-func (s *workspaceState) checkFindExec(args []word, depth int) error {
-	for _, nested := range findExecCommands(args) {
-		if err := s.checkSimple(nested, nil, depth+1, false); err != nil {
-			return err
 		}
 	}
 	return nil

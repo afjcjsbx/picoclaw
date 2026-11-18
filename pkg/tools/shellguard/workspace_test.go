@@ -66,9 +66,9 @@ func TestCheckWorkspaceBlocksEscapes(t *testing.T) {
 		{name: "ansi-c cd home", command: `c$'\x64' ~`, want: "path outside working dir"},
 		{name: "attached include path", command: "cc -I/etc main.c", want: "path outside working dir"},
 		{name: "attached system include path", command: "echo -isystem/usr/include", want: "path outside working dir"},
-		{name: "file url", command: "cat file:///etc/passwd", want: "path outside working dir"},
-		{name: "file url single slash", command: "cat file:/etc/passwd", want: "path outside working dir"},
-		{name: "file url host", command: "cat file://localhost/etc/passwd", want: "path outside working dir"},
+		{name: "file url", command: "cat file:///etc/passwd", want: "file URL cannot be validated"},
+		{name: "file url single slash", command: "cat file:/etc/passwd", want: "file URL cannot be validated"},
+		{name: "file url host", command: "cat file://localhost/etc/passwd", want: "file URL cannot be validated"},
 		{name: "nested ansi-c cd", command: `sh -c "c$'\x64' .."`, want: "path traversal detected"},
 		{name: "pushd home", command: "pushd ~", want: "path outside working dir"},
 		{name: "cd oldpwd", command: "cd -", want: "directory change cannot be validated"},
@@ -117,7 +117,7 @@ func TestCheckWorkspaceBlocksEscapes(t *testing.T) {
 		{
 			name:    "find exec dynamic chdir",
 			command: "find . -exec env -C $DIR true {} \\;",
-			want:    "directory change cannot be validated",
+			want:    "env -C cannot be validated",
 		},
 		{
 			name:    "test clause home",
@@ -138,7 +138,7 @@ func TestCheckWorkspaceBlocksEscapes(t *testing.T) {
 			want:    "path traversal detected",
 		},
 		{name: "env split string", command: "env -S 'cd ~'", want: "env -S cannot be validated"},
-		{name: "eval cd", command: "eval 'cd ..'", want: "path traversal detected"},
+		{name: "eval cd", command: "eval 'cd ..'", want: "eval cannot be validated"},
 		{
 			name:    "dynamic redirect",
 			command: "echo pwn > $OUT",
@@ -147,22 +147,22 @@ func TestCheckWorkspaceBlocksEscapes(t *testing.T) {
 		{
 			name:    "home assignment",
 			command: "HOME=/elsewhere; cd ~",
-			want:    "path outside working dir",
+			want:    "path environment override",
 		},
 		{
 			name:    "dynamic home assignment",
 			command: "HOME=$X; cd ~",
-			want:    "path outside working dir",
+			want:    "path environment override",
 		},
 		{
 			name:    "cdpath assignment",
 			command: "CDPATH=/elsewhere; cd sub",
-			want:    "path outside working dir",
+			want:    "path environment override",
 		},
 		{
 			name:    "dynamic cdpath assignment",
 			command: "CDPATH=$X; cd sub",
-			want:    "dynamic path assignment",
+			want:    "path environment override",
 		},
 		{
 			name:    "env home override",
@@ -212,7 +212,6 @@ func TestCheckWorkspaceAllowsInsideCommands(t *testing.T) {
 		"pushd sub && popd",
 		"command cd sub",
 		"builtin cd sub",
-		"env -C sub true",
 		"sh -c 'cd sub && echo ok'",
 		"find . -exec sh -c 'cd sub && echo ok' {} \\;",
 		"busybox sh -c 'cd sub && echo ok'",
@@ -232,7 +231,6 @@ func TestCheckWorkspaceAllowsInsideCommands(t *testing.T) {
 		"echo https://example.com/a/../b",
 		"cc -I" + cwd,
 		"echo -isystem" + cwd,
-		"cat file://" + filepath.Join(cwd, "file"),
 	}
 
 	for _, command := range commands {
@@ -259,15 +257,15 @@ func TestCheckWorkspaceUnsetHome(t *testing.T) {
 	}
 
 	if err := checkWorkspaceTest("unset HOME; cd ~", policy); err == nil ||
-		!strings.Contains(err.Error(), "path outside working dir") {
+		!strings.Contains(err.Error(), "path environment override") {
 		t.Fatalf("cd after unset HOME should be rejected, got: %v", err)
 	}
 	if err := checkWorkspaceTest("unset HOME; sh -c 'cat $HOME/file'", policy); err == nil ||
-		!strings.Contains(err.Error(), "path outside working dir") {
+		!strings.Contains(err.Error(), "path environment override") {
 		t.Fatalf("nested $HOME after unset HOME should be rejected, got: %v", err)
 	}
 	if err := checkWorkspaceTest("unset PWD; eval 'cat $PWD/etc/passwd'", policy); err == nil ||
-		!strings.Contains(err.Error(), "path outside working dir") {
+		!strings.Contains(err.Error(), "path environment override") {
 		t.Fatalf("nested $PWD after unset PWD should be rejected, got: %v", err)
 	}
 	if err := checkWorkspaceTest("cd ~", policy); err != nil {
@@ -379,7 +377,6 @@ func TestCheckWorkspaceEffectiveCwd(t *testing.T) {
 	for _, command := range []string{
 		"cd sub; cat inside.txt",
 		"cd sub; cd nested; cat inside.txt",
-		"env -C sub cat inside.txt",
 		"sh -c 'cd sub; cat inside.txt'",
 	} {
 		t.Run(command, func(t *testing.T) {

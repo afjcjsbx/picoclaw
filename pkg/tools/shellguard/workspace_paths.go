@@ -91,12 +91,10 @@ func (s *workspaceState) checkDirChange(args []word, track bool) error {
 		return nil
 	}
 	switch baseCommand(args[0].text) {
-	case "cd":
+	case "cd", "pushd":
+		// pushd is validated like cd. The directory stack starts empty in each
+		// exec shell, so stack rotation cannot reach an unvalidated directory.
 		return s.checkCD(args[1:], track)
-	case "pushd":
-		return s.checkPushd(args[1:], track)
-	case "env":
-		return s.checkEnvChdir(args[1:])
 	}
 	return nil
 }
@@ -125,8 +123,8 @@ func unwrapExecPrefix(args []word) []word {
 func (s *workspaceState) checkCD(args []word, track bool) error {
 	target, ok := cdTarget(args)
 	if !ok {
-		home, resolved := s.effectiveHome()
-		if !resolved {
+		home := s.policy.Home
+		if home == "" {
 			return newWorkspaceError("directory change cannot be validated under workspace restriction")
 		}
 		if err := s.checkPath(home); err != nil {
@@ -163,73 +161,6 @@ func cdTarget(args []word) (word, bool) {
 	return args[i], true
 }
 
-func (s *workspaceState) checkPushd(args []word, track bool) error {
-	i := 0
-	for i < len(args) {
-		text := args[i].text
-		if text == "--" {
-			i++
-			break
-		}
-		if text == "-n" {
-			i++
-			continue
-		}
-		if isStackRotation(text) {
-			// The directory stack only contains entries that were validated
-			// when they were pushed; rotating it stays inside the workspace.
-			return nil
-		}
-		if strings.HasPrefix(text, "-") && text != "-" && text != "" {
-			i++
-			continue
-		}
-		break
-	}
-	if i >= len(args) {
-		return nil
-	}
-	return s.checkDirTarget(args[i], track)
-}
-
-func (s *workspaceState) checkEnvChdir(args []word) error {
-	opts := parseEnvArgs(args)
-	if opts.splitString {
-		return newWorkspaceError("env -S cannot be validated under workspace restriction")
-	}
-	if opts.dynamic {
-		return newWorkspaceError("directory change cannot be validated under workspace restriction")
-	}
-	for _, assignment := range opts.assignments {
-		name, _, _ := strings.Cut(assignment.text, "=")
-		switch name {
-		case "HOME", "PWD", "OLDPWD", "CDPATH":
-			return newWorkspaceError(
-				"path environment override cannot be validated under workspace restriction",
-			)
-		}
-	}
-	if opts.ignoreEnv {
-		s.homeChanged = true
-	}
-	for _, name := range opts.unset {
-		if name == "HOME" {
-			s.homeChanged = true
-		}
-	}
-	if opts.unsetDynamic {
-		s.homeChanged = true
-		s.pwdOverridden = true
-	}
-	if opts.hasChdir {
-		return s.checkDirTarget(word{
-			text:    opts.chdir.text,
-			dynamic: opts.chdir.dynamic,
-		}, false)
-	}
-	return nil
-}
-
 func (s *workspaceState) checkDirTarget(target word, track bool) error {
 	if target.dynamic || target.text == "" || target.text == "-" {
 		return newWorkspaceError("directory change cannot be validated under workspace restriction")
@@ -237,7 +168,7 @@ func (s *workspaceState) checkDirTarget(target word, track bool) error {
 	if !isWorkspaceURL(target.text) && hasParentComponent(target.text) {
 		return newWorkspaceError("path traversal detected")
 	}
-	if s.cdpathSet && !filepath.IsAbs(target.text) &&
+	if s.policy.CDPath && !filepath.IsAbs(target.text) &&
 		!strings.HasPrefix(target.text, "./") &&
 		!strings.HasPrefix(target.text, "../") && target.text != "." {
 		return newWorkspaceError("directory change cannot be validated under workspace restriction")
@@ -249,16 +180,4 @@ func (s *workspaceState) checkDirTarget(target word, track bool) error {
 		s.addCwd(s.resolveCwd(target.text))
 	}
 	return nil
-}
-
-func isStackRotation(text string) bool {
-	if len(text) < 2 || (text[0] != '+' && text[0] != '-') {
-		return false
-	}
-	for i := 1; i < len(text); i++ {
-		if text[i] < '0' || text[i] > '9' {
-			return false
-		}
-	}
-	return true
 }
