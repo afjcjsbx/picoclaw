@@ -85,6 +85,11 @@ type toolBatch struct {
 	loopStatus loopStatus
 	loopCount  int
 	loopTool   string
+
+	// finalNames holds the tool name of each call in this batch after
+	// BeforeTool hooks ran. It lets the planner spot two calls to a tool that
+	// accepts only one call per model response, including hook renames.
+	finalNames []string
 }
 
 func (b *toolBatch) recordLoopCall(toolName string, toolArgs map[string]any) bool {
@@ -193,6 +198,40 @@ func (b *toolBatch) deny(pc *preparedCall, content string) {
 	pc.denyContent = content
 }
 
+// recordPreparedName stores the final tool name of call index so duplicate
+// detection also sees BeforeTool renames.
+func (b *toolBatch) recordPreparedName(index int, name string) {
+	if index < 0 || index >= len(b.calls) {
+		return
+	}
+	if b.finalNames == nil {
+		b.finalNames = make([]string, len(b.calls))
+	}
+	b.finalNames[index] = name
+}
+
+// duplicateSingleCall reports whether an earlier call of this batch already
+// targets a tool that accepts only one call per model response.
+func (b *toolBatch) duplicateSingleCall(index int, name string) bool {
+	if index <= 0 {
+		return false
+	}
+	tool, ok := b.ts.agent.Tools.Get(name)
+	if !ok {
+		return false
+	}
+	exclusive, ok := tool.(tools.SingleCallPerBatch)
+	if !ok || !exclusive.SingleCallPerBatch() {
+		return false
+	}
+	for i := 0; i < index; i++ {
+		if b.finalNames[i] == name {
+			return true
+		}
+	}
+	return false
+}
+
 // prepare runs everything that must happen before the tool executes: turn
 // profile, BeforeTool and ApproveTool hooks, start event and feedback. It
 // returns toolStepBreak when a hook or a hard abort ends the turn.
@@ -205,6 +244,7 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 
 	tc := b.calls[i]
 	pc := &preparedCall{index: i, tc: tc, name: tc.Name, args: cloneStringAnyMap(tc.Arguments)}
+	b.recordPreparedName(pc.index, pc.name)
 
 	if b.denyByProfile(pc) {
 		return pc, toolStepContinue
@@ -225,6 +265,10 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 			}
 		case HookActionRespond:
 			if toolReq != nil && toolReq.HookResult != nil {
+				if toolReq.Tool != "" {
+					pc.name = toolReq.Tool
+				}
+				b.recordPreparedName(pc.index, pc.name)
 				b.announceHookRespond(pc)
 				pc.kind = preparedRespond
 				pc.hookResult = toolReq.HookResult
@@ -237,6 +281,7 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 					"action":   "respond",
 				})
 		case HookActionDenyTool:
+			b.recordPreparedName(pc.index, pc.name)
 			b.deny(pc, hookDeniedToolContent("Tool execution denied by hook", decision.Reason))
 			return pc, toolStepContinue
 		case HookActionAbortTurn:
@@ -247,6 +292,16 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 			exec.abortedByHardAbort = true
 			return nil, toolStepBreak
 		}
+	}
+
+	b.recordPreparedName(pc.index, pc.name)
+	if b.duplicateSingleCall(pc.index, pc.name) {
+		b.deny(pc, fmt.Sprintf(
+			"Tool %q was already called in this model response and accepts only one call per response. "+
+				"Use the result of the previous call before calling it again.",
+			pc.name,
+		))
+		return pc, toolStepContinue
 	}
 
 	if al.hooks != nil {

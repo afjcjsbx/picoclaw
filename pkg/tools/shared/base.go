@@ -14,6 +14,13 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]any) *ToolResult
 }
 
+// SingleCallPerBatch is implemented by tools that accept at most one call in a
+// single model response. The agent loop rejects later duplicates in the same
+// tool batch with an explicit error instead of executing them.
+type SingleCallPerBatch interface {
+	SingleCallPerBatch() bool
+}
+
 const (
 	ToolPromptLayerCapability = "capability"
 	ToolPromptSlotTooling     = "tooling"

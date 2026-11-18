@@ -11,6 +11,7 @@ type (
 	ExecResponse           = toolshared.ExecResponse
 	SessionInfo            = toolshared.SessionInfo
 	Tool                   = toolshared.Tool
+	SingleCallPerBatch     = toolshared.SingleCallPerBatch
 	AsyncCallback          = toolshared.AsyncCallback
 	AsyncExecutor          = toolshared.AsyncExecutor
 	ParallelAware          = toolshared.ParallelAware

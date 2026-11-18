@@ -44,7 +44,10 @@ Rules:
   a `(Recommended)` marker. The marker is presentation-only and never appears in
   the result returned to the model.
 - Questions in one batch must be independent. If a later question depends on an
-  earlier answer, the agent should make a separate `ask_user` call.
+  earlier answer, the agent must make a separate `ask_user` call in a later
+  model response. Two `ask_user` calls emitted in the same response are not
+  executed: the second is rejected with an explicit error, because only one
+  interaction can wait for a reply at a time.
 
 ## Chat interaction
 

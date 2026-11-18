@@ -31,6 +31,14 @@ func (t *Tool) Name() string {
 	return "ask_user"
 }
 
+// SingleCallPerBatch rejects a second ask_user call emitted in the same model
+// response: the first interaction would consume the reply and the second would
+// wait for its own answer until the timeout. A dependent question belongs to a
+// later model response, after the previous result is available.
+func (t *Tool) SingleCallPerBatch() bool {
+	return true
+}
+
 func (t *Tool) Description() string {
 	//nolint:misspell // The external contract uses the British spelling "cancelled".
 	return "Ask the user one or more clarifying questions and wait for the answer. " +
@@ -39,7 +47,7 @@ func (t *Tool) Description() string {
 		"Batch up to 5 independent questions per call. " +
 		"The tool returns a JSON document with one entry per question and an overall outcome " +
 		"(submitted, cancelled, timed_out, undelivered). " +
-		"Questions whose answer depends on a previous answer must be asked in a separate call."
+		"Only one ask_user call is executed per model response; ask dependent questions after the previous answer. "
 }
 
 func (t *Tool) Parameters() map[string]any {

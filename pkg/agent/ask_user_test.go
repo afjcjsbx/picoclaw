@@ -253,3 +253,116 @@ func TestAskUserOnlyAcceptsReplyFromRequester(t *testing.T) {
 		t.Fatalf("responses = %+v, want A", doc.Responses)
 	}
 }
+
+type duplicateAskProvider struct {
+	mu    sync.Mutex
+	calls int
+	docs  []string
+}
+
+func (p *duplicateAskProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	for _, message := range messages {
+		if message.Role == "tool" {
+			p.docs = append(p.docs, message.Content)
+		}
+	}
+	if p.calls == 1 {
+		return &providers.LLMResponse{
+			Content: "asking twice",
+			ToolCalls: []providers.ToolCall{
+				{ID: "first", Name: "ask_user", Arguments: map[string]any{
+					"questions": []any{map[string]any{"question": "First?"}},
+				}},
+				{ID: "second", Name: "ask_user", Arguments: map[string]any{
+					"questions": []any{map[string]any{"question": "Second?"}},
+				}},
+			},
+			FinishReason: "tool_calls",
+		}, nil
+	}
+	return &providers.LLMResponse{Content: "duplicate done", FinishReason: "stop"}, nil
+}
+
+func (p *duplicateAskProvider) GetDefaultModel() string { return "duplicate-ask" }
+
+func (p *duplicateAskProvider) snapshot() (int, []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls, append([]string(nil), p.docs...)
+}
+
+func TestAskUserRejectsSecondCallInSameResponse(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Tools.AskUser.TimeoutSeconds = 5
+	cfg.Agents.Defaults.MaxToolIterations = 5
+
+	msgBus := bus.NewMessageBus()
+	provider := &duplicateAskProvider{}
+	loop := NewAgentLoop(cfg, msgBus, provider)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = loop.Run(ctx) }()
+	defer loop.Stop()
+
+	if err := msgBus.PublishInbound(ctx, bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat-duplicate",
+			ChatType: "direct",
+			SenderID: "user",
+		},
+		Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	waitForOutboundContent(t, msgBus, 5*time.Second, func(content string) bool {
+		return strings.Contains(content, "First?")
+	})
+	if err := msgBus.PublishInbound(ctx, bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat-duplicate",
+			ChatType: "direct",
+			SenderID: "user",
+		},
+		Content: "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForOutboundContent(t, msgBus, 5*time.Second, func(content string) bool {
+		return content == "duplicate done"
+	})
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("turn took %v, the duplicate call waited for its timeout", elapsed)
+	}
+
+	_, docs := provider.snapshot()
+	if len(docs) != 2 {
+		t.Fatalf("tool results = %d, want 2", len(docs))
+	}
+	foundRejection := false
+	for _, doc := range docs {
+		if strings.Contains(doc, "accepts only one call per response") {
+			foundRejection = true
+		}
+		if strings.Contains(doc, "Second?") {
+			t.Fatalf("the second question was delivered: %s", doc)
+		}
+	}
+	if !foundRejection {
+		t.Fatalf("duplicate call was not rejected: %v", docs)
+	}
+}
