@@ -49,6 +49,19 @@ func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Du
 	return reason + "; started as a tracked background session."
 }
 
+// findShellExecutable resolves sh through PATH the same way the shell would.
+func findShellExecutable() (string, error) {
+	path, err := exec.LookPath("sh")
+	if err != nil {
+		return "", fmt.Errorf("could not find executable sh in PATH: %w", err)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve shell path: %w", err)
+	}
+	return absolute, nil
+}
+
 // shellCommand returns the OS shell and its arguments for one exec run.
 func shellCommand(command string) (string, []string, error) {
 	if runtime.GOOS == "windows" {

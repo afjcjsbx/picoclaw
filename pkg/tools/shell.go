@@ -34,24 +34,6 @@ var (
 	sessionManagerMu     sync.RWMutex
 )
 
-func findShellExecutable() (string, error) {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if dir == "" {
-			dir = "."
-		}
-		candidate := filepath.Join(dir, "sh")
-		info, err := os.Stat(candidate)
-		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-			continue
-		}
-		absolute, err := filepath.Abs(candidate)
-		if err == nil {
-			return absolute, nil
-		}
-	}
-	return "", fmt.Errorf("could not find executable sh in PATH")
-}
-
 func getSessionManager() *SessionManager {
 	sessionManagerMu.RLock()
 	defer sessionManagerMu.RUnlock()
