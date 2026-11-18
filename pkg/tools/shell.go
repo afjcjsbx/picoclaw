@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -893,7 +892,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
 	// between validation and cmd.Dir assignment.
 	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
-		resolved, err := t.revalidateCwdForExecution(cwd)
+		resolved, err := t.validateCwd(cwd)
 		if err != nil {
 			if rememberedCwd {
 				t.forgetRememberedCwd(ctx, cwd, err)
@@ -943,31 +942,11 @@ func (t *ExecTool) resolvedWorkspace() string {
 	return workspace
 }
 
-// cwdWithinPolicy reports whether a symlink-resolved directory is inside the
-// resolved workspace or matches an explicit allowed path. Execution re-checks
-// and the initial cwd validation share this predicate so they cannot drift.
-func (t *ExecTool) cwdWithinPolicy(resolved string) bool {
-	return fstools.IsAllowedPath(resolved, t.allowedPathPatterns) ||
-		fstools.IsWithinWorkspace(resolved, t.resolvedWorkspace())
-}
-
-// revalidateCwdForExecution re-resolves symlinks right before the command
-// starts, so a directory validated earlier cannot be swapped for one that
-// escapes the workspace.
-func (t *ExecTool) revalidateCwdForExecution(cwd string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(cwd)
-	if err != nil {
-		return "", fmt.Errorf("path resolution failed: %w", err)
-	}
-	if !t.cwdWithinPolicy(resolved) {
-		return "", errors.New("working directory escaped workspace")
-	}
-	return resolved, nil
-}
-
-// validateCwd applies the workspace and allow-path policy to a cwd. It tries
-// the symlink-resolved form first so a workspace behind /var -> /private/var
-// and a path reported by `pwd -P` compare correctly; the original pair is the
+// validateCwd applies the workspace and allow-path policy to a cwd. It is the
+// single policy used by initial validation, the pre-execution re-check,
+// observed-cwd acceptance and remembered-cwd validation. It tries the
+// symlink-resolved form first so a workspace behind /var -> /private/var and a
+// path reported by `pwd -P` compare correctly; the original pair is the
 // fallback for operator allow patterns that name the unresolved path.
 func (t *ExecTool) validateCwd(cwd string) (string, error) {
 	if !t.restrictToWorkspace || t.workingDir == "" {
