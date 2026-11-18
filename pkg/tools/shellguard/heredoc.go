@@ -7,31 +7,17 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// StripQuotedHeredocBodies replaces the body of every heredoc with a quoted
-// delimiter by a placeholder. A quoted delimiter disables shell expansion, so
-// the body is literal data: deny patterns must not treat backticks or command
-// names inside it as executable. Unquoted heredoc bodies are left untouched
-// because the shell expands and executes their substitutions.
+// stripQuotedHeredocBodiesFile replaces the body of every heredoc with a
+// quoted delimiter by a placeholder. A quoted delimiter disables shell
+// expansion, so the body is literal data: deny patterns must not treat
+// backticks or command names inside it as executable. Unquoted heredoc bodies
+// are left untouched because the shell expands and executes their
+// substitutions.
 //
-// The command is parsed so a <<'EOF' sequence inside quotes or a comment is not
-// mistaken for a heredoc. On a parse error the command is returned unchanged;
-// the exec guard rejects unparseable commands separately.
-func StripQuotedHeredocBodies(command string) string {
-	if !strings.Contains(command, "<<") {
-		return command
-	}
-	file, err := Parse(command)
-	if err != nil {
-		return command
-	}
-	return stripQuotedHeredocBodiesFile(command, file)
-}
-
-// stripQuotedHeredocBodiesFile is the parsed form used by Analyze so one parse
-// serves heredoc stripping, canonical forms, workspace validation and risk.
+// Analyze passes the shared parse so one parse serves heredoc stripping,
+// canonical forms, workspace validation and risk. The text check skips the AST
+// walk when the command has no heredoc at all.
 func stripQuotedHeredocBodiesFile(command string, file *syntax.File) string {
-	// The public helper already short-circuits on the text. Analyze calls this
-	// variant directly, so skip the AST walk here too when no heredoc exists.
 	if file == nil || !strings.Contains(command, "<<") {
 		return command
 	}

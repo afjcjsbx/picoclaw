@@ -59,10 +59,10 @@ func TestStripQuotedHeredocBodies(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := StripQuotedHeredocBodies(tt.command)
+			got := Analyze(tt.command).StrippedHeredoc
 			hidden := strings.Contains(got, "quoted heredoc omitted")
 			if hidden != tt.wantHidden {
-				t.Fatalf("StripQuotedHeredocBodies(%q) = %q, hidden=%v want %v",
+				t.Fatalf("Analyze(%q).StrippedHeredoc = %q, hidden=%v want %v",
 					tt.command, got, hidden, tt.wantHidden)
 			}
 			if !tt.wantHidden {
@@ -81,7 +81,7 @@ func TestStripQuotedHeredocBodiesPreservesClosingDelimiter(t *testing.T) {
 	t.Parallel()
 
 	command := "cat <<'EOF'\nrm -rf /\nEOF\n"
-	got := StripQuotedHeredocBodies(command)
+	got := Analyze(command).StrippedHeredoc
 	if !strings.HasSuffix(got, "EOF\n") {
 		t.Fatalf("closing delimiter lost: %q", got)
 	}
