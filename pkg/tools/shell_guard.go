@@ -78,6 +78,13 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	ctx context.Context, command, cwd string, analysis shellguard.Analysis,
 ) string {
 	cmd := strings.TrimSpace(command)
+	// Brace expansion happens before the shell parses argv. Re-run the guard
+	// on the conservative expansion so `{rm,-rf,/}` cannot hide `rm -rf /`
+	// from hardline, the workspace boundary, the risk classifier or smart
+	// approvals.
+	if expanded := analysis.BraceExpanded; expanded != "" && expanded != cmd {
+		return t.guardCommandWithAnalysis(ctx, expanded, cwd, shellguard.Analyze(expanded))
+	}
 	lower := strings.ToLower(cmd)
 	// Quoted heredoc bodies are literal text: a backtick there cannot run a
 	// command, so deny patterns must not inspect it. The caller parsed the

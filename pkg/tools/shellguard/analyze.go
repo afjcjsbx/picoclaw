@@ -26,6 +26,10 @@ type Analysis struct {
 	// $IFS or a backslash-newline continuation. Callers then fall back to
 	// CanonicalCommands, which parses the normalized text.
 	CanonicalExact bool
+	// BraceExpanded is the conservative brace expansion of the command, or an
+	// empty string when no unquoted group expands. The guard re-runs its
+	// layers on this form so {rm,-rf,/} is seen as rm -rf /.
+	BraceExpanded string
 }
 
 // Analyze parses command once and derives the forms the guard layers need.
@@ -34,11 +38,16 @@ type Analysis struct {
 // reviewable by smart approvals).
 func Analyze(command string) Analysis {
 	normalized := normalizeForParse(command)
+	braceExpanded, _ := BraceExpand(command)
+	if braceExpanded == command {
+		braceExpanded = ""
+	}
 	file, err := Parse(command)
 	if err != nil {
 		return Analysis{
 			StrippedHeredoc: command,
 			CanonicalExact:  normalized == command,
+			BraceExpanded:   braceExpanded,
 		}
 	}
 	riskFile := file
@@ -53,5 +62,6 @@ func Analyze(command string) Analysis {
 		StrippedHeredoc: stripQuotedHeredocBodiesFile(command, file),
 		Canonical:       canonicalForms(file, 0),
 		CanonicalExact:  normalized == command,
+		BraceExpanded:   braceExpanded,
 	}
 }
