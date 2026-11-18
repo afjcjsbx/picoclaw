@@ -183,18 +183,11 @@ func TestShellTool_RiskCalibration(t *testing.T) {
 	cwd := t.TempDir()
 
 	allowed := []string{
-		"docker ps",
-		"docker logs app",
-		"docker inspect app",
 		"systemctl status nginx",
-		"kubectl get pods",
-		"kubectl describe pod x",
 		"git status",
 		"git log --oneline",
 		"git diff",
 		"rm file",
-		"terraform plan",
-		"helm list",
 		"aws s3 ls",
 		"cryptsetup status /dev/sda",
 		"zpool status",
@@ -207,9 +200,7 @@ func TestShellTool_RiskCalibration(t *testing.T) {
 	}
 
 	blocked := []string{
-		"docker run image",
 		"systemctl start nginx",
-		"kubectl delete pod x",
 		"git branch -D feature",
 		"rm -r build",
 		"rm -rf build",
@@ -219,13 +210,36 @@ func TestShellTool_RiskCalibration(t *testing.T) {
 		"cryptsetup luksFormat /dev/sda",
 		"zpool destroy tank",
 		"mdadm --zero-superblock /dev/sda",
-		"terraform destroy",
-		"helm uninstall release",
 		"aws s3 rm s3://bucket/key",
 	}
 	for _, command := range blocked {
 		if got := tool.guardCommand(command, cwd); got == "" {
 			t.Errorf("command should be blocked: %s", command)
+		}
+	}
+}
+
+func TestShellTool_UnlistedCommandsUseUnknownPolicy(t *testing.T) {
+	t.Parallel()
+
+	tool := riskTestTool(t, config.ExecConfig{})
+	cwd := t.TempDir()
+
+	// docker, kubectl, terraform and helm are not in the risk table. The
+	// default unknown policy allows them; the caller decides whether to review
+	// or block them.
+	for _, command := range []string{
+		"docker ps",
+		"docker run image",
+		"kubectl get pods",
+		"kubectl delete pod x",
+		"terraform plan",
+		"terraform destroy",
+		"helm list",
+		"helm uninstall release",
+	} {
+		if got := tool.guardCommand(command, cwd); got != "" {
+			t.Errorf("unlisted command should be allowed by the unknown policy: %s\n  got: %s", command, got)
 		}
 	}
 }
@@ -298,35 +312,6 @@ func TestShellTool_RiskNormalizesIFSObfuscation(t *testing.T) {
 	}
 }
 
-func TestShellTool_RiskOverrides(t *testing.T) {
-	t.Parallel()
-
-	tool := riskTestTool(t, config.ExecConfig{
-		RiskThreshold: "medium",
-		RiskOverrides: map[string]string{"chmod": "low"},
-	})
-	if got := tool.guardCommand("chmod +x script.sh", t.TempDir()); got != "" {
-		t.Fatalf("override should allow chmod, got %q", got)
-	}
-}
-
-func TestShellTool_UserArgModifiers(t *testing.T) {
-	t.Parallel()
-
-	tool := riskTestTool(t, config.ExecConfig{
-		RiskThreshold: "medium",
-		ArgModifiers: map[string][]config.ArgModifierConfig{
-			"echo": {{Args: []string{"--danger"}, Level: "high"}},
-		},
-	})
-	if got := tool.guardCommand("echo --danger", t.TempDir()); !strings.Contains(got, "risk classifier") {
-		t.Fatalf("user modifier should block echo --danger, got %q", got)
-	}
-	if got := tool.guardCommand("echo safe", t.TempDir()); got != "" {
-		t.Fatalf("unmodified echo should pass, got %q", got)
-	}
-}
-
 func TestShellTool_CustomAllowDoesNotExemptRisk(t *testing.T) {
 	t.Parallel()
 
@@ -388,19 +373,6 @@ func TestShellTool_InvalidRiskConfigRejected(t *testing.T) {
 
 	tests := []config.ExecConfig{
 		{RiskThreshold: "bogus"},
-		{RiskThreshold: "medium", RiskOverrides: map[string]string{"chmod": "bogus"}},
-		{
-			RiskThreshold: "medium",
-			ArgModifiers: map[string][]config.ArgModifierConfig{
-				"echo": {{Args: []string{"--danger"}, Level: "bogus"}},
-			},
-		},
-		{
-			RiskThreshold: "medium",
-			ArgModifiers: map[string][]config.ArgModifierConfig{
-				"echo": {{Args: []string{"--danger"}}},
-			},
-		},
 	}
 	for _, exec := range tests {
 		cfg := &config.Config{Tools: config.ToolsConfig{Exec: exec}}

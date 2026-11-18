@@ -557,7 +557,7 @@ Use `mode = lines` when:
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
 
-The AST risk classifier (`risk_threshold`, `risk_overrides`, `arg_modifiers`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification).
+The AST risk classifier (`risk_threshold`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification).
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 

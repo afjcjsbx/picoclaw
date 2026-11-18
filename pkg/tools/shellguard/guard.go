@@ -1,7 +1,6 @@
 package shellguard
 
 import (
-	"fmt"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -23,49 +22,15 @@ const maxShellNesting = 8
 // Guard classifies commands against a configured risk threshold.
 type Guard struct {
 	threshold RiskLevel
-	overrides map[string]string
-	modifiers map[string][]ArgModifier
 }
 
 // NewGuard builds a Guard. The threshold defaults to "medium" when empty.
-// Overrides and user modifiers are validated so a typo fails configuration
-// loading instead of silently disabling the guard.
-func NewGuard(
-	threshold string,
-	overrides map[string]string,
-	modifiers map[string][]ArgModifier,
-) (*Guard, error) {
+func NewGuard(threshold string) (*Guard, error) {
 	level, err := ParseRiskLevel(threshold)
 	if err != nil {
 		return nil, err
 	}
-
-	normalizedOverrides := NormalizeCommandKeys(overrides)
-	for cmd, raw := range normalizedOverrides {
-		if _, err := ParseRiskLevel(raw); err != nil {
-			return nil, fmt.Errorf("invalid risk override for %q: %w", cmd, err)
-		}
-	}
-
-	normalizedModifiers := make(map[string][]ArgModifier, len(modifiers))
-	for cmd, entries := range modifiers {
-		key := baseCommand(cmd)
-		for _, entry := range entries {
-			if entry.Level < RiskLow || entry.Level > RiskCritical {
-				return nil, fmt.Errorf("invalid risk modifier level for %q", cmd)
-			}
-			if len(entry.Args) == 0 {
-				return nil, fmt.Errorf("risk modifier for %q must list at least one argument", cmd)
-			}
-			normalizedModifiers[key] = append(normalizedModifiers[key], entry)
-		}
-	}
-
-	return &Guard{
-		threshold: level,
-		overrides: normalizedOverrides,
-		modifiers: normalizedModifiers,
-	}, nil
+	return &Guard{threshold: level}, nil
 }
 
 // Assessment is the static risk evaluation of a command. Unknown marks a
@@ -317,8 +282,12 @@ func (g *Guard) classify(words []word) Assessment {
 		return assessment
 	}
 	args := wordTexts(words)
+	level, known := ClassifyCommand(args)
+	if !known {
+		return unknownAssessment(args, "command is not in the risk table")
+	}
 	return Assessment{
-		Level:   ClassifyCommand(args, g.overrides, g.modifiers),
+		Level:   level,
 		Command: FormatCommand(args),
 	}
 }

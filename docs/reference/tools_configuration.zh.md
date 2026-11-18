@@ -224,7 +224,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - 管道到 shell：`| sh`、`| bash`（以及其他 POSIX shell）
 - Shell heredoc：`sh <<EOF`、`bash <<'EOF'`
 
-`sudo`、`chmod`、`chown`、`kill`、`git push`、`docker run`、包安装、`eval`、`source` 等命令由风险表分类；使用 `risk_threshold`、`risk_overrides` 或 `arg_modifiers` 调整。
+`sudo`、`chmod`、`chown`、`kill`、`git push`、`docker run`、`eval`、`source` 等命令由风险表分类；使用 `risk_threshold` 调整。
 
 Windows 没有 AST 分类器，因此其正则底线保留等价的通用命令模式以及 PowerShell 专用检查：递归 `Remove-Item`（含 `rm`/`ri`/`del` 别名）、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex` 等下载后执行管道、`taskkill /F`、`Stop-Process -Force`。
 
