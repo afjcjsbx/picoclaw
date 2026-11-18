@@ -129,18 +129,6 @@ func parseAssessment(command string) Assessment {
 	)
 }
 
-// WithThreshold returns a shallow copy of the guard using a different maximum
-// allowed level. It is used to measure a command against an operator's
-// risk-allow threshold without mutating the shared guard.
-func (g *Guard) WithThreshold(threshold RiskLevel) *Guard {
-	if g == nil {
-		return nil
-	}
-	clone := *g
-	clone.threshold = threshold
-	return &clone
-}
-
 // assessScript parses and walks a literal shell script (sh -c, eval, trap or a
 // wrapper command string).
 func (g *Guard) assessScript(command string, depth int) Assessment {
