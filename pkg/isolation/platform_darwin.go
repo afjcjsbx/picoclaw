@@ -10,12 +10,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
-	if !isolation.Enabled || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
+	if !isolation.Active() || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
 	sandboxExec, err := exec.LookPath("sandbox-exec")
@@ -69,7 +70,9 @@ func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config
 	for _, path := range []string{"/System", "/bin", "/sbin", "/etc", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/Library/Apple"} {
 		addTree(path, "ro", path != "/usr/share")
 	}
-	addTree(root, "rw", true)
+	addTree(root, "ro", true)
+	addTree(filepath.Join(root, pkg.WorkspaceName), "rw", true)
+	addTree(filepath.Join(root, "runtime-user-env"), "rw", true)
 	for _, item := range exposePaths {
 		path := NormalizeExposePath(item)
 		mode := "ro"
@@ -107,7 +110,11 @@ func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config
 			cwd, _ := os.Getwd()
 			workingDir = filepath.Join(cwd, workingDir)
 		}
-		addTree(workingDir, "rw", true)
+		mode := "ro"
+		if darwinWritablePath(workingDir, root, exposePaths) {
+			mode = "rw"
+		}
+		addTree(workingDir, mode, true)
 	}
 	for _, arg := range cmd.Args[1:] {
 		path := arg
@@ -126,9 +133,29 @@ func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config
 				addPath(path, "ro", "literal", info.Mode().Perm()&0o111 != 0)
 			}
 		} else {
-			addTree(filepath.Dir(path), "rw", true)
+			addTree(filepath.Dir(path), "ro", true)
 		}
 	}
 	profile.WriteString(rules.String())
 	return profile.String()
+}
+
+// darwinWritablePath reports whether path is covered by a built-in writable
+// root (workspace or runtime-user-env) or by an explicit rw expose path.
+func darwinWritablePath(path, root string, exposePaths []config.ExposePath) bool {
+	for _, writable := range []string{
+		filepath.Join(root, pkg.WorkspaceName),
+		filepath.Join(root, "runtime-user-env"),
+	} {
+		if boundaryPathWithin(writable, path) {
+			return true
+		}
+	}
+	for _, item := range exposePaths {
+		rule := NormalizeExposePath(item)
+		if rule.Mode == "rw" && boundaryPathWithin(rule.Target, path) {
+			return true
+		}
+	}
+	return false
 }

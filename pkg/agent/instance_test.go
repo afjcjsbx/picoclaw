@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -422,9 +424,22 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 }
 
 func TestNewAgentInstance_ExecUsesWriteAllowPathsOnly(t *testing.T) {
+	switch runtime.GOOS {
+	case "windows":
+		t.Skip("Windows isolation does not support expose_paths yet")
+	case "linux":
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			t.Skip("bubblewrap is not installed")
+		}
+	case "darwin":
+		if _, err := exec.LookPath("sandbox-exec"); err != nil {
+			t.Skip("sandbox-exec is not available")
+		}
+	}
 	root := t.TempDir()
+	t.Setenv(config.EnvHome, root)
 	workspace := filepath.Join(root, "workspace")
-	outside := filepath.Join(root, "outside")
+	outside := filepath.Join(t.TempDir(), "outside")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +458,15 @@ func TestNewAgentInstance_ExecUsesWriteAllowPathsOnly(t *testing.T) {
 
 	pattern := `^` + regexp.QuoteMeta(outside) + `(?:/|$)`
 	newAgent := func(allowRead, allowWrite []string) *AgentInstance {
+		isolationCfg := config.IsolationConfig{Mode: config.IsolationModeRequired}
+		if len(allowWrite) > 0 {
+			// Exec writes outside the workspace are a sandbox mount decision.
+			isolationCfg.ExposePaths = []config.ExposePath{
+				{Source: outside, Target: outside, Mode: "rw"},
+			}
+		}
 		cfg := &config.Config{
+			Isolation: isolationCfg,
 			Agents: config.AgentsConfig{
 				Defaults: config.AgentDefaults{
 					Workspace:           workspace,

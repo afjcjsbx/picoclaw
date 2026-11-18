@@ -448,20 +448,20 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `append_file` | Append to files  | Only files within workspace            |
 | `exec`        | Execute commands | Command paths must be within workspace |
 
-> The workspace restriction is a static path policy, not an OS sandbox. It validates command paths, home expansion and directory changes, but child processes and script contents remain outside its reach. Use containers, VMs, or a dedicated user for untrusted workloads.
+> The OS sandbox is the hard boundary and `isolation.mode` defaults to `required`. The instance root is read-only; only the workspace and `runtime-user-env` are writable, plus explicit `isolation.expose_paths`. `restrict_to_workspace` only validates the working directory; it does not replace the sandbox.
 
 #### Additional Exec Protection
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
 
-* `del /f`, `rmdir /s` — Bulk deletion (Unix `rm` is risk-classified: plain `rm` is `medium`, `rm -r` is `high`, `rm -rf` is `critical`)
+* `del /f`, `rmdir /s`, recursive `rm` — Bulk deletion (the policy blocks recursive `rm`; plain `rm` stays allowed)
 * `format`, `mkfs`, `diskpart` — Disk formatting (always-on for disk formats)
 * `dd if=` — Disk imaging (always-on)
 * Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
 * `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
 * Self-protection: killing the PicoClaw process or service, deleting its state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or `PICOCLAW_HOME`), or deleting the running executable — Always-on
-* Hardline and custom deny matching resolves `$IFS`, ANSI-C `$'...'` strings, backslash-newline continuations and AST quote splicing before applying the patterns — Always-on
-* Exec (Unix) workspace boundary: when `restrict_to_workspace` is enabled, `~`/`$HOME` path expansion, bare `..` in `cd`/`pushd`/`-C` targets, `cd`/`pushd` changes, dynamic redirection targets and nested `sh -c`/`exec`/`find -exec` scripts are validated against the workspace, including symlink escapes; `env -C`, `eval`, `trap`, `file:` URIs and `HOME`/`PWD`/`OLDPWD`/`CDPATH` assignments are rejected — Static best effort; use OS isolation for untrusted workloads
+* Hardline and custom deny matching expands `$IFS`/`${IFS}` and backslash-newline continuations before applying the patterns — Always-on, best-effort
+* Exec (Unix) workspace boundary: the mandatory sandbox mounts the instance root read-only and the workspace read-write; `restrict_to_workspace` validates the explicit and remembered `cwd`. Windows keeps its byte-level path scanner because the restricted-token backend does not remap paths
 * Windows PowerShell: recursive `Remove-Item`, `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, `iwr ... | iex`, `taskkill /F`, `Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — Always-on
 
@@ -557,7 +557,7 @@ Use `mode = lines` when:
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
 
-The AST risk classifier (`risk_threshold`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification).
+The exec policy (`enable_deny_patterns`, `custom_deny_patterns`, `custom_allow_patterns`), the mandatory OS sandbox (`isolation.mode`, `isolation.expose_paths`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [isolation](../tools/exec.md#isolation) and [policy patterns](../tools/exec.md#policy-patterns).
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 
@@ -574,7 +574,7 @@ For higher-risk environments:
 
 * Review build scripts before execution.
 * Prefer approval/manual review for compile-and-run workflows.
-* Run PicoClaw inside a container or VM if you need stronger isolation than the built-in guard provides.
+* Set `isolation.mode: required` (the default) and keep `isolation.expose_paths` narrow. Use a container or VM for a stronger boundary than the platform backend.
 
 #### Error Examples
 
@@ -588,29 +588,24 @@ For higher-risk environments:
 {tool=exec, error=Command blocked by safety guard (dangerous pattern detected)}
 ```
 
-#### Disabling Restrictions (Security Risk)
+#### Granting Access Outside the Workspace
 
-If you need the agent to access paths outside the workspace:
-
-**Method 1: Config file**
+The sandbox mounts the instance root read-only and the workspace read-write. To grant access to another host path, add an explicit `ro` or `rw` mount:
 
 ```json
 {
-  "agents": {
-    "defaults": {
-      "restrict_to_workspace": false
-    }
+  "isolation": {
+    "mode": "required",
+    "expose_paths": [
+      {"source": "/opt/toolchain", "target": "/opt/toolchain", "mode": "ro"}
+    ]
   }
 }
 ```
 
-**Method 2: Environment variable**
+Setting `agents.defaults.restrict_to_workspace` to `false` only disables working-directory validation; it does not widen the sandbox.
 
-```bash
-export PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false
-```
-
-> ⚠️ **Warning**: Disabling this restriction allows the agent to access any path on your system. Use with caution in controlled environments only.
+> ⚠️ **Warning**: Every `rw` expose path widens the sandbox boundary. Keep the list narrow and prefer `ro` unless the command must write there.
 
 #### Security Boundary Consistency
 

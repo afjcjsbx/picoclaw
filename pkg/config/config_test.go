@@ -2616,10 +2616,10 @@ func TestDefaultConfig_WorkspacePath_WithPicoclawHome(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig_IsolationEnabled(t *testing.T) {
+func TestDefaultConfig_IsolationRequired(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Isolation.Enabled {
-		t.Fatal("DefaultConfig().Isolation.Enabled should be false")
+	if got := cfg.Isolation.EffectiveMode(); got != IsolationModeRequired {
+		t.Fatalf("DefaultConfig().Isolation mode = %q, want %q", got, IsolationModeRequired)
 	}
 }
 
@@ -2627,7 +2627,7 @@ func TestConfig_UnmarshalIsolation(t *testing.T) {
 	cfg := DefaultConfig()
 	raw := []byte(`{
 		"isolation": {
-			"enabled": false,
+			"mode": "required",
 			"expose_paths": [
 				{"source":"/src","target":"/dst","mode":"ro"}
 			]
@@ -2636,8 +2636,8 @@ func TestConfig_UnmarshalIsolation(t *testing.T) {
 	if err := json.Unmarshal(raw, cfg); err != nil {
 		t.Fatalf("json.Unmarshal isolation config: %v", err)
 	}
-	if cfg.Isolation.Enabled {
-		t.Fatal("Isolation.Enabled should be false after unmarshal")
+	if got := cfg.Isolation.EffectiveMode(); got != IsolationModeRequired {
+		t.Fatalf("Isolation mode = %q, want required", got)
 	}
 	if len(cfg.Isolation.ExposePaths) != 1 {
 		t.Fatalf("ExposePaths len = %d, want 1", len(cfg.Isolation.ExposePaths))
@@ -2645,6 +2645,39 @@ func TestConfig_UnmarshalIsolation(t *testing.T) {
 	if got := cfg.Isolation.ExposePaths[0]; got.Source != "/src" || got.Target != "/dst" ||
 		got.Mode != "ro" {
 		t.Fatalf("ExposePaths[0] = %+v, want source=/src target=/dst mode=ro", got)
+	}
+}
+
+func TestIsolationConfigNormalized(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      IsolationConfig
+		want    string
+		wantErr bool
+	}{
+		{name: "explicit off", in: IsolationConfig{Mode: IsolationModeOff}, want: IsolationModeOff},
+		{name: "auto", in: IsolationConfig{Mode: IsolationModeAuto}, want: IsolationModeAuto},
+		{name: "required", in: IsolationConfig{Mode: IsolationModeRequired}, want: IsolationModeRequired},
+		{name: "legacy enabled", in: IsolationConfig{Enabled: true}, want: IsolationModeRequired},
+		{name: "legacy disabled", in: IsolationConfig{}, want: IsolationModeOff},
+		{name: "invalid", in: IsolationConfig{Mode: "sometimes"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.in.Normalized()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Normalized(%+v) = %+v, want error", tt.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Normalized(%+v) error: %v", tt.in, err)
+			}
+			if got.EffectiveMode() != tt.want {
+				t.Fatalf("Normalized(%+v).EffectiveMode() = %q, want %q", tt.in, got.EffectiveMode(), tt.want)
+			}
+		})
 	}
 }
 

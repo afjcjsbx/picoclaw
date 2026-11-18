@@ -143,7 +143,7 @@ func TestExecTool_StateNotUpdatedWhenCommandBlocked(t *testing.T) {
 
 	blocked := tool.Execute(ctx, map[string]any{
 		"action":  "run",
-		"command": "sudo true",
+		"command": "rm -rf build",
 		"cwd":     target,
 	})
 	require.True(t, blocked.IsError)

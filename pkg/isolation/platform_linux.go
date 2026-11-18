@@ -17,7 +17,7 @@ import (
 )
 
 func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
-	if !isolation.Enabled {
+	if !isolation.Active() {
 		return nil
 	}
 	// Bubblewrap is the only supported Linux backend right now. Fail closed when
@@ -25,7 +25,7 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	bwrapPath, err := exec.LookPath("bwrap")
 	if err != nil {
 		hint := bwrapInstallHint()
-		disableHint := `set "isolation.enabled": false in config.json`
+		disableHint := `set "isolation.mode": "off" in config.json`
 		logger.WarnCF("isolation", "bubblewrap is required for Linux isolation",
 			map[string]any{
 				"binary":            "bwrap",
@@ -64,12 +64,9 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	// arguments needed to preserve the original command semantics.
 	plan := BuildLinuxMountPlan(root, isolation.ExposePaths)
 	plan = appendLinuxCommandMountRules(plan, resolvedPath)
-	if execDir != "" {
-		plan = ensureLinuxMountRule(plan, execDir, execDir, "rw")
-		if resolved, resolveErr := filepath.EvalSymlinks(execDir); resolveErr == nil && resolved != execDir {
-			plan = ensureLinuxMountRule(plan, resolved, resolved, "rw")
-		}
-	}
+	// The effective working directory is not writable by itself. It is
+	// already writable when it lives under the workspace or runtime-user-env
+	// mount; otherwise the read-only root mount applies.
 	plan = appendLinuxArgumentMounts(plan, originalArgs[1:])
 	logger.DebugCF("isolation", "linux isolation mount plan",
 		map[string]any{
@@ -271,7 +268,8 @@ func appendLinuxArgumentMounts(plan []MountRule, args []string) []MountRule {
 		if _, err := os.Stat(clean); err == nil {
 			// Absolute path arguments are exposed read-only: a directory passed
 			// on the command line must not become a writable hole in the
-			// sandbox. Writable locations come from expose_paths or the cwd.
+			// sandbox. Writable locations come only from the workspace,
+			// runtime-user-env and explicit expose_paths.
 			plan = ensureLinuxMountRule(plan, clean, clean, "ro")
 			if resolved, resolveErr := filepath.EvalSymlinks(clean); resolveErr == nil && resolved != clean {
 				plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
@@ -285,7 +283,7 @@ func appendLinuxArgumentMounts(plan []MountRule, args []string) []MountRule {
 			continue
 		}
 		if _, err := os.Stat(parent); err == nil {
-			plan = ensureLinuxMountRule(plan, parent, parent, "rw")
+			plan = ensureLinuxMountRule(plan, parent, parent, "ro")
 		}
 	}
 	return plan

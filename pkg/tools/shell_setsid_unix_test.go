@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 const (
@@ -107,7 +109,7 @@ func waitForSetsidProcessExit(t *testing.T, pid int) {
 }
 
 func TestShellTool_TimeoutKillsSetsidChild(t *testing.T) {
-	tool, err := NewExecToolWithConfig(t.TempDir(), false, nil)
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, &config.Config{})
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %v", err)
 	}
@@ -131,7 +133,7 @@ func TestShellTool_TimeoutKillsSetsidChild(t *testing.T) {
 }
 
 func TestShellTool_BackgroundKillKillsSetsidChild(t *testing.T) {
-	tool, err := NewExecToolWithConfig(t.TempDir(), false, nil)
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, &config.Config{})
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %v", err)
 	}

@@ -1,5 +1,8 @@
 {
   "version": 3,
+  "isolation": {
+    "mode": "required"
+  },
   "plugins": {
     "enabled": false,
     "concurrency": 4,
@@ -525,7 +528,6 @@
     "exec": {
       "enabled": true,
       "enable_deny_patterns": true,
-      "risk_threshold": "medium",
       "allow_remote": false,
       "custom_deny_patterns": null,
       "custom_allow_patterns": null

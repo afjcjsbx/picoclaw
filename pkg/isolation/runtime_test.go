@@ -147,17 +147,24 @@ func TestBuildWindowsAccessRules(t *testing.T) {
 		t.Fatal("BuildWindowsAccessRules returned empty rules")
 	}
 	foundRoot := false
+	foundWorkspace := false
 	foundOverride := false
 	for _, rule := range rules {
-		if rule.Path == `C:\picoclaw` && rule.Mode == "rw" {
+		if rule.Path == `C:\picoclaw` && rule.Mode == "ro" {
 			foundRoot = true
+		}
+		if rule.Path == filepath.Join(`C:\picoclaw`, pkg.WorkspaceName) && rule.Mode == "rw" {
+			foundWorkspace = true
 		}
 		if rule.Path == `D:\data` && rule.Mode == "ro" {
 			foundOverride = true
 		}
 	}
 	if !foundRoot {
-		t.Fatal("BuildWindowsAccessRules missing root rule")
+		t.Fatal("BuildWindowsAccessRules missing read-only root rule")
+	}
+	if !foundWorkspace {
+		t.Fatal("BuildWindowsAccessRules missing writable workspace rule")
 	}
 	if !foundOverride {
 		t.Fatal("BuildWindowsAccessRules missing override rule")

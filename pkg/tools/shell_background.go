@@ -4,8 +4,6 @@ import (
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
-
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // normalizeTrailingBackgroundAmpersand converts a final, unquoted background
@@ -16,14 +14,13 @@ import (
 // exits as soon as the job starts, so a foreground call would report success
 // while the process keeps running untracked and its output pipe is closed.
 // Callers convert these commands into tracked background sessions instead,
-// where poll, wait, read and kill can reach the process. The caller supplies
-// the shared parse of the written command, so this helper does not parse again.
-func normalizeTrailingBackgroundAmpersand(command string, analysis shellguard.Analysis, goos string) (string, bool) {
+// where poll, wait, read and kill can reach the process.
+func normalizeTrailingBackgroundAmpersand(command, goos string) (string, bool) {
 	if goos == "windows" {
 		return command, false
 	}
-	file := analysis.File
-	if file == nil || len(file.Stmts) == 0 {
+	file, err := parseShellCommand(command)
+	if err != nil || len(file.Stmts) == 0 {
 		return command, false
 	}
 
@@ -65,50 +62,79 @@ var detachCommands = map[string]bool{
 // itself is tracked), while an inner '&' operator is always rejected because it
 // detaches a job from the tracked shell. trailingConverted is true when the
 // caller rewrote the command's final '&' into a tracked background run.
-func untrackedDetachReason(command string, analysis shellguard.Analysis, tracked, trailingConverted bool) string {
-	forms := analysis.Canonical
-	if !analysis.CanonicalExact {
-		forms = shellguard.CanonicalCommands(command)
-	}
-	for _, form := range forms {
-		fields := strings.Fields(form)
-		if len(fields) == 0 {
-			continue
-		}
-		name := fields[0]
-		if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
-			name = name[slash+1:]
-		}
-		if detachCommands[name] && !tracked {
-			return "Command blocked: '" + name + "' detaches the process from the exec session. " +
-				"Use background=true so PicoClaw can track it."
-		}
+func untrackedDetachReason(command string, tracked, trailingConverted bool) string {
+	file, err := parseShellCommand(command)
+	if err != nil {
+		return untrackedDetachFallback(command, tracked)
 	}
 
-	if analysis.File == nil {
-		return ""
-	}
 	var converted *syntax.Stmt
-	if trailingConverted && len(analysis.File.Stmts) > 0 {
-		converted = analysis.File.Stmts[len(analysis.File.Stmts)-1]
+	if trailingConverted && len(file.Stmts) > 0 {
+		converted = file.Stmts[len(file.Stmts)-1]
 	}
-	found := false
-	syntax.Walk(analysis.File, func(node syntax.Node) bool {
-		if found {
+
+	reason := ""
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if reason != "" {
 			return false
 		}
-		if stmt, ok := node.(*syntax.Stmt); ok && stmt.Background {
-			if stmt == converted {
-				return true
+		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 {
+			name := shellWordText(call.Args[0])
+			if detachCommands[name] && !tracked {
+				reason = "Command blocked: '" + name + "' detaches the process from the exec session. " +
+					"Use background=true so PicoClaw can track it."
+				return false
 			}
-			found = true
+		}
+		if stmt, ok := node.(*syntax.Stmt); ok && stmt.Background && stmt != converted {
+			reason = "Command blocked: '&' inside a command creates an untracked background process. " +
+				"Run the whole command with background=true instead."
 			return false
 		}
 		return true
 	})
-	if found {
-		return "Command blocked: '&' inside a command creates an untracked background process. " +
-			"Run the whole command with background=true instead."
+	return reason
+}
+
+// untrackedDetachFallback covers commands the parser cannot read. It only
+// checks the first word, so it cannot hide an inner '&'; the shell will reject
+// syntax it cannot parse in the same cases the parser does.
+func untrackedDetachFallback(command string, tracked bool) string {
+	fields := strings.Fields(command)
+	if len(fields) == 0 || tracked {
+		return ""
+	}
+	name := fields[0]
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		name = name[slash+1:]
+	}
+	if detachCommands[name] {
+		return "Command blocked: '" + name + "' detaches the process from the exec session. " +
+			"Use background=true so PicoClaw can track it."
+	}
+	return ""
+}
+
+func parseShellCommand(command string) (*syntax.File, error) {
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	return parser.Parse(strings.NewReader(command), "")
+}
+
+func shellWordText(w *syntax.Word) string {
+	if w == nil || len(w.Parts) != 1 {
+		return ""
+	}
+	switch part := w.Parts[0].(type) {
+	case *syntax.Lit:
+		return part.Value
+	case *syntax.SglQuoted:
+		return part.Value
+	case *syntax.DblQuoted:
+		if len(part.Parts) == 1 {
+			if lit, ok := part.Parts[0].(*syntax.Lit); ok {
+				return lit.Value
+			}
+		}
 	}
 	return ""
 }

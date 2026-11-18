@@ -20,7 +20,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // withNote appends one model-facing note to another without leaving a double
@@ -144,7 +143,6 @@ func (t *ExecTool) runSync(
 	ctx context.Context,
 	command, cwd string,
 	timeout time.Duration,
-	analysis shellguard.Analysis,
 ) *ToolResult {
 	start := time.Now()
 	// timeout == 0 means no timeout
@@ -198,7 +196,7 @@ func (t *ExecTool) runSync(
 
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
-	if err := isolation.Start(cmd); err != nil {
+	if err := isolation.StartFor(cmd, t.isolationConfig); err != nil {
 		_ = outputWriter.Close()
 		_ = outputReader.Close()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
@@ -336,7 +334,7 @@ func (t *ExecTool) runSync(
 
 	exitNote := ""
 	if exitCode != nil {
-		exitNote = informativeExitNote(command, analysis, *exitCode)
+		exitNote = informativeExitNote(command, *exitCode)
 	}
 	meta := execRunMeta{
 		ExitCode:     exitCode,
@@ -413,9 +411,10 @@ var signalExitNotes = map[int]string{
 }
 
 // informativeExitNote returns a model-facing note for a non-zero status that
-// has a well-known non-error meaning. The last canonical simple command is the
-// one that supplies the shell's exit status.
-func informativeExitNote(command string, analysis shellguard.Analysis, code int) string {
+// has a well-known non-error meaning. The last simple command is the one that
+// supplies the shell's exit status; a best-effort scan is enough here because
+// the note is cosmetic.
+func informativeExitNote(command string, code int) string {
 	if code <= 0 {
 		return ""
 	}
@@ -424,14 +423,10 @@ func informativeExitNote(command string, analysis shellguard.Analysis, code int)
 			"exit code %d usually means the command was terminated by %s", code, signal,
 		)
 	}
-	forms := analysis.Canonical
-	if !analysis.CanonicalExact {
-		forms = shellguard.CanonicalCommands(command)
+	if idx := strings.LastIndexAny(command, ";\n|&"); idx >= 0 {
+		command = command[idx+1:]
 	}
-	if len(forms) == 0 {
-		return ""
-	}
-	fields := strings.Fields(forms[len(forms)-1])
+	fields := strings.Fields(command)
 	if len(fields) == 0 {
 		return ""
 	}
@@ -629,7 +624,7 @@ func (t *ExecTool) runBackground(
 
 	// Background sessions use the same startup path so isolation stays consistent
 	// with synchronous exec runs.
-	if err := isolation.Start(cmd); err != nil {
+	if err := isolation.StartFor(cmd, t.isolationConfig); err != nil {
 		if outputReader != nil {
 			_ = outputReader.Close()
 		}

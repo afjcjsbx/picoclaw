@@ -319,13 +319,13 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 默认情况下，`exec` 工具会阻止以下危险命令（其中硬性底线规则在 `enable_deny_patterns` 为 `false` 时仍会生效）：
 
-* `del /f`、`rmdir /s` — 批量删除（Unix `rm` 由风险分类器处理：基础 `medium`，`rm -r` 为 `high`，`rm -rf` 为 `critical`）
+* `del /f`、`rmdir /s`、递归 `rm` — 批量删除（策略层拦截递归 `rm`；普通 `rm` 仍允许）
 * `format`、`mkfs`、`diskpart` — 磁盘格式化（磁盘格式化始终生效）
 * `dd if=` — 磁盘镜像（始终生效）
 * 写入 `/dev/sd[a-z]` — 直接磁盘写入（始终生效）
 * `shutdown`、`reboot`、`poweroff` — 系统关机（始终生效）
 * 自我保护：终止 PicoClaw 进程或服务、删除状态目录（`~/.picoclaw`、`$HOME/.picoclaw`、`$PICOCLAW_HOME` 或 `PICOCLAW_HOME`），或删除正在运行的可执行文件 — 始终生效
-* 硬性底线和自定义拒绝规则匹配前会解析 `$IFS`、ANSI-C `$'...'` 字符串、反斜杠换行续行和 AST 引号拼接 — 始终生效
+* 硬性底线和自定义拒绝规则匹配前会展开 `$IFS`/`${IFS}` 和反斜杠换行续行 — 始终生效（尽力而为）
 * Windows PowerShell：递归 `Remove-Item`、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex`、`taskkill /F`、`Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — 始终生效
 
@@ -345,7 +345,7 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，仅豁免默认拒绝规则；会自动添加首尾锚点 |
 
-AST 风险分类器（`risk_threshold`）和子进程环境（`env_set`、`env_allowlist`）的说明见 [exec 工具](../tools/exec.md)文档，参见[风险分类](../tools/exec.md#risk-classification)。
+exec 策略（`enable_deny_patterns`、`custom_deny_patterns`、`custom_allow_patterns`）、强制 OS 沙箱（`isolation.mode`、`isolation.expose_paths`）和子进程环境（`env_set`、`env_allowlist`）的说明见 [exec 工具](../tools/exec.md)文档，参见[隔离](../tools/exec.md#isolation)和[策略模式](../tools/exec.md#policy-patterns)。
 
 > **安全提示：** Symlink 保护默认启用——所有文件路径在允许列表匹配前都会通过 `filepath.EvalSymlinks` 解析，防止符号链接逃逸攻击。
 
@@ -373,29 +373,24 @@ exec 安全守卫仅检查 PicoClaw 直接启动的命令行。它不会递归�
 {tool=exec, error=Command blocked by safety guard (dangerous pattern detected)}
 ```
 
-#### 禁用限制（安全风险）
+#### 授予工作区外访问权限
 
-如果需要 Agent 访问工作区外的路径：
-
-**方法 1: 配置文件**
+沙箱将实例根目录挂载为只读，将工作区挂载为可读写。要访问其他主机路径，请添加显式的 `ro` 或 `rw` 挂载：
 
 ```json
 {
-  "agents": {
-    "defaults": {
-      "restrict_to_workspace": false
-    }
+  "isolation": {
+    "mode": "required",
+    "expose_paths": [
+      {"source": "/opt/toolchain", "target": "/opt/toolchain", "mode": "ro"}
+    ]
   }
 }
 ```
 
-**方法 2: 环境变量**
+将 `agents.defaults.restrict_to_workspace` 设为 `false` 只会关闭工作目录校验，不会扩大沙箱边界。
 
-```bash
-export PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false
-```
-
-> ⚠️ **警告**: 禁用此限制将允许 Agent 访问系统上的任何路径。仅在受控环境中谨慎使用。
+> ⚠️ **警告**: 每个 `rw` 挂载都会扩大沙箱边界。请保持列表尽量小，除非命令必须写入，否则优先使用 `ro`。
 
 #### 安全边界一致性
 

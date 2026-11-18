@@ -33,7 +33,7 @@ type Boundary struct {
 // executable, working directory, and absolute path arguments when it starts a
 // child process.
 func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, bool) {
-	if !cfg.Enabled || !IsSupported() {
+	if !cfg.Active() || !IsSupported() {
 		return Boundary{}, false
 	}
 
@@ -82,10 +82,7 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 	case "darwin":
 		boundary.PathBoundary = true
 		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
-		// The Seatbelt profile always allows writes under the instance root.
-		// Seatbelt rules are additive, so a later read-only allow cannot revoke
-		// that write access; report the enforced mode, not the requested one.
-		boundary.RootWritable = true
+		boundary.RootWritable = false
 		boundary.ScratchWritable = true
 
 		customTargets := customExposeTargets(cfg.ExposePaths)
@@ -101,10 +98,6 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 			case "rw":
 				boundary.Writable = append(boundary.Writable, target)
 			case "ro":
-				if boundaryPathWithin(boundary.Root, target) {
-					boundary.Writable = append(boundary.Writable, target)
-					continue
-				}
 				boundary.ReadOnly = append(boundary.ReadOnly, target)
 			}
 		}

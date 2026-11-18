@@ -56,8 +56,8 @@ func TestDescribeBoundaryActive(t *testing.T) {
 	if !boundary.PathBoundary {
 		t.Fatal("PathBoundary = false, want true")
 	}
-	if !boundary.RootWritable {
-		t.Fatal("RootWritable = false, want true")
+	if boundary.RootWritable {
+		t.Fatal("RootWritable = true, want false")
 	}
 	if boundary.Scratch != filepath.Join(home, "runtime-user-env", "tmp") {
 		t.Fatalf("Scratch = %q", boundary.Scratch)
@@ -117,22 +117,11 @@ func TestDescribeBoundaryRootOverrideReadOnly(t *testing.T) {
 	if !ok {
 		t.Fatal("DescribeBoundary() = false, want true")
 	}
-	if runtime.GOOS == "darwin" {
-		// Seatbelt always allows writes under the instance root, so a
-		// read-only override cannot be enforced.
-		if !boundary.RootWritable {
-			t.Fatal("RootWritable = false, want true on macOS")
-		}
-		if !boundary.ScratchWritable {
-			t.Fatal("ScratchWritable = false, want true on macOS")
-		}
-		return
-	}
 	if boundary.RootWritable {
 		t.Fatal("RootWritable = true, want false")
 	}
-	if boundary.ScratchWritable {
-		t.Fatal("ScratchWritable = true, want false")
+	if !boundary.ScratchWritable {
+		t.Fatal("ScratchWritable = false, want true")
 	}
 }
 
@@ -153,15 +142,17 @@ func TestDescribeBoundaryDarwinReadOnlyUnderRoot(t *testing.T) {
 	if !ok {
 		t.Fatal("DescribeBoundary() = false, want true")
 	}
-	if !boundary.RootWritable || !boundary.ScratchWritable {
-		t.Fatalf("RootWritable=%v ScratchWritable=%v, want true/true",
-			boundary.RootWritable, boundary.ScratchWritable)
+	if boundary.RootWritable {
+		t.Fatal("RootWritable = true, want false")
 	}
-	if !slices.Contains(boundary.Writable, readOnly) {
-		t.Fatalf("Writable = %v, want %q", boundary.Writable, readOnly)
+	if !boundary.ScratchWritable {
+		t.Fatal("ScratchWritable = false, want true")
 	}
-	if slices.Contains(boundary.ReadOnly, readOnly) {
-		t.Fatalf("ReadOnly = %v, must not contain %q", boundary.ReadOnly, readOnly)
+	if slices.Contains(boundary.Writable, readOnly) {
+		t.Fatalf("Writable = %v, must not contain %q", boundary.Writable, readOnly)
+	}
+	if !slices.Contains(boundary.ReadOnly, readOnly) {
+		t.Fatalf("ReadOnly = %v, want %q", boundary.ReadOnly, readOnly)
 	}
 }
 
@@ -174,32 +165,32 @@ func TestValidateDarwinExposePaths(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "data")
 	inside := filepath.Join(home, "data")
 
-	if err := validateDarwinExposePaths(nil, home); err != nil {
+	if err := validateDarwinExposePaths(nil); err != nil {
 		t.Fatalf("validateDarwinExposePaths(nil) error = %v", err)
 	}
 	if err := validateDarwinExposePaths([]config.ExposePath{
 		{Source: outside, Target: outside, Mode: "ro"},
-	}, home); err != nil {
+	}); err != nil {
 		t.Fatalf("read-only path outside root rejected: %v", err)
 	}
 	if err := validateDarwinExposePaths([]config.ExposePath{
 		{Source: inside, Target: inside, Mode: "rw"},
-	}, home); err != nil {
+	}); err != nil {
 		t.Fatalf("read-write path inside root rejected: %v", err)
 	}
 	if err := validateDarwinExposePaths([]config.ExposePath{
 		{Source: inside, Target: inside, Mode: "ro"},
-	}, home); err == nil {
-		t.Fatal("read-only path inside root must be rejected")
+	}); err != nil {
+		t.Fatalf("read-only path inside root rejected: %v", err)
 	}
 	if err := validateDarwinExposePaths([]config.ExposePath{
 		{Source: home, Target: home, Mode: "ro"},
-	}, home); err == nil {
-		t.Fatal("read-only instance root must be rejected")
+	}); err != nil {
+		t.Fatalf("read-only instance root rejected: %v", err)
 	}
 	if err := validateDarwinExposePaths([]config.ExposePath{
 		{Source: outside, Target: filepath.Join(outside, "dst"), Mode: "ro"},
-	}, home); err == nil {
+	}); err == nil {
 		t.Fatal("remapped expose path must be rejected")
 	}
 }
@@ -244,8 +235,8 @@ func TestDescribeBoundaryScratchOverride(t *testing.T) {
 	if !ok {
 		t.Fatal("DescribeBoundary() = false, want true")
 	}
-	if !boundary.RootWritable {
-		t.Fatal("RootWritable = false, want true")
+	if boundary.RootWritable {
+		t.Fatal("RootWritable = true, want false")
 	}
 	if boundary.ScratchWritable {
 		t.Fatal("ScratchWritable = true, want false")

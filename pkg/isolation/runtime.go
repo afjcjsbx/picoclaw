@@ -1,6 +1,7 @@
 package isolation
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 // MountRule describes a source-to-target mount exposed inside the Linux
@@ -49,6 +51,11 @@ var (
 	// child process. It is invalidated whenever Configure changes the config.
 	preflightMu    sync.Mutex
 	preflightCache preflightResult
+
+	// perConfigPreflight caches preflight results for tools that carry their
+	// own IsolationConfig instead of using the process-wide setting.
+	perConfigPreflightMu sync.Mutex
+	perConfigPreflight   = map[string]error{}
 )
 
 type preflightResult struct {
@@ -62,12 +69,22 @@ type preflightResult struct {
 func Configure(cfg *config.Config) {
 	isolationMu.Lock()
 	defer isolationMu.Unlock()
-	if cfg == nil {
-		defaults := config.DefaultConfig()
-		currentIsolation = defaults.Isolation
-	} else {
-		currentIsolation = cfg.Isolation
+	next := config.DefaultConfig().Isolation
+	if cfg != nil {
+		next = cfg.Isolation
 	}
+	normalized, err := next.Normalized()
+	if err != nil {
+		// A malformed mode must not silently run unsandboxed. Keep the
+		// fail-closed default and surface the problem during preflight.
+		logger.ErrorCF("isolation", "invalid isolation mode; requiring a sandbox",
+			map[string]any{"error": err.Error(), "mode": next.Mode})
+		normalized = config.IsolationConfig{
+			Mode:    config.IsolationModeRequired,
+			Enabled: true,
+		}
+	}
+	currentIsolation = normalized
 	isolationGen++
 }
 
@@ -220,11 +237,13 @@ func NormalizeExposePath(item config.ExposePath) config.ExposePath {
 // DefaultExposePaths returns the minimum built-in host paths required for the
 // current platform to run isolated child processes.
 func DefaultExposePaths(root string) []config.ExposePath {
-	items := []config.ExposePath{{
-		Source: root,
-		Target: root,
-		Mode:   "rw",
-	}}
+	workspace := filepath.Join(root, pkg.WorkspaceName)
+	userEnv := filepath.Join(root, "runtime-user-env")
+	items := []config.ExposePath{
+		{Source: root, Target: root, Mode: "ro"},
+		{Source: workspace, Target: workspace, Mode: "rw"},
+		{Source: userEnv, Target: userEnv, Mode: "rw"},
+	}
 	if runtime.GOOS == "linux" {
 		items = append(items, defaultLinuxSystemExposePaths()...)
 	}
@@ -343,8 +362,12 @@ func ensureLinuxMountRule(plan []MountRule, source, target, mode string) []Mount
 // Windows restricted-token backend.
 func BuildWindowsAccessRules(root string, overrides []config.ExposePath) []AccessRule {
 	merged := MergeExposePaths(nil, overrides)
-	rules := make([]AccessRule, 0, len(merged)+1)
-	rules = append(rules, AccessRule{Path: root, Mode: "rw"})
+	rules := make([]AccessRule, 0, len(merged)+3)
+	rules = append(rules,
+		AccessRule{Path: root, Mode: "ro"},
+		AccessRule{Path: filepath.Join(root, pkg.WorkspaceName), Mode: "rw"},
+		AccessRule{Path: filepath.Join(root, "runtime-user-env"), Mode: "rw"},
+	)
 	for _, item := range merged {
 		rules = append(rules, AccessRule{Path: item.Source, Mode: item.Mode})
 	}
@@ -358,21 +381,13 @@ func validateWindowsExposePaths(items []config.ExposePath) error {
 	return fmt.Errorf("windows isolation does not yet support expose_paths filesystem rules")
 }
 
-func validateDarwinExposePaths(items []config.ExposePath, root string) error {
+func validateDarwinExposePaths(items []config.ExposePath) error {
 	for _, item := range items {
 		path := NormalizeExposePath(item)
 		if path.Source != path.Target {
 			return fmt.Errorf(
 				"macOS Seatbelt does not support expose_paths remapping: %s -> %s",
 				path.Source,
-				path.Target,
-			)
-		}
-		if path.Mode == "ro" && boundaryPathWithin(root, path.Target) {
-			return fmt.Errorf(
-				"macOS Seatbelt cannot enforce read-only expose_paths under the instance root %s: %s; "+
-					"the instance root is always writable",
-				root,
 				path.Target,
 			)
 		}
@@ -421,7 +436,7 @@ func preflightCached() error {
 }
 
 func preflight(isolation config.IsolationConfig) error {
-	if !isolation.Enabled {
+	if !isolation.Active() {
 		return nil
 	}
 	if !IsSupported() {
@@ -455,11 +470,61 @@ func preflight(isolation config.IsolationConfig) error {
 		}
 	}
 	if runtime.GOOS == "darwin" {
-		if err := validateDarwinExposePaths(isolation.ExposePaths, root); err != nil {
+		if err := validateDarwinExposePaths(isolation.ExposePaths); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// StartFor is Start with an explicit per-caller isolation config, so a tool
+// can fail closed without depending on process-wide state.
+func StartFor(cmd *exec.Cmd, cfg config.IsolationConfig) error {
+	normalized, err := cfg.Normalized()
+	if err != nil {
+		return err
+	}
+	if preflightErr := preflightFor(normalized); preflightErr != nil {
+		return preflightErr
+	}
+	root := ""
+	if normalized.Active() {
+		root, err = ResolveInstanceRoot()
+		if err != nil {
+			return err
+		}
+		ApplyUserEnv(cmd, root)
+		if err := applyPlatformIsolation(cmd, normalized, root); err != nil {
+			return err
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		cleanupPendingPlatformResources(cmd)
+		return err
+	}
+	if err := postStartPlatformIsolation(cmd, normalized, root); err != nil {
+		terminateStartedCommand(cmd)
+		return err
+	}
+	return nil
+}
+
+// preflightFor validates one per-caller isolation config, caching both success
+// and failure so repeated exec calls do not recreate the instance root.
+func preflightFor(cfg config.IsolationConfig) error {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	key := string(data)
+	perConfigPreflightMu.Lock()
+	defer perConfigPreflightMu.Unlock()
+	if cached, ok := perConfigPreflight[key]; ok {
+		return cached
+	}
+	err = preflight(cfg)
+	perConfigPreflight[key] = err
+	return err
 }
 
 // Start prepares isolation for the command, starts it, and applies any
@@ -474,7 +539,7 @@ func Start(cmd *exec.Cmd) error {
 	}
 	isolation := CurrentConfig()
 	root := ""
-	if isolation.Enabled {
+	if isolation.Active() {
 		var err error
 		root, err = ResolveInstanceRoot()
 		if err != nil {
@@ -501,7 +566,7 @@ func Run(cmd *exec.Cmd) error {
 	}
 	isolation := CurrentConfig()
 	root := ""
-	if isolation.Enabled {
+	if isolation.Active() {
 		var err error
 		root, err = ResolveInstanceRoot()
 		if err != nil {
@@ -532,7 +597,7 @@ func PrepareCommand(cmd *exec.Cmd) error {
 	if err := preflightCached(); err != nil {
 		return err
 	}
-	if isolation.Enabled {
+	if isolation.Active() {
 		root, err := ResolveInstanceRoot()
 		if err != nil {
 			return err

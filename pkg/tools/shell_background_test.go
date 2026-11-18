@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
@@ -151,7 +150,7 @@ func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, stripped := normalizeTrailingBackgroundAmpersand(
-				tt.command, shellguard.Analyze(tt.command), "linux",
+				tt.command, "linux",
 			)
 			require.Equal(t, tt.strip, stripped)
 			require.Equal(t, tt.want, got)
@@ -162,7 +161,7 @@ func TestNormalizeTrailingBackgroundAmpersand(t *testing.T) {
 func TestNormalizeTrailingBackgroundAmpersandOSGate(t *testing.T) {
 	t.Run("unix", func(t *testing.T) {
 		got, converted := normalizeTrailingBackgroundAmpersand(
-			"sleep 1 &", shellguard.Analyze("sleep 1 &"), "linux",
+			"sleep 1 &", "linux",
 		)
 		require.True(t, converted)
 		require.Equal(t, "sleep 1", got)
@@ -170,7 +169,7 @@ func TestNormalizeTrailingBackgroundAmpersandOSGate(t *testing.T) {
 
 	t.Run("windows", func(t *testing.T) {
 		got, converted := normalizeTrailingBackgroundAmpersand(
-			"sleep 1 &", shellguard.Analyze("sleep 1 &"), "windows",
+			"sleep 1 &", "windows",
 		)
 		require.False(t, converted)
 		require.Equal(t, "sleep 1 &", got)
@@ -180,7 +179,7 @@ func TestNormalizeTrailingBackgroundAmpersandOSGate(t *testing.T) {
 func newTrailingAmpersandTool(t *testing.T) (*ExecTool, context.Context) {
 	t.Helper()
 
-	tool, err := NewExecToolWithConfig("", false, nil)
+	tool, err := NewExecToolWithConfig("", false, &config.Config{})
 	require.NoError(t, err)
 
 	sm := NewSessionManager()
@@ -371,7 +370,7 @@ func TestUntrackedDetachReason(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := untrackedDetachReason(
-				tt.command, shellguard.Analyze(tt.command), tt.tracked, false,
+				tt.command, tt.tracked, false,
 			)
 			if tt.want == "" {
 				require.Empty(t, got)
