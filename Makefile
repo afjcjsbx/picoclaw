@@ -1,4 +1,4 @@
-.PHONY: all build install uninstall clean help test integration-test build-all build-target lint-docs
+.PHONY: all build install uninstall clean help test integration-test build-all build-target lint-docs docker-isolation
 
 # Build variables
 BINARY_NAME=picoclaw
@@ -457,6 +457,13 @@ docker-build:
 	@echo "Building minimal Docker image (Alpine-based)..."
 	docker compose -f docker/docker-compose.yml build picoclaw-agent picoclaw-gateway
 
+ISOLATION_IMAGE?=picoclaw-isolation:1.27.4
+
+## docker-isolation: Build the Docker isolation runtime image
+docker-isolation:
+	@echo "Building Docker isolation runtime image ($(ISOLATION_IMAGE))..."
+	docker build -f docker/Dockerfile.isolation -t $(ISOLATION_IMAGE) docker
+
 ## docker-build-full: Build Docker image with full MCP support (Node.js 24)
 docker-build-full:
 	@echo "Building full-featured Docker image (Node.js 24)..."
@@ -536,6 +543,7 @@ help:
 	@echo "  make uninstall          # Remove from /usr/local/bin"
 	@echo "  make install-skills     # Install skills to workspace"
 	@echo "  make docker-build       # Build minimal Docker image"
+	@echo "  make docker-isolation   # Build the Docker isolation runtime image"
 	@echo "  make docker-test        # Test MCP tools in Docker"
 	@echo ""
 	@echo "Environment Variables:"

@@ -1,4 +1,4 @@
-name: 🐳 Build & Push Docker Image
+name: 🐳 Build & Push Docker Images
 
 on:
   workflow_call:
@@ -11,12 +11,14 @@ on:
 env:
   GHCR_REGISTRY: ghcr.io
   GHCR_IMAGE_NAME: ${{ github.repository_owner }}/picoclaw
+  GHCR_ISOLATION_IMAGE_NAME: ${{ github.repository_owner }}/picoclaw-isolation
   DOCKERHUB_REGISTRY: docker.io
   DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_REPOSITORY }}
+  DOCKERHUB_ISOLATION_IMAGE_NAME: ${{ vars.DOCKERHUB_REPOSITORY }}-isolation
 
 jobs:
   build:
-    name: 🏗️ Build Docker Image
+    name: 🏗️ Build Docker Images
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -59,9 +61,13 @@ jobs:
           echo "ghcr_latest=${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:latest" >> "$GITHUB_OUTPUT"
           echo "dockerhub_tag=${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}:${tag}" >> "$GITHUB_OUTPUT"
           echo "dockerhub_latest=${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}:latest" >> "$GITHUB_OUTPUT"
+          echo "ghcr_isolation_tag=${{ env.GHCR_REGISTRY }}/${{ env.GHCR_ISOLATION_IMAGE_NAME }}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_isolation_latest=${{ env.GHCR_REGISTRY }}/${{ env.GHCR_ISOLATION_IMAGE_NAME }}:latest" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_isolation_tag=${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_ISOLATION_IMAGE_NAME }}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_isolation_latest=${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_ISOLATION_IMAGE_NAME }}:latest" >> "$GITHUB_OUTPUT"
 
       # ── Build & Push ──────────────────────────
-      - name: 🚀 Build and push Docker image
+      - name: 🚀 Build and push PicoClaw image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -73,4 +79,19 @@ jobs:
             ${{ steps.tags.outputs.dockerhub_latest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64,linux/riscv64
+
+      - name: 🧰 Build and push isolation image
+        uses: docker/build-push-action@v7
+        with:
+          context: docker
+          file: Dockerfile.isolation
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.ghcr_isolation_tag }}
+            ${{ steps.tags.outputs.ghcr_isolation_latest }}
+            ${{ steps.tags.outputs.dockerhub_isolation_tag }}
+            ${{ steps.tags.outputs.dockerhub_isolation_latest }}
+          cache-from: type=gha,scope=isolation
+          cache-to: type=gha,mode=max,scope=isolation
           platforms: linux/amd64,linux/arm64,linux/riscv64

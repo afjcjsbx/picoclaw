@@ -2621,6 +2621,9 @@ func TestDefaultConfig_IsolationEnabled(t *testing.T) {
 	if cfg.Isolation.Enabled {
 		t.Fatal("DefaultConfig().Isolation.Enabled should be false")
 	}
+	if got := cfg.Isolation.EffectiveBackend(); got != IsolationBackendAuto {
+		t.Fatalf("DefaultConfig().Isolation.EffectiveBackend() = %q, want %q", got, IsolationBackendAuto)
+	}
 }
 
 func TestConfig_UnmarshalIsolation(t *testing.T) {
@@ -2645,6 +2648,60 @@ func TestConfig_UnmarshalIsolation(t *testing.T) {
 	if got := cfg.Isolation.ExposePaths[0]; got.Source != "/src" || got.Target != "/dst" ||
 		got.Mode != "ro" {
 		t.Fatalf("ExposePaths[0] = %+v, want source=/src target=/dst mode=ro", got)
+	}
+}
+
+func TestDockerIsolationNetworkEnabledByDefault(t *testing.T) {
+	cfg := DockerIsolationConfig{}
+	if !cfg.NetworkEnabled() {
+		t.Fatal("DockerIsolationConfig{}.NetworkEnabled() = false, want true")
+	}
+	if got := cfg.EffectiveNetwork(); got != "" {
+		t.Fatalf("DockerIsolationConfig{}.EffectiveNetwork() = %q, want empty", got)
+	}
+	if (DockerIsolationConfig{Network: "none"}).NetworkEnabled() {
+		t.Fatal("NetworkEnabled() = true for network=none, want false")
+	}
+	if (DockerIsolationConfig{Network: "NONE"}).NetworkEnabled() {
+		t.Fatal("NetworkEnabled() = true for network=NONE, want false")
+	}
+}
+
+func TestConfig_UnmarshalIsolationDocker(t *testing.T) {
+	cfg := DefaultConfig()
+	raw := []byte(`{
+		"isolation": {
+			"enabled": true,
+			"backend": "docker",
+			"docker": {
+				"image": "alpine:3.20",
+				"network": "none",
+				"user": "1000:1000",
+				"pull": "never",
+				"extra_args": ["--cap-drop=ALL"]
+			}
+		}
+	}`)
+	if err := json.Unmarshal(raw, cfg); err != nil {
+		t.Fatalf("json.Unmarshal isolation config: %v", err)
+	}
+	if !cfg.Isolation.Enabled {
+		t.Fatal("Isolation.Enabled should be true after unmarshal")
+	}
+	if got := cfg.Isolation.EffectiveBackend(); got != IsolationBackendDocker {
+		t.Fatalf("EffectiveBackend() = %q, want %q", got, IsolationBackendDocker)
+	}
+	if cfg.Isolation.Docker.Image != "alpine:3.20" {
+		t.Fatalf("Docker.Image = %q, want alpine:3.20", cfg.Isolation.Docker.Image)
+	}
+	if got := cfg.Isolation.Docker.EffectiveNetwork(); got != "none" {
+		t.Fatalf("EffectiveNetwork() = %q, want none", got)
+	}
+	if got := cfg.Isolation.Docker.EffectivePull(); got != "never" {
+		t.Fatalf("EffectivePull() = %q, want never", got)
+	}
+	if len(cfg.Isolation.Docker.ExtraArgs) != 1 || cfg.Isolation.Docker.ExtraArgs[0] != "--cap-drop=ALL" {
+		t.Fatalf("ExtraArgs = %v, want [--cap-drop=ALL]", cfg.Isolation.Docker.ExtraArgs)
 	}
 }
 

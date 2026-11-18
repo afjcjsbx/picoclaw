@@ -5,6 +5,8 @@ package tools
 import (
 	"os/exec"
 	"syscall"
+
+	"github.com/sipeed/picoclaw/pkg/isolation"
 )
 
 func prepareCommandForTermination(cmd *exec.Cmd) {
@@ -29,5 +31,7 @@ func terminateProcessTree(cmd *exec.Cmd) error {
 	_ = killProcessTree(pid)
 	// Fallback kill on the shell process itself.
 	_ = cmd.Process.Kill()
+	// A docker-backed command needs its container removed explicitly.
+	isolation.CleanupPID(pid)
 	return nil
 }

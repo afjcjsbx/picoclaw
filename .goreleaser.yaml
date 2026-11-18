@@ -135,6 +135,21 @@ dockers_v2:
       - linux/arm64
       - linux/riscv64
 
+  # The Docker isolation runtime image is published next to the PicoClaw
+  # images so users can pull it with the same release tag.
+  - id: picoclaw-isolation
+    dockerfile: docker/Dockerfile.isolation
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/picoclaw-isolation"
+      - 'docker.io/{{ .Env.DOCKERHUB_IMAGE_NAME }}-isolation'
+    tags:
+      - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly{{ else }}{{ .Tag }}{{ end }}'
+      - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly{{ else }}latest{{ end }}'
+    platforms:
+      - linux/amd64
+      - linux/arm64
+      - linux/riscv64
+
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'

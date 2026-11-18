@@ -25,7 +25,7 @@ The implementation has four layers:
 
 1. Configuration layer: reads `config.Config.Isolation` and injects it through `isolation.Configure(cfg)`.
 2. Instance layout layer: resolves `config.GetHome()`, prepares instance directories, and builds the runtime user environment.
-3. Platform backend layer: Linux uses `bwrap`; macOS uses Seatbelt through `sandbox-exec`; Windows uses a restricted token, low integrity, and a `Job Object`.
+3. Platform backend layer: Linux uses `bwrap`; macOS uses Seatbelt through `sandbox-exec`; Windows uses a restricted token, low integrity, and a `Job Object`. The opt-in `docker` backend runs each child process in a container on any platform where the Docker CLI and daemon are available.
 4. Unified startup layer: `PrepareCommand(cmd)`, `Start(cmd)`, and `Run(cmd)`.
 
 All integrations that spawn subprocesses should reuse these helpers instead of calling `cmd.Start` or `cmd.Run` directly.
@@ -44,7 +44,15 @@ Isolation lives under:
 {
   "isolation": {
     "enabled": false,
-    "expose_paths": []
+    "backend": "auto",
+    "expose_paths": [],
+    "docker": {
+      "image": "",
+      "network": "",
+      "user": "",
+      "pull": "missing",
+      "extra_args": []
+    }
   }
 }
 ```
@@ -52,7 +60,9 @@ Isolation lives under:
 Field meanings:
 
 - `enabled`: enables or disables subprocess isolation. Default: `false`.
-- `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. Linux supports path remapping; macOS supports same-path access only.
+- `backend`: `auto` (default), `bubblewrap`, `seatbelt`, `windows` or `docker`. `auto` keeps the native backend for the current platform. An explicit backend must be supported by that platform; `docker` is available on every platform with a reachable Docker daemon.
+- `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. Linux and Docker support path remapping; macOS supports same-path access only.
+- `docker`: Docker backend settings. It only matters when `backend` is `docker`. `docker.network` empty uses Docker's default network (enabled); `none` disables container networking.
 
 Example:
 
@@ -60,6 +70,11 @@ Example:
 {
   "isolation": {
     "enabled": true,
+    "backend": "docker",
+    "docker": {
+      "image": "afjcjsbx/picoclaw-isolation:latest",
+      "pull": "missing"
+    },
     "expose_paths": [
       {
         "source": "/opt/toolchains/go",
@@ -93,6 +108,8 @@ Platform note:
   Read-only rules under the instance root are rejected because Seatbelt cannot
   revoke the root's write access.
 - Windows does not currently support `expose_paths`.
+- Docker binds `source` to `target` with the requested `ro`/`rw` mode. The
+  host instance root is always mounted at the same path.
 
 ## Instance Root And Directories
 
@@ -210,9 +227,86 @@ matching Linux behavior.
 Because Apple deprecated `sandbox-exec`, macOS may remove it in a future release;
 when it is missing, isolation fails closed.
 
+### Docker
+
+The Docker backend starts every child process with `docker run --rm --init` and
+overrides the image entrypoint with the original command. It is available on
+Linux, macOS and Windows when the Docker CLI is on `PATH` and the daemon is
+reachable; preflight runs `docker info` once per configuration generation and
+fails closed when either is missing.
+
+Behavior:
+
+- The image must provide the command and its runtime dependencies. The `exec`
+  tool always runs a POSIX shell (`sh -c`), so the image must contain `/bin/sh`;
+  other integrations must use an image that contains their executable.
+- The instance root is bind mounted read-write at the same absolute path.
+  `expose_paths` rules are added as bind mounts; `ro` maps to a read-only bind.
+  The effective working directory is mounted read-write, and absolute path
+  arguments are exposed read-only (or their parent read-write when the output
+  path does not exist yet).
+- The same absolute host path is used inside the container. This suits Linux,
+  macOS and Windows containers; Docker Desktop Linux containers on Windows do
+  not translate Windows drive paths automatically.
+- Bind mounts are resolved by the Docker daemon, so it must run on the same
+  host as PicoClaw. A remote `DOCKER_HOST` works only when the mounted paths
+  exist on the remote machine.
+- Containers run as the host UID/GID by default so files created in the
+  workspace keep host ownership. Set `isolation.docker.user` to override it.
+- The sanitized child environment is forwarded with `docker run -e NAME`;
+  values are not repeated on the command line. `PATH` is intentionally not
+  forwarded: the image's `ENV PATH` is used so tools resolve inside the
+  container. Use `docker.extra_args` with `-e PATH=...` only when a custom
+  container PATH is required.
+- `isolation.docker.network` is passed to `--network` when set. An empty value
+  keeps Docker's default network, so container networking is enabled by
+  default. Use `none` only when network access must be disabled.
+- `isolation.docker.pull` accepts `always`, `missing` (default) or `never`.
+- `isolation.docker.extra_args` is trusted configuration inserted before the
+  image. It can weaken isolation (for example `--privileged`), so keep it under
+  the same review as `docker run` itself.
+- Docker's `--rm` removes the container on normal exit. When a command is
+  killed (foreground timeout or a tracked session kill), PicoClaw also runs
+  `docker rm -f` for the container, because killing the docker CLI does not stop
+  the container. An abrupt PicoClaw crash can still leave a container running;
+  clean it up with `docker ps --filter label=picoclaw.isolation`.
+- Interactive and PTY sessions use `docker run --interactive`; `--tty` is added
+  when the child stdin is a terminal.
+
+### Bundled Docker image
+
+`docker/Dockerfile.isolation` builds the image used by the Docker backend. It
+currently includes:
+
+- Python 3.13
+- Go 1.27.4 (`GOTOOLCHAIN=local`)
+- `jq`, `ripgrep`, `fd`, `tmux`, `rsync`
+- `git`, `make`, `curl` and CA certificates for module and package downloads
+
+Release and nightly builds publish it next to the main PicoClaw images, using
+the same version and `latest` tags:
+
+- `ghcr.io/<owner>/picoclaw-isolation:<tag>`
+- `docker.io/<DOCKERHUB_REPOSITORY>-isolation:<tag>`
+
+For this repository that is `ghcr.io/afjcjsbx/picoclaw-isolation` and
+`afjcjsbx/picoclaw-isolation`. Nightly builds use the `nightly` tag.
+
+For local development, build it with:
+
+```bash
+make docker-isolation
+```
+
+The local tag is `picoclaw-isolation:1.27.4`; override it with
+`make docker-isolation ISOLATION_IMAGE=my-registry/picoclaw-isolation:tag`.
+Then point `isolation.docker.image` at the published or local tag.
+
 ### Other Platforms
 
-When isolation is explicitly enabled on an unsupported platform, the higher-level runtime should surface that as an unsupported configuration instead of pretending isolation succeeded.
+With an explicit `backend: "docker"`, other platforms are supported when Docker
+is available. Native isolation remains unsupported and fails closed when
+selected through `auto`.
 
 ## Logging And Debugging
 
@@ -227,6 +321,10 @@ Windows log name:
 - `windows isolation access rules`
 
 macOS uses the `macOS Seatbelt profile prepared` debug log.
+
+Docker uses the `docker isolation container plan` and
+`docker isolation container started` debug logs, which include the container
+name, image, network and bind mounts.
 
 If you suspect isolation is ineffective, check whether unexpected host paths appear in those logs.
 
@@ -267,6 +365,12 @@ is reflected in the next system prompt.
 - Linux does not currently enable a dedicated `pid` namespace by default.
 - Windows does not yet implement full host ACL enforcement for every allowed or denied path.
 - macOS Seatbelt does not support `source -> target` path remapping and relies on Apple's deprecated `sandbox-exec` command.
+- The Docker backend requires an image that contains the command, its runtime
+  dependencies and a POSIX shell for the `exec` tool. It does not build or
+  provision images.
+- Docker's default network is preserved unless `isolation.docker.network` sets
+  another mode; networking is enabled by default, so set `none` only when a
+  workload must not have network access.
 - The current design isolates child processes, not the main `picoclaw` process.
 
 ## Suggested Reading Order
@@ -275,12 +379,14 @@ If you are new to this code, read it in this order:
 
 1. `pkg/config/config.go`
 2. `pkg/isolation/runtime.go`
-3. `pkg/isolation/platform_linux.go`
-4. `pkg/isolation/platform_windows.go`
-5. Call sites:
-6. `pkg/tools/shell.go`
-7. `pkg/providers/*.go`
-8. `pkg/agent/hook_process.go`
-9. `pkg/mcp/manager.go`
+3. `pkg/isolation/backend.go`
+4. `pkg/isolation/platform_linux.go`
+5. `pkg/isolation/docker.go`
+6. `pkg/isolation/platform_windows.go`
+7. Call sites:
+8. `pkg/tools/shell.go`
+9. `pkg/providers/*.go`
+10. `pkg/agent/hook_process.go`
+11. `pkg/mcp/manager.go`
 
 That path gives the fastest overview of the configuration model, runtime flow, and platform-specific limits.

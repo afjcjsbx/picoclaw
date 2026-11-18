@@ -31,7 +31,7 @@ var (
 	procCreateRestrictedToken    = advapi32.NewProc("CreateRestrictedToken")
 )
 
-func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
 	if !isolation.Enabled || cmd == nil {
 		return nil
 	}
@@ -58,7 +58,7 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	return nil
 }
 
-func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func postStartNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
 	if !isolation.Enabled || cmd == nil || cmd.Process == nil {
 		return nil
 	}
@@ -123,7 +123,7 @@ func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig,
 	return nil
 }
 
-func cleanupPendingPlatformResources(cmd *exec.Cmd) {
+func cleanupPendingNativePlatformResources(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}

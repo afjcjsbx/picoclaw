@@ -25,7 +25,7 @@
 
 1. 配置层：读取 `config.Config.Isolation`，并通过 `isolation.Configure(cfg)` 注入运行时。
 2. 实例目录层：解析 `config.GetHome()`，准备实例目录，并构建运行时用户环境目录。
-3. 平台后端层：Linux 使用 `bwrap`；macOS 通过 `sandbox-exec` 使用 Seatbelt；Windows 使用受限 token、低完整性级别和 `Job Object`。
+3. 平台后端层：Linux 使用 `bwrap`；macOS 通过 `sandbox-exec` 使用 Seatbelt；Windows 使用受限 token、低完整性级别和 `Job Object`。可选的 `docker` 后端在 Docker CLI 和 daemon 可用的平台上把子进程放进容器运行。
 4. 统一启动层：`PrepareCommand(cmd)`、`Start(cmd)`、`Run(cmd)`。
 
 所有启动子进程的接入点都应复用这组入口，而不是各自直接调用 `cmd.Start` 或 `cmd.Run`。
@@ -38,7 +38,15 @@
 {
   "isolation": {
     "enabled": false,
-    "expose_paths": []
+    "backend": "auto",
+    "expose_paths": [],
+    "docker": {
+      "image": "",
+      "network": "",
+      "user": "",
+      "pull": "missing",
+      "extra_args": []
+    }
   }
 }
 ```
@@ -46,7 +54,9 @@
 字段说明：
 
 - `enabled`：是否启用子进程隔离。默认值：`false`。
-- `expose_paths`：显式把宿主路径带入隔离环境。仅在 `enabled=true` 时生效。Linux 支持路径重映射；macOS 仅支持源路径和目标路径相同。
+- `backend`：`auto`（默认）、`bubblewrap`、`seatbelt`、`windows` 或 `docker`。`auto` 使用当前平台的本地后端；显式后端必须被当前平台支持，`docker` 在 Docker daemon 可用的平台上都可用。
+- `expose_paths`：显式把宿主路径带入隔离环境。仅在 `enabled=true` 时生效。Linux 和 Docker 支持路径重映射；macOS 仅支持源路径和目标路径相同。
+- `docker`：Docker 后端设置，仅在 `backend=docker` 时生效。`docker.network` 留空使用 Docker 默认网络（启用网络）；设为 `none` 可禁用容器网络。
 
 示例：
 
@@ -54,6 +64,11 @@
 {
   "isolation": {
     "enabled": true,
+    "backend": "docker",
+    "docker": {
+      "image": "afjcjsbx/picoclaw-isolation:latest",
+      "pull": "missing"
+    },
     "expose_paths": [
       {
         "source": "/opt/toolchains/go",
@@ -84,6 +99,7 @@
 - Linux 会真实使用 `source -> target` 挂载视图。
 - macOS 要求 `target` 与 `source` 相同；Seatbelt 不支持路径重映射。
 - Windows 当前不支持 `expose_paths`。
+- Docker 按 `ro`/`rw` 把 `source` 绑定到 `target`；实例根始终以相同路径挂载。
 
 ## 实例根与目录
 
@@ -193,9 +209,54 @@ macOS 后端通过 `/usr/bin/sandbox-exec` 使用默认拒绝的 Seatbelt 配置
 它允许在 PicoClaw 实例根目录和明确配置的 `rw` 路径下写入，并按需开放系统文件、命令、配置的工作目录和绝对路径参数。网络访问保持开启，与 Linux 行为一致。
 Apple 已弃用 `sandbox-exec`，未来 macOS 版本可能移除它；如果该命令不存在，隔离启动会失败。
 
+### Docker
+
+Docker 后端通过 `docker run --rm --init` 启动每个子进程，并用原命令覆盖镜像的 entrypoint。只要 Docker CLI 在 `PATH` 中且 daemon 可访问，它在 Linux、macOS 和 Windows 上都可用；预检会执行一次 `docker info`，失败时直接拒绝启动。
+
+行为：
+
+- 镜像必须提供要执行的命令及其运行时依赖。`exec` 工具始终通过 POSIX shell（`sh -c`）运行，因此镜像必须包含 `/bin/sh`；其他接入点需要使用包含对应可执行文件的镜像。
+- 实例根以相同绝对路径读写挂载。`expose_paths` 会转换为 bind mount，`ro` 对应只读挂载。生效的工作目录以读写方式挂载，绝对路径参数以只读方式暴露（输出路径不存在时改为挂载其父目录的读写）。
+- 容器内使用相同的宿主绝对路径。这适用于 Linux、macOS 和 Windows 容器；Windows 上的 Docker Desktop Linux 容器不会自动转换 Windows 盘符路径。
+- bind mount 由 Docker daemon 解析，因此 daemon 必须与 PicoClaw 运行在同一台主机上。远程 `DOCKER_HOST` 只有在远端存在对应路径时才可用。
+- 容器默认以宿主 UID/GID 运行，保证工作区文件保持宿主所有权；可用 `isolation.docker.user` 覆盖。
+- 经过清洗的子进程环境通过 `docker run -e NAME` 传入，不在命令行中重复值。`PATH` 不会传入：容器使用镜像的 `ENV PATH`，确保 Go、Python 等工具在容器内正确解析。只有确实需要自定义容器 PATH 时，才通过 `docker.extra_args` 传入 `-e PATH=...`。
+- `isolation.docker.network` 会传给 `--network`；留空即使用 Docker 默认网络，因此容器网络默认启用。只有需要禁用网络时才设为 `none`。
+- `isolation.docker.pull` 支持 `always`、`missing`（默认）和 `never`。
+- `isolation.docker.extra_args` 是受信任配置，会插在镜像之前。它可以削弱隔离（例如 `--privileged`），应按 `docker run` 本身的标准审查。
+- 正常退出时由 `--rm` 删除容器。命令被终止（前台超时或会话 kill）时，PicoClaw 还会执行 `docker rm -f`，因为杀掉 docker CLI 不会停止容器。PicoClaw 异常崩溃时仍可能残留容器，可用 `docker ps --filter label=picoclaw.isolation` 清理。
+- 交互式和 PTY 会话使用 `docker run --interactive`；当子进程 stdin 是终端时追加 `--tty`。
+
+### 内置 Docker 镜像
+
+`docker/Dockerfile.isolation` 用于构建 Docker 后端使用的镜像，当前包含：
+
+- Python 3.13
+- Go 1.27.4（`GOTOOLCHAIN=local`）
+- `jq`、`ripgrep`、`fd`、`tmux`、`rsync`
+- `git`、`make`、`curl` 和 CA 证书，用于下载模块和包
+
+发布和 nightly 构建会与 PicoClaw 主镜像一起发布该镜像，使用相同的版本标签和 `latest`：
+
+- `ghcr.io/<owner>/picoclaw-isolation:<tag>`
+- `docker.io/<DOCKERHUB_REPOSITORY>-isolation:<tag>`
+
+本仓库对应 `ghcr.io/afjcjsbx/picoclaw-isolation` 和
+`afjcjsbx/picoclaw-isolation`。nightly 构建使用 `nightly` 标签。
+
+本地开发时构建：
+
+```bash
+make docker-isolation
+```
+
+本地标签为 `picoclaw-isolation:1.27.4`；可用
+`make docker-isolation ISOLATION_IMAGE=my-registry/picoclaw-isolation:tag`
+覆盖。然后将 `isolation.docker.image` 指向已发布或本地标签。
+
 ### 其他平台
 
-当在未支持的平台上显式开启隔离时，上层运行时应将其视为不支持的配置，而不是假装隔离成功。
+显式配置 `backend: "docker"` 时，只要 Docker 可用，其他平台也可以使用。原生隔离仍然不支持，并会在 `auto` 或显式选择时失败关闭。
 
 ## 日志与排障
 
@@ -210,6 +271,8 @@ Windows 日志名：
 - `windows isolation access rules`
 
 macOS 调试日志名：`macOS Seatbelt profile prepared`。
+
+Docker 使用 `docker isolation container plan` 和 `docker isolation container started` 调试日志，包含容器名、镜像、网络和 bind mount。
 
 如果你怀疑隔离未生效，先检查这些日志里是否出现了不应暴露的宿主路径。
 
@@ -226,6 +289,8 @@ macOS 调试日志名：`macOS Seatbelt profile prepared`。
 - Linux 当前没有默认启用独立的 `pid namespace`。
 - Windows 还没有对所有允许/拒绝路径做完整 ACL 落地。
 - macOS Seatbelt 不支持 `source -> target` 路径重映射，并依赖 Apple 已弃用的 `sandbox-exec` 命令。
+- Docker 后端要求镜像自带命令、运行时依赖，以及 `exec` 工具需要的 POSIX shell；它不会构建或准备镜像。
+- 除非 `isolation.docker.network` 指定其他模式，否则保留 Docker 默认网络；网络默认启用，只有工作负载必须禁止网络时才设为 `none`。
 - 当前隔离的是子进程，不是 `picoclaw` 主进程自身。
 
 ## 建议阅读顺序

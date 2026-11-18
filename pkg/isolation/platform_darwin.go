@@ -14,7 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func applyNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
 	if !isolation.Enabled || cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
@@ -34,11 +34,11 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	return nil
 }
 
-func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+func postStartNativePlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
 	return nil
 }
 
-func cleanupPendingPlatformResources(cmd *exec.Cmd) {}
+func cleanupPendingNativePlatformResources(cmd *exec.Cmd) {}
 
 func buildDarwinSeatbeltProfile(root string, cmd *exec.Cmd, exposePaths []config.ExposePath) string {
 	var rules strings.Builder

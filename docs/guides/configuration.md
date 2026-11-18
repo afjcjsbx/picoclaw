@@ -450,6 +450,48 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 
 > The workspace restriction is a static path policy, not an OS sandbox. It validates command paths, home expansion and directory changes, but child processes and script contents remain outside its reach. Use containers, VMs, or a dedicated user for untrusted workloads.
 
+#### Subprocess Isolation (Opt-In)
+
+`restrict_to_workspace` is a path policy. For an OS-level boundary around child
+processes, enable `isolation` and choose a backend:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "backend": "docker",
+    "docker": {
+      "image": "afjcjsbx/picoclaw-isolation:latest",
+      "pull": "missing"
+    },
+    "expose_paths": [
+      { "source": "/opt/toolchains/go", "target": "/opt/toolchains/go", "mode": "ro" }
+    ]
+  }
+}
+```
+
+| Backend | Platforms | Notes |
+|---------|-----------|-------|
+| `auto` (default) | Linux, macOS, Windows | Native backend: `bubblewrap`, Seatbelt or Windows restricted token |
+| `bubblewrap` | Linux | Requires `bwrap` on `PATH`; no automatic fallback |
+| `seatbelt` | macOS | Uses the deprecated `sandbox-exec` command |
+| `windows` | Windows | Restricted token, low integrity and Job Object |
+| `docker` | Any platform with Docker | Each child runs in `docker run --rm`; the image must provide the command and `/bin/sh` for the exec tool |
+
+The Docker backend bind-mounts the instance root and working directory at the
+same absolute paths, runs as the host UID/GID by default, and removes the
+container on exit or when a command is killed. Container networking is enabled
+by default: leave `isolation.docker.network` empty to use Docker's default
+network, and set it to `none` only when network access must be disabled.
+`isolation.docker.extra_args` is
+trusted configuration and can weaken isolation. The isolation image is
+published with PicoClaw releases as `afjcjsbx/picoclaw-isolation` (Python 3.13,
+Go 1.27.4, `jq`, `ripgrep`, `fd`, `tmux`, `rsync`); the definition is
+`docker/Dockerfile.isolation`, and `make docker-isolation` builds it locally. See
+[`pkg/isolation`](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md)
+for the full reference and limitations.
+
 #### Additional Exec Protection
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):

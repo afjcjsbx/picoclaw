@@ -22,6 +22,7 @@ func DefaultConfig() *Config {
 		// until the user explicitly enables subprocess sandboxing.
 		Isolation: IsolationConfig{
 			Enabled: false,
+			Backend: IsolationBackendAuto,
 		},
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 )
 
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
@@ -144,6 +145,8 @@ func (s *ProcessSession) killProcess() error {
 	if err := killProcessGroup(pid); err != nil {
 		return err
 	}
+	// Killing the docker CLI does not stop the container it started.
+	isolation.CleanupPID(pid)
 
 	// Release the session's own descriptors: the reader goroutine can then
 	// observe the closure and stop, and a dead session keeps no fd open.

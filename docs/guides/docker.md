@@ -71,6 +71,32 @@ docker compose -f docker/docker-compose.yml pull
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
+### Sandbox Runtime Image
+
+PicoClaw releases also publish the Docker isolation runtime image with the same
+version and `latest` tags:
+
+- `afjcjsbx/picoclaw-isolation:<tag>` (Docker Hub)
+- `ghcr.io/afjcjsbx/picoclaw-isolation:<tag>` (GHCR)
+
+It contains Python 3.13, Go 1.27.4, `jq`, `ripgrep`, `fd`, `tmux` and `rsync`.
+Use it by enabling the Docker isolation backend:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "backend": "docker",
+    "docker": {
+      "image": "afjcjsbx/picoclaw-isolation:latest"
+    }
+  }
+}
+```
+
+See [Process Isolation](../../pkg/isolation/README.md) for mount rules, network
+defaults and limitations.
+
 ### 🚀 Quick Start
 
 > [!TIP]

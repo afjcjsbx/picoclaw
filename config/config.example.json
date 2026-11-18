@@ -1,5 +1,18 @@
 {
   "version": 3,
+  "isolation": {
+    "_comment": "Opt-in child-process isolation. backend: auto (native), bubblewrap, seatbelt, windows or docker. Docker requires docker.image and a reachable Docker daemon; the isolation image is published with PicoClaw releases as afjcjsbx/picoclaw-isolation, or build it locally with `make docker-isolation`. An empty docker.network keeps Docker's default network (enabled); set it to none to disable networking.",
+    "enabled": false,
+    "backend": "auto",
+    "expose_paths": [],
+    "docker": {
+      "image": "afjcjsbx/picoclaw-isolation:latest",
+      "network": "",
+      "user": "",
+      "pull": "missing",
+      "extra_args": []
+    }
+  },
   "plugins": {
     "enabled": false,
     "concurrency": 4,

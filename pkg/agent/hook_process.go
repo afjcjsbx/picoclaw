@@ -182,7 +182,11 @@ func (ph *ProcessHook) Close() error {
 		case <-ph.done:
 		case <-time.After(processHookCloseTimeout):
 			if ph.cmd != nil && ph.cmd.Process != nil {
+				pid := ph.cmd.Process.Pid
 				_ = ph.cmd.Process.Kill()
+				<-ph.done
+				isolation.CleanupPID(pid)
+				return
 			}
 			<-ph.done
 		}
@@ -469,6 +473,7 @@ func (ph *ProcessHook) readStderr(stderr io.Reader) {
 
 func (ph *ProcessHook) waitLoop() {
 	err := ph.cmd.Wait()
+	isolation.Release(ph.cmd)
 	ph.closeMu.Lock()
 	ph.closeErr = err
 	ph.closeMu.Unlock()
