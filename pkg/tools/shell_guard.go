@@ -187,6 +187,17 @@ func (t *ExecTool) guardCommandWithAnalysis(
 			if err := shellguard.CheckWorkspaceFile(cmd, parsed, policy); err != nil {
 				return "Command blocked by safety guard (" + err.Error() + ")"
 			}
+			// Inline interpreter programs do not expose their paths as shell
+			// operands. Check the written parse and, when fixed rewrites changed
+			// the text, the normalized parse too.
+			if err := shellguard.CheckInterpreterFile(cmd, parsed, policy, 0); err != nil {
+				return "Command blocked by safety guard (" + err.Error() + ")"
+			}
+			if riskFile != parsed {
+				if err := shellguard.CheckInterpreterFile(cmd, riskFile, policy, 0); err != nil {
+					return "Command blocked by safety guard (" + err.Error() + ")"
+				}
+			}
 		}
 	}
 
