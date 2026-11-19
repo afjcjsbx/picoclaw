@@ -3,11 +3,15 @@ package tools
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
@@ -47,6 +51,36 @@ func TestWrapCommandForCwdSkipsLineContinuation(t *testing.T) {
 	wrapped, ok := wrapCommandForCwd(command, "/tmp/probe")
 	require.False(t, ok)
 	require.Equal(t, command, wrapped)
+}
+
+func TestWrapCommandForCwdUnwritableProbeIsSilent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell wrapper")
+	}
+	probe := filepath.Join(t.TempDir(), "missing", "probe.txt")
+	wrapped, ok := wrapCommandForCwd("echo hi; exit 3", probe)
+	require.True(t, ok)
+
+	out, err := exec.Command("sh", "-c", wrapped).CombinedOutput()
+	require.Equal(t, "hi\n", string(out))
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	require.Equal(t, 3, exitErr.ExitCode())
+}
+
+func TestCwdProbeDirFollowsIsolation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	t.Cleanup(func() { isolation.Configure(nil) })
+
+	cfg := config.DefaultConfig()
+	cfg.Isolation.Enabled = false
+	isolation.Configure(cfg)
+	require.Empty(t, cwdProbeDir())
+
+	cfg.Isolation.Enabled = true
+	isolation.Configure(cfg)
+	require.Equal(t, filepath.Join(home, "runtime-user-env", "tmp"), cwdProbeDir())
 }
 
 func TestInformativeExitNote(t *testing.T) {
