@@ -56,14 +56,31 @@ func TestDescribeBoundaryActive(t *testing.T) {
 	if !boundary.PathBoundary {
 		t.Fatal("PathBoundary = false, want true")
 	}
-	if !boundary.RootWritable {
-		t.Fatal("RootWritable = false, want true")
-	}
 	if boundary.Scratch != filepath.Join(home, "runtime-user-env", "tmp") {
 		t.Fatalf("Scratch = %q", boundary.Scratch)
 	}
 	if !boundary.ScratchWritable {
 		t.Fatal("ScratchWritable = false, want true")
+	}
+	if runtime.GOOS == "darwin" {
+		// Seatbelt always exposes the full instance root as writable.
+		if !boundary.RootVisible || !boundary.RootWritable {
+			t.Fatalf(
+				"RootVisible=%v RootWritable=%v, want true/true on macOS",
+				boundary.RootVisible,
+				boundary.RootWritable,
+			)
+		}
+	} else {
+		// Linux: the default narrow mount set does not include the instance
+		// root itself; root is not visible unless the operator adds it.
+		if boundary.RootVisible || boundary.RootWritable {
+			t.Fatalf(
+				"RootVisible=%v RootWritable=%v, want false/false on Linux by default",
+				boundary.RootVisible,
+				boundary.RootWritable,
+			)
+		}
 	}
 	if !slices.Contains(boundary.Writable, writable) {
 		t.Fatalf("Writable = %v, want %q", boundary.Writable, writable)
@@ -244,8 +261,13 @@ func TestDescribeBoundaryScratchOverride(t *testing.T) {
 	if !ok {
 		t.Fatal("DescribeBoundary() = false, want true")
 	}
-	if !boundary.RootWritable {
-		t.Fatal("RootWritable = false, want true")
+	// No explicit root expose_paths: the narrow default mounts do not cover
+	// the root itself, so RootVisible and RootWritable are both false.
+	if boundary.RootWritable {
+		t.Fatal("RootWritable = true, want false")
+	}
+	if boundary.RootVisible {
+		t.Fatal("RootVisible = true, want false")
 	}
 	if boundary.ScratchWritable {
 		t.Fatal("ScratchWritable = true, want false")
