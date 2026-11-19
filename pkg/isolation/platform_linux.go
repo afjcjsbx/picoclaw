@@ -72,9 +72,7 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	// arguments needed to preserve the original command semantics.
 	plan := BuildLinuxMountPlan(root, isolation.ExposePaths)
 	plan = appendLinuxCommandMountRules(plan, resolvedPath)
-	if execDir != "" {
-		plan = ensureLinuxMountRule(plan, execDir, execDir, "rw")
-	}
+	plan = appendLinuxWorkingDirMount(plan, execDir)
 	plan = appendLinuxArgumentMounts(plan, originalArgs[1:])
 	if guardErr := checkSymlinkMountTargets(plan); guardErr != nil {
 		return guardErr
@@ -265,6 +263,37 @@ func buildLinuxBwrapArgs(
 		bwrapArgs = append(bwrapArgs, originalArgs[1:]...)
 	}
 	return bwrapArgs, nil
+}
+
+// linuxEffectiveMountMode returns the mode of the last rule whose target is
+// path or an ancestor of path. Mount rules are applied in order, so the last
+// matching rule determines the effective access. An empty result means no
+// existing rule makes path visible.
+func linuxEffectiveMountMode(plan []MountRule, path string) string {
+	clean := filepath.Clean(path)
+	mode := ""
+	for _, rule := range plan {
+		if boundaryPathWithin(filepath.Clean(rule.Target), clean) {
+			mode = rule.Mode
+		}
+	}
+	return mode
+}
+
+// appendLinuxWorkingDirMount makes the effective working directory visible
+// without widening the writable boundary. A cwd already covered by an existing
+// rule keeps that rule's mode; otherwise it is mounted read-only. Writable
+// locations must come from workspace, runtime-user-env, or an explicit rw
+// expose_paths rule, so a remembered cwd such as /etc or the instance root
+// cannot turn into a writable hole in the sandbox.
+func appendLinuxWorkingDirMount(plan []MountRule, execDir string) []MountRule {
+	if execDir == "" {
+		return plan
+	}
+	if linuxEffectiveMountMode(plan, execDir) != "" {
+		return plan
+	}
+	return ensureLinuxMountRule(plan, execDir, execDir, "ro")
 }
 
 func resolveLinuxWorkingDir(originalDir, originalPath string) (string, string, error) {

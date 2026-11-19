@@ -232,7 +232,7 @@ Default mounts inside the instance root are intentionally narrow:
 
 Minimum runtime system paths (`/usr`, `/bin`, `/lib`, `/lib64`, `/etc/resolv.conf`, etc.) are mounted read-only.
 
-At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed. If the working directory is a symlink (or contains symlink components), it is resolved to its canonical path before mounting so that bubblewrap 0.12 and later can accept it as a bind-mount target.
+At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed. The working directory is mounted read-only unless it is already covered by a writable rule (`workspace`, `runtime-user-env`, or an explicit `rw` `expose_paths` rule), so a remembered `cwd` outside the writable boundary cannot turn into a writable hole. If the working directory is a symlink (or contains symlink components), it is resolved to its canonical path before mounting so that bubblewrap 0.12 and later can accept it as a bind-mount target.
 
 Absolute path arguments are auto-exposed with the following rules:
 
