@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// checkPathFlags validates directory-valued options such as tar -C, git -C,
+// make -C and env --chdir. A bare `..` there reaches the parent without a
+// slash, so the byte-level traversal regex misses it.
 func (s *workspaceState) checkPathFlags(args []word) error {
 	for i := 0; i < len(args); i++ {
 		text := args[i].text

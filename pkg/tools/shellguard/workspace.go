@@ -185,6 +185,15 @@ func (s *workspaceState) resolveCwd(target string) string {
 	return filepath.Clean(filepath.Join(base, target))
 }
 
+// expander resolves ~, $HOME and $PWD to the values the command would see.
+func (s *workspaceState) expander() *wordExpander {
+	return &wordExpander{home: s.policy.Home, cwd: s.currentCwd()}
+}
+
+func (s *workspaceState) expandWord(w *syntax.Word, assignment bool) word {
+	return buildWord(w, s.expander(), assignment)
+}
+
 func (s *workspaceState) checkStmt(stmt *syntax.Stmt, depth int) error {
 	if err := s.checkRedirects(stmt.Redirs); err != nil {
 		return err

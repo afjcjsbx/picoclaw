@@ -38,15 +38,10 @@ func (s *workspaceState) checkNested(
 					redir.Op != syntax.WordHdoc {
 					continue
 				}
-				bodyWord := redir.Hdoc
-				if bodyWord == nil {
-					// <<< here-strings keep their data in Word instead of Hdoc.
-					bodyWord = redir.Word
-				}
-				if bodyWord == nil {
+				body, ok := heredocScriptWord(redir, s.expander())
+				if !ok {
 					continue
 				}
-				body := s.expandWord(bodyWord, false)
 				if body.dynamic {
 					return newWorkspaceError("dynamic shell script cannot be validated under workspace restriction")
 				}
