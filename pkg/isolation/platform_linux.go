@@ -230,6 +230,11 @@ func buildLinuxBwrapArgs(
 		}
 	}
 	bwrapArgs = append(bwrapArgs, "--proc", "/proc", "--dev", "/dev")
+	// Some tools hardcode /tmp even when TMPDIR points into runtime-user-env.
+	// Mount a fresh per-sandbox tmpfs so they have a writable temp directory
+	// without exposing the host /tmp. This runs before the bind rules below so
+	// an explicit expose_paths or argument mount for /tmp can still override it.
+	bwrapArgs = append(bwrapArgs, "--tmpfs", "/tmp")
 	// Drop all capabilities unconditionally so the sandboxed process cannot
 	// exercise Linux privileges it may have inherited from the caller.
 	bwrapArgs = append(bwrapArgs, "--cap-drop", "ALL")

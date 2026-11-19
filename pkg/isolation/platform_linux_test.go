@@ -57,6 +57,41 @@ func TestBuildLinuxBwrapArgs_IncludesNamespaceFlagsAndExec(t *testing.T) {
 	}
 }
 
+func TestBuildLinuxBwrapArgs_MountsEphemeralTmpBeforeBinds(t *testing.T) {
+	root := t.TempDir()
+	binaryPath := filepath.Join(root, "tool")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := []MountRule{{Source: root, Target: root, Mode: "rw"}}
+
+	args, err := buildLinuxBwrapArgs(binaryPath, binaryPath, []string{binaryPath}, "", plan, nil)
+	if err != nil {
+		t.Fatalf("buildLinuxBwrapArgs() error = %v", err)
+	}
+
+	tmpfsIndex := -1
+	bindIndex := -1
+	for i, arg := range args {
+		switch arg {
+		case "--tmpfs":
+			if i+1 < len(args) && args[i+1] == "/tmp" {
+				tmpfsIndex = i
+			}
+		case "--bind", "--ro-bind":
+			if bindIndex == -1 {
+				bindIndex = i
+			}
+		}
+	}
+	if tmpfsIndex == -1 {
+		t.Fatalf("bwrap args missing --tmpfs /tmp: %v", args)
+	}
+	if bindIndex != -1 && bindIndex < tmpfsIndex {
+		t.Fatalf("--tmpfs /tmp must precede bind rules so they can override it: %v", args)
+	}
+}
+
 func TestResolveLinuxWorkingDir_ResolvesRelativeDir(t *testing.T) {
 	cwd := t.TempDir()
 	previous, err := os.Getwd()

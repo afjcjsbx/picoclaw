@@ -194,6 +194,7 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 - `source -> target` 只读或读写挂载
 - 沙箱内始终丢弃全部 Linux 特权（`--cap-drop ALL`）
 - 新会话（`--new-session`）：沙盒在独立 session 中运行，不持有控制终端，从而阻止通过 TIOCSTI 注入终端字符（CVE-2017-5226）
+- 每次沙箱独立的临时 `/tmp` tmpfs，供硬编码 `/tmp` 的工具使用；不会暴露宿主 `/tmp`
 - 可选网络命名空间隔离（`block_network: true`）
 
 **不建议以 root 运行 PicoClaw。** 当有效 uid 为 0 时，bwrap 不会自动创建 user namespace，沙箱进程在 `--cap-drop` 之后仍会保留完整的宿主特权集。PicoClaw 会在 root 模式下额外传入 `--unshare-user`，在新的 user namespace 中将 CapEff 清零。以 root 运行的风险面仍大于使用专用非特权用户。
