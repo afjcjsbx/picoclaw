@@ -34,6 +34,76 @@ PicoClaw 支持多种聊天平台，使您的 Agent 能够连接到任何地方�
 | **MaixCam**          | ⭐ 简单     | 专为 AI 摄像头设计的硬件集成通道          | [查看文档](../channels/maixcam/README.zh.md)                                                                  |
 | **Pico**             | ⭐ 简单     | PicoClaw 原生协议通道                     |                                                                                                               |
 
+## 仅出站（Outbound-only）渠道
+
+**仅出站渠道**是指在 PicoClaw 中保持启用、可作为 `message` 工具目标，但收到消息时不会启动 Agent 回合的渠道。适用于一个聊天应用作为控制入口（例如 Telegram）、另一个聊天应用只作为发送目标（例如 Discord 公告频道）的场景。
+
+### 支持的渠道
+
+该模式适用于满足以下条件的渠道：
+
+- 入站消息受 `allow_from` 控制；
+- 具备出站发送能力，`message` 工具可以向其发送消息。
+
+查看 `docs/channels/<name>/README.md`：如果该渠道文档记录了 `allow_from`，就可以屏蔽入站消息。能够正常回复消息的双向聊天渠道通常也具备主动发送能力，因此可以作为出站目标，但可能受平台限制。部分渠道本身就是仅出站设计，例如可选的 `slack_webhook` 和 `teams_webhook`；它们没有入站路径，不需要使用这里的变通方法。相关构建标签见[自定义构建](custom-builds.md)。
+
+### 将双向渠道设为仅出站
+
+保持渠道 `enabled: true`，这样它的 worker 和发送能力仍然可用；然后把 `allow_from` 设置为一个不可能匹配真实发送者的 ID。**不要使用空数组**：空数组表示“允许所有人”。
+
+```json
+{
+  "channel_list": {
+    "telegram": {
+      "enabled": true,
+      "type": "telegram",
+      "allow_from": ["YOUR_TELEGRAM_USER_ID"],
+      "settings": {
+        "token": "YOUR_TELEGRAM_BOT_TOKEN"
+      }
+    },
+    "discord": {
+      "enabled": true,
+      "type": "discord",
+      "allow_from": ["0"],
+      "settings": {
+        "token": "YOUR_DISCORD_BOT_TOKEN"
+      }
+    }
+  }
+}
+```
+
+在这个例子中：
+
+- Telegram 是控制渠道，只有你的 Telegram 用户 ID 可以触发 Agent。
+- Discord 保持连接并可发送消息，但所有 Discord 入站消息都会在到达 Agent 之前被 allowlist 丢弃。`"0"` 不是有效的 Discord 用户 ID，因此不会匹配任何真实用户。
+
+如果只希望你自己能在目标渠道触发机器人，请把 `"0"` 换成你对应的平台用户 ID。
+
+### 向仅出站渠道发送消息
+
+在控制渠道中让 Agent 使用 `message` 工具，指定目标渠道和 chat ID：
+
+```json
+{
+  "content": "Deploy finished.",
+  "channel": "discord",
+  "chat_id": "123456789012345678"
+}
+```
+
+`channel` 是 `channel_list` 下的键，不一定等于渠道的 `type`（自定义渠道名称时二者可能不同）。`chat_id` 是平台相关的目标：Discord 频道 ID、Slack 频道 ID、Telegram chat ID，或原生仅出站 webhook 渠道的 webhook 目标名称。Gateway 必须正在运行，并且 `message` 工具必须启用（`tools.message.enabled`，默认 `true`）。完整参数见[消息工具](../tools/messaging.md)。
+
+### 注意事项
+
+- `allow_from: []` 表示“允许所有人”，不是“拒绝所有人”。对于使用数字 ID 的平台，可以使用 `"0"` 这类不会匹配真实用户的哨兵值。
+- `allow_from` 只过滤入站消息，不限制出站发送；但机器人仍需具备在目标频道发言所需的平台权限。
+- 入站消息会被直接丢弃，不会排队，也不会作为上下文提供给 Agent。
+- 某些渠道仍可能对协议级交互（例如 Discord 斜杠命令）返回拒绝消息。如果需要完全静默，请使用原生仅出站渠道，或不授予交互 scope。
+- `group_trigger.mention_only` 不能替代此设置：它只过滤群组消息，被 @ 或收到私信时仍会响应。
+- `enabled: false` 会同时禁用入站和出站。要让出站可用，渠道必须保持启用。
+
 ---
 
 <a id="telegram"></a>
