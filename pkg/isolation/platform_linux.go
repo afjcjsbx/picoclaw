@@ -125,15 +125,22 @@ var linuxNamespaceProbe struct {
 
 func cachedLinuxNamespaceFlags(bwrapPath string) (map[string]bool, error) {
 	linuxNamespaceProbe.once.Do(func() {
+		run := func(path string, args ...string) ([]byte, error) {
+			var stderr bytes.Buffer
+			cmd := exec.Command(path, args...)
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			return stderr.Bytes(), err
+		}
+		// PID namespace is required: fail closed if the probe fails rather than
+		// running without it and silently sharing the host PID table.
+		if err := probeLinuxPIDNamespace(bwrapPath, run); err != nil {
+			linuxNamespaceProbe.err = err
+			return
+		}
 		linuxNamespaceProbe.flags, linuxNamespaceProbe.err = probeLinuxNamespaceFlags(
 			bwrapPath,
-			func(path string, args ...string) ([]byte, error) {
-				var stderr bytes.Buffer
-				cmd := exec.Command(path, args...)
-				cmd.Stderr = &stderr
-				err := cmd.Run()
-				return stderr.Bytes(), err
-			},
+			run,
 		)
 		if linuxNamespaceProbe.err != nil {
 			return
@@ -201,6 +208,7 @@ func buildLinuxBwrapArgs(
 		"bwrap",
 		"--die-with-parent",
 	}
+	bwrapArgs = append(bwrapArgs, "--unshare-pid")
 	for _, flag := range linuxOptionalNamespaceFlags {
 		if namespaceFlags[flag] {
 			bwrapArgs = append(bwrapArgs, flag)

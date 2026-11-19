@@ -81,7 +81,7 @@
 
 平台说明：
 
-- Linux 会真实使用 `source -> target` 挂载视图。
+- Linux 会真实使用 `source -> target` 挂载视图。Linux 在启动时探测 bubblewrap 命名空间支持情况。PID namespace（`--unshare-pid`）为必需项：若探测失败（例如 Docker 容器默认屏蔽了 `/proc`），启动会失败并给出明确提示（Docker 修复：添加 `--security-opt systempaths=unconfined`；Kubernetes 修复：设置 `procMount: Unmasked`）。如需完全关闭隔离，在 `config.json` 中设置 `"isolation.enabled": false`（风险：无文件系统隔离）。可选 flag（如 `--unshare-ipc`）若被内核以 EINVAL 拒绝，会以警告形式丢弃，挂载命名空间、文件系统视图和用户环境重定向仍然有效。
 - macOS 要求 `target` 与 `source` 相同；Seatbelt 不支持路径重映射。
 - Windows 当前不支持 `expose_paths`。
 
@@ -142,6 +142,7 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 能力：
 
 - 最小文件系统视图
+- `pid namespace`（必需；沙箱拥有独立 PID 表，`/proc` 只描述自身进程）
 - `ipc namespace`
 - 子进程用户环境重定向
 - `source -> target` 只读或读写挂载
@@ -223,7 +224,7 @@ macOS 调试日志名：`macOS Seatbelt profile prepared`。
 ## 当前限制
 
 - Linux 基于 `bwrap` 实现，而不是纯内建 isolation runtime。
-- Linux 当前没有默认启用独立的 `pid namespace`。
+- Linux 现已默认启用独立的 `pid namespace`；Docker 容器需要添加 `--security-opt systempaths=unconfined`。
 - Windows 还没有对所有允许/拒绝路径做完整 ACL 落地。
 - macOS Seatbelt 不支持 `source -> target` 路径重映射，并依赖 Apple 已弃用的 `sandbox-exec` 命令。
 - 当前隔离的是子进程，不是 `picoclaw` 主进程自身。
