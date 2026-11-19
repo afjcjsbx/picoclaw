@@ -68,8 +68,8 @@ importers:
         specifier: ^8.3.0
         version: 8.3.0
       jotai:
-        specifier: ^3.0.1
-        version: 3.0.1(@types/react@19.3.0)(react@19.3.1)
+        specifier: ^3.0.2
+        version: 3.0.2(@types/react@19.3.0)(react@19.3.1)
       radix-ui:
         specifier: ^1.7.0
         version: 1.8.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -2832,8 +2832,8 @@ packages:
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
 
-  jotai@3.0.1:
-    resolution: {integrity: sha512-6tS7wY9otdiNp26Wqb/1ds3OuVJVoV+tJlN4hpLrYmfFf/t9bauVt+zKBNSpS5qSl5h6GieVQ+OknVraZX+udQ==}
+  jotai@3.0.2:
+    resolution: {integrity: sha512-1h+H6BQN+D048zv8hRGVeNxghxRLFZCB+l2WhFe7RhRiF0JlC8516G2BtRUXhPvMQTGB9OHst2N/BW9aNpp5aA==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
       '@types/react': '>=18.0.0'
@@ -6946,7 +6946,7 @@ snapshots:
 
   jose@6.2.12: {}
 
-  jotai@3.0.1(@types/react@19.3.0)(react@19.3.1):
+  jotai@3.0.2(@types/react@19.3.0)(react@19.3.1):
     optionalDependencies:
       '@types/react': 19.3.0
       react: 19.3.1
