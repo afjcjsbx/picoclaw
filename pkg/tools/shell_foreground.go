@@ -17,11 +17,25 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
+// cwdProbeDir is where the probe file lives. Under isolation the host temp dir
+// is not mounted in the sandbox; only the redirected scratch dir ($TMPDIR of
+// the child) is, so the probe must go there. "" means the default temp dir.
+func cwdProbeDir() string {
+	if !isolation.CurrentConfig().Enabled {
+		return ""
+	}
+	root, err := isolation.ResolveInstanceRoot()
+	if err != nil {
+		return ""
+	}
+	return isolation.ResolveUserEnv(root).Tmp
+}
+
 // cwdProbeFile receives the final working directory from a wrapped foreground
 // command. A temp file keeps the probe out of stdout, so output truncation,
 // exit-status parsing and artifact tests see exactly the command's output.
 func newCwdProbeFile() (string, error) {
-	file, err := os.CreateTemp("", "picoclaw-cwd-*.txt")
+	file, err := os.CreateTemp(cwdProbeDir(), "picoclaw-cwd-*.txt")
 	if err != nil {
 		return "", err
 	}

@@ -44,7 +44,9 @@ func shellQuote(value string) string {
 // wrapCommandForCwd appends a probe that writes `pwd -P` after the command and
 // preserves its exit status. The wrapper runs in the same shell, so `cd` inside
 // the command is observed. A command that cannot safely take a suffix (a
-// trailing backslash continuation) is left unchanged.
+// trailing backslash continuation) is left unchanged. The braces matter: a
+// failed `>` open reports before a trailing `2>/dev/null` takes effect, so only
+// a group-level redirect keeps an unwritable probe silent.
 func wrapCommandForCwd(command, probePath string) (string, bool) {
 	if probePath == "" {
 		return command, false
@@ -53,7 +55,7 @@ func wrapCommandForCwd(command, probePath string) (string, bool) {
 		return command, false
 	}
 	wrapped := command + "\n__picoclaw_exec_status=$?\n" +
-		"command pwd -P > " + shellQuote(probePath) + " 2>/dev/null\n" +
+		"{ command pwd -P > " + shellQuote(probePath) + "; } 2>/dev/null\n" +
 		"exit $__picoclaw_exec_status"
 	return wrapped, true
 }
