@@ -40,6 +40,11 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 			disableHint,
 		)
 	}
+	if versionErr := checkBwrapVersion(bwrapPath, func(path string, args ...string) ([]byte, error) {
+		return exec.Command(path, args...).Output()
+	}); versionErr != nil {
+		return versionErr
+	}
 	if cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
@@ -81,6 +86,9 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	bwrapArgs, err := buildLinuxBwrapArgs(originalPath, resolvedPath, originalArgs, execDir, plan, namespaceFlags)
 	if err != nil {
 		return err
+	}
+	if isolation.BlockNetwork {
+		bwrapArgs = insertLinuxUnshareNet(bwrapArgs)
 	}
 
 	cmd.Path = bwrapPath
