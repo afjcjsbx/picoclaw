@@ -154,6 +154,15 @@ Capabilities:
 - `ipc` namespace isolation
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
+- all Linux capabilities dropped (`--cap-drop ALL`) inside every sandbox
+
+**Do not run PicoClaw as root.**  When the effective uid is 0, bwrap does not
+create a user namespace automatically, so the sandboxed process would otherwise
+retain the full host capability set even after `--cap-drop`.  PicoClaw works
+around this by passing `--unshare-user` for root callers, which creates a new
+user namespace where capabilities are reset to zero.  However, other attack
+surfaces (writable mounts, `/proc` without a PID namespace, etc.) remain more
+dangerous when run as root.  Run PicoClaw as a dedicated non-privileged user.
 
 Default mounts include the instance root plus the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf`.
 
@@ -265,6 +274,7 @@ is reflected in the next system prompt.
 
 - Linux isolation is implemented with `bwrap`, not a custom in-process isolation runtime.
 - Linux does not currently enable a dedicated `pid` namespace by default.
+- When running as root, `--unshare-user` creates a new user namespace (CapEff=0) but `/proc/1/root` may still be reachable until a PID namespace is added in a separate change.
 - Windows does not yet implement full host ACL enforcement for every allowed or denied path.
 - macOS Seatbelt does not support `source -> target` path remapping and relies on Apple's deprecated `sandbox-exec` command.
 - The current design isolates child processes, not the main `picoclaw` process.

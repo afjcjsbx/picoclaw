@@ -207,6 +207,17 @@ func buildLinuxBwrapArgs(
 		}
 	}
 	bwrapArgs = append(bwrapArgs, "--proc", "/proc", "--dev", "/dev")
+	// Drop all capabilities unconditionally so the sandboxed process cannot
+	// exercise Linux privileges it may have inherited from the caller.
+	bwrapArgs = append(bwrapArgs, "--cap-drop", "ALL")
+	// When running as root, bwrap does not create a user namespace by itself.
+	// Without one the process retains the full host capability set even after
+	// --cap-drop because the kernel only checks CapEff inside a user namespace.
+	// --unshare-user creates a new user namespace where the process appears as
+	// uid 0 but holds no host capabilities (CapEff stays all-zero).
+	if linuxEUID() == 0 {
+		bwrapArgs = append(bwrapArgs, "--unshare-user")
+	}
 	for _, rule := range plan {
 		flag, err := linuxBindFlag(rule)
 		if err != nil {

@@ -145,6 +145,9 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 - `ipc namespace`
 - 子进程用户环境重定向
 - `source -> target` 只读或读写挂载
+- 沙箱内始终丢弃全部 Linux 特权（`--cap-drop ALL`）
+
+**不建议以 root 运行 PicoClaw。** 当有效 uid 为 0 时，bwrap 不会自动创建 user namespace，沙箱进程在 `--cap-drop` 之后仍会保留完整的宿主特权集。PicoClaw 会在 root 模式下额外传入 `--unshare-user`，在新的 user namespace 中将 CapEff 清零。但其他攻击面（可写挂载、缺少 PID namespace 时的 `/proc` 等）在 root 模式下风险更高。请以专用非特权用户运行 PicoClaw。
 
 默认映射包括实例根，以及 `/usr`、`/bin`、`/lib`、`/lib64`、`/etc/resolv.conf` 等最小运行时系统路径。
 
@@ -224,6 +227,7 @@ macOS 调试日志名：`macOS Seatbelt profile prepared`。
 
 - Linux 基于 `bwrap` 实现，而不是纯内建 isolation runtime。
 - Linux 当前没有默认启用独立的 `pid namespace`。
+- root 模式下，`--unshare-user` 会创建新的 user namespace（CapEff=0），但在独立 PID namespace（由后续 PR 补充）加入前，`/proc/1/root` 仍可能可访问。
 - Windows 还没有对所有允许/拒绝路径做完整 ACL 落地。
 - macOS Seatbelt 不支持 `source -> target` 路径重映射，并依赖 Apple 已弃用的 `sandbox-exec` 命令。
 - 当前隔离的是子进程，不是 `picoclaw` 主进程自身。
