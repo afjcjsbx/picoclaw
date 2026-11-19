@@ -1,9 +1,6 @@
 package tools
 
 import (
-	"runtime"
-
-	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
@@ -12,16 +9,13 @@ import (
 // like the regex deny list. Hardline and custom deny patterns still apply
 // independently.
 //
-// Windows is skipped because the exec tool runs PowerShell there and the
-// classifier's command table describes POSIX tools.
-func newRiskGuard(cfg *config.Config, enabled bool) (*shellguard.Guard, error) {
-	if !enabled || runtime.GOOS == "windows" {
+// An empty threshold means medium. Windows is skipped because the exec tool
+// runs PowerShell there and the classifier's command table describes POSIX
+// tools.
+func newRiskGuard(threshold string, enabled bool) (*shellguard.Guard, error) {
+	if !enabled || !posixShell {
 		return nil, nil
 	}
 
-	threshold := "medium"
-	if cfg != nil && cfg.Tools.Exec.RiskThreshold != "" {
-		threshold = cfg.Tools.Exec.RiskThreshold
-	}
 	return shellguard.NewGuard(threshold)
 }

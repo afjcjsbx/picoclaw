@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// maxExecStateEntries bounds how many conversations keep a remembered exec
-// cwd. The state is best-effort, memory-only, and evicted least-recently-used
-// so a long-running gateway cannot grow without bound.
+// maxExecStateEntries bounds how many conversations keep exec state. The state
+// is best-effort, memory-only, and evicted least-recently-used so a long-running
+// gateway cannot grow without bound.
 const maxExecStateEntries = 64
 
 // execStateKey scopes state to one agent conversation. Requiring both values
@@ -19,8 +19,12 @@ type execStateKey struct {
 	sessionKey string
 }
 
+// execStateEntry is everything exec remembers about one conversation.
 type execStateEntry struct {
-	cwd      string
+	// cwd is the last working directory that passed validation.
+	cwd string
+	// block tracks the model retrying a rejected command.
+	block    blockStreak
 	lastUsed time.Time
 }
 
@@ -44,73 +48,51 @@ func execStateKeyFromContext(ctx context.Context) (execStateKey, bool) {
 	return key, true
 }
 
-// load returns the conversation's remembered cwd and marks it as recently
-// used. A missing session context yields zero state, keeping exec stateless
-// instead of sharing a global entry.
-func (s *execStateStore) load(ctx context.Context) string {
+// update runs fn on the conversation's entry and marks it as recently used.
+// create makes a missing entry; without it a missing entry is left alone. A
+// missing session context yields no state at all, keeping exec stateless
+// instead of sharing a global entry. It reports whether fn ran.
+func (s *execStateStore) update(ctx context.Context, create bool, fn func(*execStateEntry)) bool {
 	if s == nil {
-		return ""
+		return false
 	}
 	key, ok := execStateKeyFromContext(ctx)
 	if !ok {
-		return ""
+		return false
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[key]
 	if !ok {
-		return ""
+		if !create {
+			return false
+		}
+		s.pruneLocked()
+		entry = &execStateEntry{}
+		s.entries[key] = entry
 	}
+	fn(entry)
 	entry.lastUsed = time.Now()
-	return entry.cwd
+	return true
+}
+
+// load returns the conversation's remembered cwd.
+func (s *execStateStore) load(ctx context.Context) string {
+	var cwd string
+	s.update(ctx, false, func(entry *execStateEntry) { cwd = entry.cwd })
+	return cwd
 }
 
 // rememberCwd stores the resolved cwd for subsequent calls in the conversation.
 func (s *execStateStore) rememberCwd(ctx context.Context, cwd string) {
-	s.mutate(ctx, func(entry *execStateEntry) {
-		entry.cwd = cwd
-	})
+	s.update(ctx, true, func(entry *execStateEntry) { entry.cwd = cwd })
 }
 
 // clearCwd forgets a stored cwd that is no longer usable. It does not create
 // an entry when the conversation has none.
 func (s *execStateStore) clearCwd(ctx context.Context) {
-	if s == nil {
-		return
-	}
-	key, ok := execStateKeyFromContext(ctx)
-	if !ok {
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if entry, ok := s.entries[key]; ok {
-		entry.cwd = ""
-		entry.lastUsed = time.Now()
-	}
-}
-
-func (s *execStateStore) mutate(ctx context.Context, update func(*execStateEntry)) {
-	if s == nil {
-		return
-	}
-	key, ok := execStateKeyFromContext(ctx)
-	if !ok {
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	entry, ok := s.entries[key]
-	if !ok {
-		s.pruneLocked()
-		entry = &execStateEntry{}
-		s.entries[key] = entry
-	}
-	update(entry)
-	entry.lastUsed = time.Now()
+	s.update(ctx, false, func(entry *execStateEntry) { entry.cwd = "" })
 }
 
 func (s *execStateStore) clear(key execStateKey) {
@@ -152,8 +134,5 @@ func (t *ExecTool) ClearSession(agentID, sessionKey string) {
 	if t == nil {
 		return
 	}
-	if t.state != nil {
-		t.state.clear(execStateKey{agentID: agentID, sessionKey: sessionKey})
-	}
-	t.blockBreaker.clear(agentID, sessionKey)
+	t.state.clear(execStateKey{agentID: agentID, sessionKey: sessionKey})
 }

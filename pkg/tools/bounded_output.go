@@ -2,20 +2,11 @@ package tools
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"unicode/utf8"
 
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
-)
-
-const (
-	// maxOutputSpillBytes caps the artifact written for oversized foreground
-	// output. Memory stays bounded by max_output_chars runes; the artifact
-	// keeps the beginning of the stream up to this limit.
-	maxOutputSpillBytes = 5_000_000
 )
 
 // boundedOutput is an io.Writer that retains a head/tail window in memory and
@@ -41,13 +32,7 @@ type boundedOutput struct {
 	totalRunes     int64
 	runeCarry      []byte
 
-	spillDir  string
-	spill     *os.File
-	spillPath string
-	spillSize int64
-	spillCap  int64
-	capped    bool
-	failed    bool
+	spill spillFile
 }
 
 func newBoundedOutput(maxChars int, spillDir string) *boundedOutput {
@@ -62,8 +47,7 @@ func newBoundedOutput(maxChars int, spillDir string) *boundedOutput {
 		tailRunes:      tailRunes,
 		headLimitBytes: headRunes * utf8.UTFMax,
 		tailLimitBytes: tailRunes*utf8.UTFMax + utf8.UTFMax,
-		spillDir:       spillDir,
-		spillCap:       maxOutputSpillBytes,
+		spill:          spillFile{dir: spillDir, pattern: "exec_*.log"},
 	}
 }
 
@@ -79,101 +63,16 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 	defer b.mu.Unlock()
 
 	b.countRunesLocked(p)
-	if b.spill == nil && !b.failed && b.totalRunes > int64(b.maxRunes) {
-		b.openSpillLocked()
+	if !b.spill.active() && b.totalRunes > int64(b.maxRunes) {
+		// The first overflow happens while the stream was still within
+		// maxRunes, so the head and tail windows reconstruct every byte
+		// written so far.
+		b.spill.start(b.snapshotLocked())
 	}
 	b.totalBytes += int64(len(p))
-	if err := b.writeSpillLocked(p); err != nil {
-		b.abortSpillLocked()
-	}
+	b.spill.write(p)
 	b.appendLocked(p)
 	return len(p), nil
-}
-
-func (b *boundedOutput) openSpillLocked() {
-	if b.spill != nil || b.failed {
-		return
-	}
-
-	file, dir, err := b.createSpillFile()
-	if err != nil {
-		b.failed = true
-		return
-	}
-	b.spill = file
-	b.spillDir = dir
-	b.spillPath = file.Name()
-	b.spillSize = 0
-
-	// The first overflow happens while the stream was still within maxRunes,
-	// so the head and tail windows reconstruct every byte written so far.
-	if err := b.writeSpillLocked(b.snapshotLocked()); err != nil {
-		b.abortSpillLocked()
-	}
-}
-
-func (b *boundedOutput) createSpillFile() (*os.File, string, error) {
-	if b.spillDir == "" {
-		return b.createTempSpillFile()
-	}
-	if err := os.MkdirAll(b.spillDir, 0o700); err != nil {
-		return b.createTempSpillFile()
-	}
-	file, err := os.CreateTemp(b.spillDir, "exec_*.log")
-	if err != nil {
-		return b.createTempSpillFile()
-	}
-	return file, b.spillDir, nil
-}
-
-func (b *boundedOutput) createTempSpillFile() (*os.File, string, error) {
-	dir := tempArtifactDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, "", err
-	}
-	file, err := os.CreateTemp(dir, "exec_*.log")
-	if err != nil {
-		return nil, "", err
-	}
-	return file, dir, nil
-}
-
-// tempArtifactDir is the fallback for workspaces that cannot receive artifacts.
-// Keeping spills in a dedicated directory lets Close prune them with the same
-// retention policy as workspace artifacts instead of leaking files in the
-// system temp directory.
-func tempArtifactDir() string {
-	return filepath.Join(os.TempDir(), "picoclaw-artifacts", "tool")
-}
-
-func (b *boundedOutput) writeSpillLocked(p []byte) error {
-	if b.spill == nil || b.capped || len(p) == 0 {
-		return nil
-	}
-
-	budget := b.spillCap - b.spillSize
-	if budget <= 0 {
-		b.capped = true
-		return nil
-	}
-	if int64(len(p)) >= budget {
-		if _, err := b.spill.Write(p[:budget]); err != nil {
-			return err
-		}
-		b.spillSize += budget
-		marker := fmt.Sprintf("\n... [spill capped at %s bytes] ...\n", formatCount64(b.spillCap))
-		if _, err := b.spill.WriteString(marker); err != nil {
-			return err
-		}
-		b.capped = true
-		return nil
-	}
-	n, err := b.spill.Write(p)
-	if err != nil {
-		return err
-	}
-	b.spillSize += int64(n)
-	return nil
 }
 
 // appendLocked keeps the first headLimitBytes bytes and, independently, the
@@ -280,43 +179,29 @@ func (b *boundedOutput) Render() boundedOutputView {
 func (b *boundedOutput) SpillPath() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.spillPath
+	return b.spill.path
 }
 
 // SpillCapped reports whether the artifact reached maxOutputSpillBytes.
 func (b *boundedOutput) SpillCapped() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.capped
+	return b.spill.capped
 }
 
 func (b *boundedOutput) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.spill == nil {
+	if !b.spill.active() {
 		return nil
 	}
-	err := b.spill.Close()
-	b.spill = nil
-	if b.spillDir != "" {
+	err := b.spill.close()
+	if b.spill.dir != "" {
 		maxAge, maxFiles := toolshared.ArtifactRetention()
-		toolshared.PruneArtifacts(b.spillDir, maxAge, maxFiles)
+		toolshared.PruneArtifacts(b.spill.dir, maxAge, maxFiles)
 	}
 	return err
-}
-
-func (b *boundedOutput) abortSpillLocked() {
-	if b.spill != nil {
-		_ = b.spill.Close()
-		b.spill = nil
-	}
-	if b.spillPath != "" {
-		_ = os.Remove(b.spillPath)
-		b.spillPath = ""
-	}
-	b.spillSize = 0
-	b.failed = true
 }
 
 func trimPartialRuneSuffix(b []byte) []byte {

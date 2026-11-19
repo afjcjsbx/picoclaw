@@ -175,7 +175,7 @@ func TestProcessSession_ReadRangeReportsDroppedPrefix(t *testing.T) {
 
 func TestProcessSession_SpillsFullOutputToArtifact(t *testing.T) {
 	dir := t.TempDir()
-	session := &ProcessSession{Status: "running", spillDir: dir}
+	session := &ProcessSession{Status: "running", spill: spillFile{dir: dir}}
 
 	first := strings.Repeat("a", maxOutputBufferSize/2)
 	second := strings.Repeat("b", maxOutputBufferSize/2+100)

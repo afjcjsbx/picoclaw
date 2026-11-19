@@ -16,7 +16,7 @@ func TestRecoverGoroutine(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		defer recoverGoroutine("test", func() { ran = true })
+		defer recoverGoroutine("test", func(any) { ran = true })
 		panic("boom")
 	}()
 	<-done
@@ -25,7 +25,7 @@ func TestRecoverGoroutine(t *testing.T) {
 	// No panic: the hook must not run.
 	ran = false
 	func() {
-		defer recoverGoroutine("test", func() { ran = true })
+		defer recoverGoroutine("test", func(any) { ran = true })
 	}()
 	require.False(t, ran)
 }

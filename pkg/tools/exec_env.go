@@ -3,7 +3,6 @@ package tools
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -56,30 +55,12 @@ var defaultExecEnvAllowlist = map[string]bool{
 	"LC_COLLATE":        true,
 }
 
-// windowsExecEnvAllowlist contains additional variables needed to run commands
-// on Windows, where the default Unix set is not enough.
-var windowsExecEnvAllowlist = map[string]bool{
-	"PATHEXT":      true,
-	"SYSTEMROOT":   true,
-	"SYSTEMDRIVE":  true,
-	"WINDIR":       true,
-	"COMSPEC":      true,
-	"APPDATA":      true,
-	"LOCALAPPDATA": true,
-	"PROGRAMDATA":  true,
-	"USERPROFILE":  true,
-	"HOMEDRIVE":    true,
-	"HOMEPATH":     true,
-	"TEMP":         true,
-	"TMP":          true,
-}
-
 // newExecEnv builds the cached, sanitized base environment for exec child
 // processes. Config env_set values are trusted and take precedence over
 // inherited variables; the remaining parent values are inherited only when
 // their names are allowlisted.
 func newExecEnv(workingDir string, envSet map[string]string, extraAllowlist []string) map[string]string {
-	env := make(map[string]string, len(envSet)+len(defaultExecEnvAllowlist)+len(windowsExecEnvAllowlist)+8)
+	env := make(map[string]string, len(envSet)+len(defaultExecEnvAllowlist)+len(platformEnvAllowlist())+8)
 	for key, value := range envSet {
 		env[execEnvKey(key)] = value
 	}
@@ -99,10 +80,8 @@ func newExecEnv(workingDir string, envSet map[string]string, extraAllowlist []st
 	for name := range defaultExecEnvAllowlist {
 		inherit(name)
 	}
-	if runtime.GOOS == "windows" {
-		for name := range windowsExecEnvAllowlist {
-			inherit(name)
-		}
+	for name := range platformEnvAllowlist() {
+		inherit(name)
 	}
 	for _, name := range extraAllowlist {
 		if name = strings.TrimSpace(name); name != "" {
@@ -143,16 +122,6 @@ func setPicoclawEnv(env map[string]string, workspace string) {
 		serviceName = "picoclaw"
 	}
 	env[config.EnvServiceName] = serviceName
-}
-
-// execEnvKey normalizes a variable name. Windows environment names are
-// case-insensitive, so keys are uppercased there to avoid duplicate entries
-// such as Path and PATH.
-func execEnvKey(key string) string {
-	if runtime.GOOS == "windows" {
-		return strings.ToUpper(key)
-	}
-	return key
 }
 
 // buildEnvList renders an environment map as sorted KEY=value entries once, so

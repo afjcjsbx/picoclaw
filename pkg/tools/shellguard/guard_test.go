@@ -22,7 +22,7 @@ func checkGuard(g *Guard, command string) *BlockedError {
 	}
 	file, _ := Parse(command)
 	assessment := g.AssessFile(command, file)
-	if assessment.Reject || assessment.Unknown ||
+	if assessment.Verdict != VerdictKnown ||
 		!IsAllowed(assessment.Level, g.Threshold()) {
 		return assessment.BlockedError(g.Threshold())
 	}
@@ -318,7 +318,7 @@ func TestGuardRejectsParseFailure(t *testing.T) {
 		t.Fatalf("Parse returned a partial tree with the error: %#v", file)
 	}
 	assessment := guard.AssessFile("echo )", file)
-	if !assessment.Unknown {
+	if assessment.Verdict != VerdictUnknown {
 		t.Fatalf("AssessFile did not mark the parse failure unknown: %#v", assessment)
 	}
 	if blocked := checkGuard(guard, "echo )"); blocked == nil {
@@ -449,10 +449,10 @@ func TestGuardNestingLimit(t *testing.T) {
 	t.Parallel()
 
 	guard := mustGuard(t, "medium")
-	if assessment := guard.assessScript("echo ok", maxShellNesting+1); !assessment.Unknown {
+	if assessment := guard.assessScript("echo ok", maxShellNesting+1); assessment.Verdict != VerdictUnknown {
 		t.Fatal("depth beyond the nesting limit should be unknown")
 	}
-	if assessment := guard.assessScript("echo ok", maxShellNesting); assessment.Unknown {
+	if assessment := guard.assessScript("echo ok", maxShellNesting); assessment.Verdict == VerdictUnknown {
 		t.Fatalf("depth at the nesting limit should pass: %+v", assessment)
 	}
 }
@@ -496,5 +496,54 @@ func BenchmarkGuardCheck(b *testing.B) {
 				_ = checkGuard(guard, command)
 			}
 		})
+	}
+}
+
+// TestGuardWrapperTargetsAreUnwrapped checks that a launcher behind a wrapper
+// is inspected like one at the top level, so find -exec cannot hide a critical
+// command behind find's own low risk.
+func TestGuardWrapperTargetsAreUnwrapped(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "high")
+	for _, command := range []string{
+		`find . -exec rm -rf / \;`,
+		`timeout 5 find . -exec rm -rf / \;`,
+		`env nice find . -exec rm -rf / \;`,
+		`nohup exec rm -rf /`,
+		`flock ./lock -c 'rm -rf /'`,
+		`capsh -- -c 'rm -rf /'`,
+	} {
+		if checkGuard(guard, command) == nil {
+			t.Errorf("Check(%q) allowed, want blocked", command)
+		}
+	}
+}
+
+func TestGuardCheckPolicy(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "medium")
+	tests := []struct {
+		command string
+		blocked bool
+	}{
+		{"ls -la", false},
+		{"git push origin main", true},
+		{"$CMD --flag", false}, // unresolved command: allowed by default
+		{"echo )", false},      // unparseable: allowed by default
+		{"rm $TARGET", true},   // dynamic operand of a destructive command
+		{"sh -c 'rm -rf /'", true},
+	}
+	for _, tt := range tests {
+		file, _ := Parse(tt.command)
+		if got := guard.Check(tt.command, file) != nil; got != tt.blocked {
+			t.Errorf("Check(%q) blocked = %v, want %v", tt.command, got, tt.blocked)
+		}
+	}
+
+	var nilGuard *Guard
+	if nilGuard.Check("rm -rf /", nil) != nil {
+		t.Error("a nil guard must allow everything")
 	}
 }

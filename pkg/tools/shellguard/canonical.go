@@ -78,68 +78,20 @@ func appendCanonicalCall(forms []string, words []word, redirs []*syntax.Redirect
 		forms = append(forms, strings.Join(formWords, " "))
 	}
 
-	if depth >= maxShellNesting {
+	if !canNest(depth) {
 		return forms
 	}
 
-	name := baseCommand(words[0].text)
-	if isShellCommand(name) {
-		invocation := parseShellInvocation(words[1:])
-		if invocation.hasScript && !invocation.script.dynamic {
-			forms = append(forms, canonicalCommands(normalizeForParse(invocation.script.text), depth+1)...)
-		}
-		return forms
-	}
-	switch name {
-	case "eval":
-		if script, ok := joinLiteralWords(words[1:]); ok && script != "" {
-			forms = append(forms, canonicalCommands(normalizeForParse(script), depth+1)...)
-		}
-		return forms
-	case "trap":
-		action, found, dynamic := trapAction(words[1:])
-		if found && !dynamic {
-			forms = append(forms, canonicalCommands(normalizeForParse(action.text), depth+1)...)
-		}
-		return forms
-	case "find":
-		for _, nested := range findExecCommands(words[1:]) {
-			forms = appendCanonicalCall(forms, nested, nil, depth+1)
-		}
-		return forms
-	case "exec":
-		if nested, ok := execCommand(words[1:]); ok {
-			forms = appendCanonicalCall(forms, nested, nil, depth+1)
-		}
-		return forms
-	}
-	if name == "env" {
-		opts := parseEnvArgs(words[1:])
-		if opts.splitString {
-			if !opts.splitValue.dynamic {
-				forms = append(forms, canonicalCommands(normalizeForParse(opts.splitValue.text), depth+1)...)
-			}
-			return forms
+	l := resolveLaunch(words)
+	for _, script := range l.scripts {
+		if !script.dynamic {
+			forms = append(forms, canonicalCommands(normalizeForParse(script.text), depth+1)...)
 		}
 	}
-	if spec, ok := wrapperSpecs[name]; ok {
-		nested, found, dynamic := wrapperNested(words[1:], spec)
-		if found && !dynamic && len(nested) > 0 {
-			forms = appendCanonicalCall(forms, nested, nil, depth+1)
-		}
+	for _, argv := range l.argvs {
+		forms = appendCanonicalCall(forms, argv, nil, depth+1)
 	}
 	return forms
-}
-
-func joinLiteralWords(words []word) (string, bool) {
-	texts := make([]string, 0, len(words))
-	for _, w := range words {
-		if w.dynamic {
-			return "", false
-		}
-		texts = append(texts, w.text)
-	}
-	return strings.Join(texts, " "), true
 }
 
 func appendRedirectWords(words []string, redirs []*syntax.Redirect) []string {
