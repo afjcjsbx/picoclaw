@@ -783,6 +783,7 @@
         "viewer_description": "Read the current effective SKILL.md content here.",
         "load_detail_error": "Failed to load skill content.",
         "no_description": "No description provided.",
+        "plugin_badge": "Plugin: {{id}}",
         "no_results": "No skills matched the current filters.",
         "dropzone_title": "Import Into Workspace",
         "dropzone_description": "Drag a skill file here or pick one from disk.",
@@ -819,6 +820,7 @@
         "origin": {
           "all": "All Types",
           "builtin": "Builtin",
+          "plugin": "Plugin",
           "third_party": "Third-Party",
           "manual": "Manual"
         },
@@ -833,6 +835,7 @@
         "metadata": {
           "name": "Name",
           "description": "Description",
+          "plugin": "Plugin",
           "registry": "Registry",
           "url": "URL",
           "version": "Installed Version",

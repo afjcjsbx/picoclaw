@@ -749,6 +749,7 @@
         "viewer_description": "这里展示当前生效的 SKILL.md 内容。",
         "load_detail_error": "加载技能内容失败。",
         "no_description": "未提供描述。",
+        "plugin_badge": "插件：{{id}}",
         "no_results": "没有技能匹配当前筛选条件。",
         "dropzone_title": "导入到工作区",
         "dropzone_description": "将技能文件拖到这里，或从本地选择一个文件。",
@@ -785,6 +786,7 @@
         "origin": {
           "all": "全部类型",
           "builtin": "内置",
+          "plugin": "插件",
           "third_party": "第三方",
           "manual": "手动导入"
         },
@@ -799,6 +801,7 @@
         "metadata": {
           "name": "名称",
           "description": "描述",
+          "plugin": "插件",
           "registry": "来源平台",
           "url": "链接地址",
           "version": "已安装版本",

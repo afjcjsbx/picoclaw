@@ -18,6 +18,8 @@ Skills are discovered one level deep: each direct subdirectory of a skills root 
 | 3 | `~/.picoclaw/skills` | `global` |
 | 4 | Builtin skills embedded at build time (`picoclaw skills list-builtin`) | `builtin` |
 
+Plugin-provided skills appear on the Web UI **Skills** page with the `Plugin` origin once both `plugins.enabled` and the plugin entry's `enabled` are true. They are read-only there because they live inside the plugin package; change the plugin entry or its `skill_names` filter to control them.
+
 Copy builtin skills into your workspace to customize them:
 
 ```bash
