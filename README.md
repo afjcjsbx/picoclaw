@@ -612,3 +612,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 **PicoClaw is built in the open. Come build it with us.**
 
 [⭐ Star PicoClaw](https://github.com/afjcjsbx/picoclaw) · [💬 Join Discord](https://discord.gg/XTt5Y6cJfY) · [🐛 Report an issue](https://github.com/afjcjsbx/picoclaw/issues)
+
+## Support PicoClaw
+
+PicoClaw is free and open source. If it saves you time — or gives an old machine a second life — you can help keep development going:
+
+- ☕ **Ko-fi:** [ko-fi.com/afjcjsbx](https://ko-fi.com/afjcjsbx)
+- 💸 **PayPal:** [paypal.me/afjcjsbx](https://paypal.me/afjcjsbx)
+- 🖥️ **Old hardware to spare?** Don't throw it away — donate it and we'll use it to test PicoClaw on real devices and widen hardware support.
+
+All donations are reinvested directly into PicoClaw development: testing, hardware, and infrastructure.
