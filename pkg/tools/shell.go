@@ -68,7 +68,6 @@ type ExecTool struct {
 	state          *execStateStore
 	sessionManager *SessionManager
 	riskGuard      *shellguard.Guard
-	blockBreaker   *execBlockBreaker
 }
 
 var _ AsyncExecutor = (*ExecTool)(nil)
@@ -421,7 +420,6 @@ func NewExecToolWithConfig(
 		state:                newExecStateStore(),
 		sessionManager:       getSessionManager(),
 		riskGuard:            riskGuard,
-		blockBreaker:         newExecBlockBreaker(),
 	}, nil
 }
 

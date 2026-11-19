@@ -145,12 +145,12 @@ func TestExecBlockBreakerKeepsStateBounded(t *testing.T) {
 	tool := newBlockBreakerTestTool(t)
 	const blocked = "echo blocked"
 
-	for i := 0; i < maxExecBlockSessions+8; i++ {
+	for i := 0; i < maxExecStateEntries+8; i++ {
 		runBlockedCommand(t, tool, blockBreakerContext(fmt.Sprintf("session-%d", i)), blocked)
 	}
 
-	tool.blockBreaker.mu.Lock()
-	size := len(tool.blockBreaker.states)
-	tool.blockBreaker.mu.Unlock()
-	require.LessOrEqual(t, size, maxExecBlockSessions)
+	tool.state.mu.Lock()
+	size := len(tool.state.entries)
+	tool.state.mu.Unlock()
+	require.LessOrEqual(t, size, maxExecStateEntries)
 }

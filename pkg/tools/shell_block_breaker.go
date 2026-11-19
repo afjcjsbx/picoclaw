@@ -4,98 +4,41 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 )
 
-const (
-	// execBlockHardStopThreshold is the number of consecutive identical guard
-	// rejections after which the model gets a hard-stop message instead of a
-	// plain block reason.
-	execBlockHardStopThreshold = 3
+// execBlockHardStopThreshold is the number of consecutive identical guard
+// rejections after which the model gets a hard-stop message instead of a
+// plain block reason.
+const execBlockHardStopThreshold = 3
 
-	// maxExecBlockSessions bounds the process-local breaker state. Each entry
-	// holds a hash and a counter, so the table stays in the low KBs.
-	maxExecBlockSessions = 64
-)
-
-type execBlockKey struct{ agent, session string }
-
-type execBlockState struct {
+// blockStreak is the run of identical rejections in one conversation. No
+// command text is retained, only a 64-bit hash and a counter.
+type blockStreak struct {
 	fingerprint uint64
 	count       int
 }
 
-// execBlockBreaker detects a model retrying the same rejected command. State
-// is process-local, per agent and conversation, and bounded; no command text
-// is retained, only a 64-bit hash and a counter per conversation.
-type execBlockBreaker struct {
-	mu     sync.Mutex
-	states map[execBlockKey]execBlockState
-}
-
-func newExecBlockBreaker() *execBlockBreaker {
-	return &execBlockBreaker{states: make(map[execBlockKey]execBlockState)}
-}
-
-func execBlockSession(ctx context.Context) (execBlockKey, bool) {
-	key := execBlockKey{agent: ToolAgentID(ctx), session: ToolSessionKey(ctx)}
-	return key, key.agent != "" && key.session != ""
-}
-
-// record registers one blocked attempt and reports how many identical blocks
-// the conversation has seen in a row. A different command or rejection reason
-// starts a new streak.
-func (b *execBlockBreaker) record(ctx context.Context, command, reason string) (int, bool) {
-	if b == nil {
-		return 0, false
-	}
-	key, ok := execBlockSession(ctx)
-	if !ok {
-		return 0, false
-	}
+// recordBlock registers one blocked attempt and reports how many identical
+// blocks the conversation has seen in a row. A different command or rejection
+// reason starts a new streak.
+func (s *execStateStore) recordBlock(ctx context.Context, command, reason string) (int, bool) {
 	fingerprint := execBlockFingerprint(strings.TrimSpace(command), reason)
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	state, tracked := b.states[key]
-	if tracked && state.fingerprint == fingerprint {
-		state.count++
-	} else {
-		if !tracked && len(b.states) >= maxExecBlockSessions {
-			// Arbitrary eviction keeps the table bounded without an LRU list.
-			// A dropped conversation simply starts a new streak.
-			for evict := range b.states {
-				delete(b.states, evict)
-				break
-			}
+	count := 0
+	tracked := s.update(ctx, true, func(entry *execStateEntry) {
+		if entry.block.count > 0 && entry.block.fingerprint == fingerprint {
+			entry.block.count++
+		} else {
+			entry.block = blockStreak{fingerprint: fingerprint, count: 1}
 		}
-		state = execBlockState{fingerprint: fingerprint, count: 1}
-	}
-	b.states[key] = state
-	return state.count, true
+		count = entry.block.count
+	})
+	return count, tracked
 }
 
-// reset clears the streak after an allowed run: the model is making progress.
-func (b *execBlockBreaker) reset(ctx context.Context) {
-	if b == nil {
-		return
-	}
-	key, ok := execBlockSession(ctx)
-	if !ok {
-		return
-	}
-	b.mu.Lock()
-	delete(b.states, key)
-	b.mu.Unlock()
-}
-
-func (b *execBlockBreaker) clear(agentID, sessionKey string) {
-	if b == nil || agentID == "" || sessionKey == "" {
-		return
-	}
-	b.mu.Lock()
-	delete(b.states, execBlockKey{agent: agentID, session: sessionKey})
-	b.mu.Unlock()
+// resetBlock clears the streak after an allowed run: the model is making
+// progress.
+func (s *execStateStore) resetBlock(ctx context.Context) {
+	s.update(ctx, false, func(entry *execStateEntry) { entry.block = blockStreak{} })
 }
 
 // execBlockFingerprint hashes the trimmed command and the guard reason with
@@ -128,7 +71,7 @@ func execBlockHardStopMessage(count int) string {
 // blockedResult returns the guard reason, escalating to a hard stop when the
 // same command and reason have been rejected repeatedly in this conversation.
 func (t *ExecTool) blockedResult(ctx context.Context, command, reason string) *ToolResult {
-	count, tracked := t.blockBreaker.record(ctx, command, reason)
+	count, tracked := t.state.recordBlock(ctx, command, reason)
 	if !tracked || count < execBlockHardStopThreshold {
 		return ErrorResult(reason)
 	}

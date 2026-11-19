@@ -196,3 +196,29 @@ func TestExecStateStore_ConcurrentAccessAndBound(t *testing.T) {
 	defer store.mu.Unlock()
 	require.LessOrEqual(t, len(store.entries), maxExecStateEntries)
 }
+
+func TestExecStateStore_OneEntryPerConversation(t *testing.T) {
+	store := newExecStateStore()
+	ctx := execStateContext("agent-a", "session-1")
+
+	store.rememberCwd(ctx, "/tmp/work")
+	count, tracked := store.recordBlock(ctx, "rm -rf /", "blocked")
+	require.True(t, tracked)
+	require.Equal(t, 1, count)
+	require.Len(t, store.entries, 1, "cwd and block streak share the conversation's entry")
+
+	count, _ = store.recordBlock(ctx, "rm -rf /", "blocked")
+	require.Equal(t, 2, count)
+
+	store.resetBlock(ctx)
+	require.Equal(t, "/tmp/work", store.load(ctx), "an allowed run must not forget the cwd")
+	count, _ = store.recordBlock(ctx, "rm -rf /", "blocked")
+	require.Equal(t, 1, count, "an allowed run restarts the streak")
+
+	store.clear(execStateKey{agentID: "agent-a", sessionKey: "session-1"})
+	require.Empty(t, store.load(ctx))
+	require.Empty(t, store.entries)
+
+	_, tracked = store.recordBlock(context.Background(), "x", "y")
+	require.False(t, tracked, "a call without session context keeps no state")
+}

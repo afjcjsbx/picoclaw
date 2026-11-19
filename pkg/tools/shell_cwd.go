@@ -67,7 +67,7 @@ func (t *ExecTool) admitRun(
 	}
 
 	// Any allowed run breaks the blocked-command streak.
-	t.blockBreaker.reset(ctx)
+	t.state.resetBlock(ctx)
 	return cwd, nil
 }
 
@@ -169,9 +169,7 @@ func (t *ExecTool) rememberedCwd(ctx context.Context, cwd string) (string, bool)
 }
 
 func (t *ExecTool) forgetRememberedCwd(ctx context.Context, cwd string, cause error) {
-	if t.state != nil {
-		t.state.clearCwd(ctx)
-	}
+	t.state.clearCwd(ctx)
 	logger.WarnCF("shell", "forgetting unusable remembered cwd", map[string]any{
 		"cwd":   cwd,
 		"error": cause.Error(),
@@ -179,9 +177,6 @@ func (t *ExecTool) forgetRememberedCwd(ctx context.Context, cwd string, cause er
 }
 
 func (t *ExecTool) rememberCwd(ctx context.Context, cwd string) {
-	if t.state == nil {
-		return
-	}
 	if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs
 	}
