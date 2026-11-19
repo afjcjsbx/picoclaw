@@ -157,7 +157,7 @@ Capabilities:
 
 Default mounts include the instance root plus the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf`.
 
-At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed.
+At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed. If the working directory is a symlink (or contains symlink components), it is resolved to its canonical path before mounting so that bubblewrap 0.12 and later can accept it as a bind-mount target.
 
 Absolute path arguments are exposed **read-only**: a directory passed on the command line does not become a writable hole in the sandbox. Writable locations come from `expose_paths`, the effective working directory, or the parent of a non-existent path argument (so output files can still be created).
 

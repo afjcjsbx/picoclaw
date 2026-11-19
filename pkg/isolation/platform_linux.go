@@ -54,6 +54,10 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	if err != nil {
 		return err
 	}
+	// Resolve any symlink components so bwrap can use the directory as a
+	// mount target. bwrap >= 0.12 rejects symlink paths with
+	// "Can't mount on symlink destination".
+	execDir = resolveLinuxExecDir(execDir)
 	resolvedPath, err := resolveLinuxCommandPath(originalPath, execDir)
 	if err != nil {
 		return err
@@ -66,9 +70,6 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	plan = appendLinuxCommandMountRules(plan, resolvedPath)
 	if execDir != "" {
 		plan = ensureLinuxMountRule(plan, execDir, execDir, "rw")
-		if resolved, resolveErr := filepath.EvalSymlinks(execDir); resolveErr == nil && resolved != execDir {
-			plan = ensureLinuxMountRule(plan, resolved, resolved, "rw")
-		}
 	}
 	plan = appendLinuxArgumentMounts(plan, originalArgs[1:])
 	logger.DebugCF("isolation", "linux isolation mount plan",
