@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -82,6 +83,26 @@ func isLinuxBroadMount(path string) bool {
 	return false
 }
 
+// linuxPseudoFilesystemPrefixes lists kernel-backed filesystems that the
+// sandbox provides itself. A fresh /proc is mounted with --proc and /dev with
+// --dev, so entries from these trees never need to be copied in from the host.
+var linuxPseudoFilesystemPrefixes = []string{"/proc", "/sys", "/dev"}
+
+// isLinuxPseudoFilesystemPath reports whether path lives in a pseudo-filesystem
+// that is owned by the sandbox rather than the host. Auto-binding such a path is
+// useless and can break sandbox setup: /proc/self/... resolves to a host PID
+// that does not exist in the sandbox PID namespace, so bwrap fails while
+// creating the mount point (e.g. "Can't mkdir parents for /proc/1234/status").
+func isLinuxPseudoFilesystemPath(path string) bool {
+	clean := filepath.Clean(path)
+	for _, prefix := range linuxPseudoFilesystemPrefixes {
+		if clean == prefix || strings.HasPrefix(clean, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // linuxPlanCoversPath reports whether any rule in plan has a target that is
 // path or an ancestor of path. When true, adding a new rule for path would
 // stack a potentially conflicting mode on top of an existing one.
@@ -115,6 +136,13 @@ func warnArgBroadMount(path string) {
 // so it can be tested independently.
 func appendLinuxArgumentMountsFor(plan []MountRule, path string) []MountRule {
 	clean := filepath.Clean(path)
+
+	// /proc, /sys and /dev are mounted by bwrap itself. Binding host entries
+	// from these trees is unnecessary and, for resolved /proc/self/... paths,
+	// makes bwrap fail because the host PID is absent from the sandbox.
+	if isLinuxPseudoFilesystemPath(clean) {
+		return plan
+	}
 
 	if isLinuxBroadMount(clean) {
 		warnArgBroadMount(clean)
