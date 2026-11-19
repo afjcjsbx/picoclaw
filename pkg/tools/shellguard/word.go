@@ -242,3 +242,22 @@ func wordTexts(words []word) []string {
 	}
 	return args
 }
+
+func isAssignment(s string) bool {
+	eq := strings.IndexByte(s, '=')
+	if eq <= 0 {
+		return false
+	}
+	for i := 0; i < eq; i++ {
+		c := s[i]
+		switch {
+		case c == '_':
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case i > 0 && c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
