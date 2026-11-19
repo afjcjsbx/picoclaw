@@ -53,6 +53,11 @@ type ProcessSession struct {
 	totalOutput  int64
 	ptyMaster    *os.File
 
+	// spill receives the full session stream once the in-memory window
+	// overflows. Its path is the artifact returned to the model; the file is
+	// capped at maxOutputSpillBytes like a foreground artifact.
+	spill spillFile
+
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
 
@@ -111,22 +116,10 @@ func (s *ProcessSession) GetStatus() string {
 	return s.Status
 }
 
-func (s *ProcessSession) SetStatus(status string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Status = status
-}
-
 func (s *ProcessSession) GetExitCode() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ExitCode
-}
-
-func (s *ProcessSession) SetExitCode(code int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ExitCode = code
 }
 
 func (s *ProcessSession) killProcess() error {
@@ -186,6 +179,12 @@ func (s *ProcessSession) finishLocked(exitCode int) {
 	if !s.doneClosed {
 		close(s.done)
 		s.doneClosed = true
+	}
+	// A non-PTY reader calls finish after its last append, so the artifact can
+	// be closed now. PTY readers can deliver a final tail after Wait returns;
+	// their descriptor is released by the session cleanup instead.
+	if !s.PTY {
+		_ = s.spill.close()
 	}
 }
 
@@ -290,7 +289,9 @@ func (s *ProcessSession) Write(data string) error {
 
 // appendOutput appends p to the rolling session log. The retained window is
 // capped at maxOutputBufferSize; dropped prefixes move outputBase forward so
-// absolute offsets remain stable for ReadRange callers.
+// absolute offsets remain stable for ReadRange callers. The first overflow
+// opens an artifact and writes the full stream so far; later overflow writes
+// only the dropped prefix.
 func (s *ProcessSession) appendOutput(p []byte) {
 	if len(p) == 0 {
 		return
@@ -303,11 +304,37 @@ func (s *ProcessSession) appendOutput(p []byte) {
 	}
 	s.totalOutput += int64(len(p))
 	_, _ = s.outputBuffer.Write(p)
-	if s.outputBuffer.Len() > maxOutputBufferSize {
-		drop := s.outputBuffer.Len() - maxOutputBufferSize
-		s.outputBuffer.Next(drop)
-		s.outputBase += int64(drop)
+	if s.outputBuffer.Len() <= maxOutputBufferSize {
+		return
 	}
+
+	// The opening snapshot already contains the bytes appended so far (the
+	// buffer includes p). Every later chunk is written immediately, so the
+	// artifact is always the complete stream and trimming the buffer no longer
+	// needs to copy dropped bytes.
+	if s.spill.active() {
+		s.spill.write(p)
+	} else {
+		s.spill.start(s.outputBuffer.Bytes())
+	}
+
+	drop := s.outputBuffer.Len() - maxOutputBufferSize
+	s.outputBuffer.Next(drop)
+	s.outputBase += int64(drop)
+}
+
+// SpillInfo returns the session artifact path and whether it reached the size
+// cap. Both values are set only after the in-memory window overflows.
+func (s *ProcessSession) SpillInfo() (path string, capped bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.spill.path, s.spill.capped
+}
+
+func (s *ProcessSession) closeSpill() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.spill.close()
 }
 
 // Read returns the retained output without consuming it. The idle counter is
@@ -394,13 +421,14 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 	defer s.mu.Unlock()
 
 	return SessionInfo{
-		ID:        s.ID,
-		Command:   s.Command,
-		Status:    s.Status,
-		PID:       s.PID,
-		StartedAt: s.StartTime,
-		ExitCode:  s.ExitCode,
-		ExitedAt:  s.ExitTime,
+		ID:           s.ID,
+		Command:      s.Command,
+		Status:       s.Status,
+		PID:          s.PID,
+		StartedAt:    s.StartTime,
+		ExitCode:     s.ExitCode,
+		ExitedAt:     s.ExitTime,
+		ArtifactPath: s.spill.path,
 	}
 }
 
@@ -478,6 +506,7 @@ func (sm *SessionManager) cleanupOldSessions() {
 	for id, session := range sm.sessions {
 		done, ts := session.retentionTime()
 		if done && ts < cutoff.Unix() {
+			session.closeSpill()
 			delete(sm.sessions, id)
 		}
 	}

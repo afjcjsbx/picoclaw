@@ -363,6 +363,52 @@ func TestConfig_TruncationLimits(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_ExecTimeout(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Tools.Exec.TimeoutSeconds != DefaultExecTimeoutSeconds {
+		t.Fatalf(
+			"DefaultConfig().Tools.Exec.TimeoutSeconds = %d, want %d",
+			cfg.Tools.Exec.TimeoutSeconds,
+			DefaultExecTimeoutSeconds,
+		)
+	}
+	if got := cfg.Tools.Exec.GetTimeoutSeconds(); got != DefaultExecTimeoutSeconds {
+		t.Fatalf("GetTimeoutSeconds() = %d, want %d", got, DefaultExecTimeoutSeconds)
+	}
+
+	// Zero values fall back to the default instead of disabling the timeout.
+	if got := (ExecConfig{}).GetTimeoutSeconds(); got != DefaultExecTimeoutSeconds {
+		t.Fatalf("zero ExecConfig.GetTimeoutSeconds() = %d, want %d", got, DefaultExecTimeoutSeconds)
+	}
+	if got := (ExecConfig{TimeoutSeconds: 42}).GetTimeoutSeconds(); got != 42 {
+		t.Fatalf("ExecConfig.GetTimeoutSeconds() = %d, want 42", got)
+	}
+}
+
+func TestReadFileToolConfig_EffectiveMode(t *testing.T) {
+	tests := []struct {
+		mode string
+		want string
+	}{
+		{mode: "", want: ReadFileModeAuto},
+		{mode: "auto", want: ReadFileModeAuto},
+		{mode: "AUTO", want: ReadFileModeAuto},
+		{mode: "lines", want: ReadFileModeLines},
+		{mode: " Lines ", want: ReadFileModeLines},
+		{mode: "bytes", want: ReadFileModeBytes},
+		{mode: "unknown", want: ReadFileModeAuto},
+	}
+	for _, tt := range tests {
+		if got := (ReadFileToolConfig{Mode: tt.mode}).EffectiveMode(); got != tt.want {
+			t.Errorf("EffectiveMode(%q) = %q, want %q", tt.mode, got, tt.want)
+		}
+	}
+
+	if got := DefaultConfig().Tools.ReadFile.EffectiveMode(); got != ReadFileModeAuto {
+		t.Fatalf("default read_file mode = %q, want %q", got, ReadFileModeAuto)
+	}
+}
+
 func TestDefaultConfig_EvolutionDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 

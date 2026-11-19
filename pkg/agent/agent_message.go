@@ -211,6 +211,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		EnableSummary:           true,
 		SendResponse:            false,
 		AllowInterimPicoPublish: true,
+		JoinSubTurns:            msg.Channel == "cli",
 	}
 	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)

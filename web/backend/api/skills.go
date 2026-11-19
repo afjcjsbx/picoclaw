@@ -18,6 +18,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
@@ -38,6 +39,7 @@ type skillSupportItem struct {
 	RegistryURL      string `json:"registry_url,omitempty"`
 	InstalledVersion string `json:"installed_version,omitempty"`
 	InstalledAt      int64  `json:"installed_at,omitempty"`
+	PluginID         string `json:"plugin_id,omitempty"`
 }
 
 type skillDetailResponse struct {
@@ -152,7 +154,7 @@ func (h *Handler) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		content, err := loadSkillContent(skillItem.Path)
+		content, err := loadSkillContentForItem(cfg, skillItem)
 		if err != nil {
 			http.Error(w, "Skill content not found", http.StatusNotFound)
 			return
@@ -577,7 +579,53 @@ func buildSkillSupportItems(cfg *config.Config) ([]skillSupportItem, error) {
 		}
 		items = append(items, item)
 	}
+
+	// Plugin skills live in plugin packages outside the workspace skill roots,
+	// so the filesystem loader above never sees them. Discover them statically
+	// from the enabled plugin entries instead of requiring a running gateway.
+	packages, _ := plugins.PublishedSkills(cfg.Plugins, cfg.WorkspacePath())
+	for _, pkg := range packages {
+		for _, skill := range pkg.Skills {
+			items = append(items, skillSupportItem{
+				Name:        skill.Info.Name,
+				Path:        pluginSkillRelativePath(pkg.Root, skill.Info.Path),
+				Source:      skill.Info.Source,
+				Description: skill.Info.Description,
+				OriginKind:  "plugin",
+				PluginID:    pkg.ID,
+			})
+		}
+	}
 	return items, nil
+}
+
+// pluginSkillRelativePath returns a package-relative, slash-separated skill
+// path. Host paths are never exposed to the dashboard, matching how the agent
+// skill catalog handles plugin skills.
+func pluginSkillRelativePath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+func loadSkillContentForItem(cfg *config.Config, item skillSupportItem) (string, error) {
+	if item.PluginID == "" {
+		return loadSkillContent(item.Path)
+	}
+	packages, _ := plugins.PublishedSkills(cfg.Plugins, cfg.WorkspacePath())
+	for _, pkg := range packages {
+		if pkg.ID != item.PluginID {
+			continue
+		}
+		for _, skill := range pkg.Skills {
+			if skill.Info.Name == item.Name {
+				return skill.Body, nil
+			}
+		}
+	}
+	return "", fs.ErrNotExist
 }
 
 func buildWorkspaceSkillItemsByDirectory(cfg *config.Config) (map[string]skillSupportItem, error) {

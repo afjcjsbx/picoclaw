@@ -48,6 +48,9 @@ describe("sortOrigins", () => {
     expect(
       sortOrigins(["manual", "custom", "builtin", "third_party", "another"]),
     ).toEqual(["builtin", "third_party", "manual", "another", "custom"])
+    expect(sortOrigins(["manual", "plugin", "third_party", "builtin"])).toEqual(
+      ["builtin", "plugin", "third_party", "manual"],
+    )
   })
 
   it("does not mutate the input", () => {
@@ -79,7 +82,7 @@ describe("getOriginLabel", () => {
 
 describe("origin classes", () => {
   it("maps each origin to its accent and badge classes", () => {
-    for (const origin of ["builtin", "third_party", "manual"]) {
+    for (const origin of ["builtin", "plugin", "third_party", "manual"]) {
       expect(getOriginAccentClasses(origin)).toBe(getOriginBadgeClasses(origin))
       expect(getOriginAccentClasses(origin)).not.toBe(
         "bg-muted text-muted-foreground",
@@ -100,14 +103,15 @@ describe("origin classes", () => {
 describe("compareSkills", () => {
   const builtin = skill({ name: "builtin", origin_kind: "builtin" })
   const manual = skill({ name: "manual", origin_kind: "manual" })
+  const plugin = skill({ name: "plugin", origin_kind: "plugin" })
   const thirdParty = skill({ name: "third", origin_kind: "third_party" })
 
   it("sorts by origin then name for the source order", () => {
     expect(
-      [manual, thirdParty, builtin]
+      [manual, thirdParty, plugin, builtin]
         .sort((a, b) => compareSkills(a, b, "source"))
         .map((item) => item.name),
-    ).toEqual(["builtin", "third", "manual"])
+    ).toEqual(["builtin", "plugin", "third", "manual"])
   })
 
   it("sorts by name ascending and descending", () => {

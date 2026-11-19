@@ -53,10 +53,10 @@ All filesystem-facing tools share one sandbox model:
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
-| `allow_read_paths` | string[] | `[]` | Regular expressions of absolute paths that read tools may access even when the workspace restriction would deny them (for example `^/srv/data(?:/|$)`) |
-| `allow_write_paths` | string[] | `[]` | Regular expressions of absolute paths that write tools (`write_file`, `edit_file`, `append_file`) may modify outside the workspace |
+| `allow_read_paths` | string[] | `[]` | Regular expressions of absolute paths that read-only filesystem tools may access even when the workspace restriction would deny them (for example `^/srv/data(?:/|$)`). `exec` does not inherit this list. |
+| `allow_write_paths` | string[] | `[]` | Regular expressions of absolute paths that write tools (`write_file`, `edit_file`, `append_file`) and `exec` may modify outside the workspace |
 
-These allowlists extend the workspace boundary defined by `agents.defaults.restrict_to_workspace` (default `true`) and `agents.defaults.allow_read_outside_workspace` (default `false`, read-only). They never override the [protected local files](#protected-local-files) policy, so credentials and system files stay denied. The agent's own media directory is always appended to the read allowlist automatically.
+These allowlists extend the workspace boundary defined by `agents.defaults.restrict_to_workspace` (default `true`) and `agents.defaults.allow_read_outside_workspace` (default `false`, read-only). They never override the [protected local files](#protected-local-files) policy, so credentials and system files stay denied. The agent's own media directory is always appended to the read allowlist automatically and is also explicitly available to `exec` for attachment processing; it is not part of the configured read allowlist.
 
 ## Directory Structure
 

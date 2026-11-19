@@ -22,24 +22,38 @@ The filesystem tools are always bound to the agent workspace and the readable/wr
 
 - `agents.defaults.restrict_to_workspace` (default `true`) keeps reads and writes inside the workspace.
 - `agents.defaults.allow_read_outside_workspace` (default `false`) lets read-only tools access paths outside the workspace while keeping the restriction for writes and for `exec`.
-- `tools.allow_read_paths` and `tools.allow_write_paths` are regular-expression allowlists evaluated against absolute paths, granting access that the workspace restriction would otherwise deny.
+- `tools.allow_read_paths` applies only to read-only filesystem tools; `exec` does not inherit it.
+- `tools.allow_write_paths` applies to write tools (`write_file`, `edit_file`, `append_file`) and to `exec`, which can read and modify every path it is granted.
+- The agent's media temporary directory remains available to `exec` for attachment processing as an internal exception; it is not part of the user-configured read allowlist.
 - The credential/protected-file policy always wins over allow paths. See [Protected local files](../reference/tools_configuration.md#protected-local-files) for the full deny list and symlink behavior.
 
 These settings are global. There is no per-tool path configuration beyond the switches above.
 
 ## `read_file`
 
-The tool has two modes, selected with `tools.read_file.mode`:
+The tool selects one of three modes with `tools.read_file.mode`:
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `tools.read_file.enabled` | bool | `true` | Register the `read_file` tool |
-| `tools.read_file.mode` | string | `bytes` | `bytes` = byte-offset pagination; `lines` = line-numbered output |
+| `tools.read_file.mode` | string | `auto` | `auto` = line-numbered text with raw-byte fallback for binary files; `lines` = line-numbered output only; `bytes` = raw byte-offset pagination only |
 | `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes read per call (byte mode), and the default `length` |
 | `tools.read_file.max_lines` | int | `2000` | Upper bound on a single line-mode read; `max_lines` requests above it are clamped |
 | `tools.read_file.max_line_length` | int | `2000` | Maximum characters per line in the line-numbered view; the remainder is replaced by a ` ... [truncated]` marker |
 
-**Byte mode** (`mode: "bytes"`, default) reads raw content and supports pagination:
+**Auto mode** (`mode: "auto"`, default) inspects the first 512 bytes of the file. Text files are read in line mode, while binary-looking files fall back to byte mode instead of being rejected. The tool exposes both pagination styles, and passing `offset` or `length` explicitly forces byte mode, which is useful for minified text files with very long lines. For binary files, omitting both reads the default `max_read_file_size` range; passing either one selects raw byte pagination:
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `path` | string | yes | Path to the file to read |
+| `start_line` | integer | no | Text files: line number to start from (1-indexed, inclusive). Default: `1` |
+| `max_lines` | integer | no | Text files: maximum number of lines to read. Requests above `tools.read_file.max_lines` are clamped |
+| `offset` | integer | no | Binary files or raw reads: byte offset to start reading from. Default: `0` |
+| `length` | integer | no | Binary files or raw reads: maximum number of bytes to read. Default: `max_read_file_size` |
+
+Passing both line and byte pagination arguments in the same call is rejected. Passing line arguments for a binary file returns an error that points at `offset`/`length`; omitting all pagination arguments lets auto mode pick the right one.
+
+**Byte mode** (`mode: "bytes"`) reads raw content and supports pagination:
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
@@ -55,7 +69,11 @@ The tool has two modes, selected with `tools.read_file.mode`:
 | `start_line` | integer | no | Line number to start from (1-indexed, inclusive). Default: `1` |
 | `max_lines` | integer | no | Maximum number of lines to read. Requests above `tools.read_file.max_lines` are clamped |
 
-Using `offset`/`length` in line mode (or `limit`) is rejected with an error: each mode only accepts its own pagination arguments.
+Using `offset`/`length` in line mode (or `limit`) is rejected with an error, and byte mode rejects line arguments: each fixed mode only accepts its own pagination arguments. Line mode rejects binary-looking files with guidance to switch to `bytes`. Auto mode does not: it falls back to raw bytes automatically.
+
+The line-mode header includes `first_line_byte_offset`, the 0-based byte offset where the first returned line starts. When a single long line is truncated, the model can use that offset with `offset`/`length` to continue reading the same line in raw byte mode instead of guessing where the line begins. The header also adds a `[LINE TRUNCATED - ...]` hint with the raw offset of the first truncated line and an inline-safe page size: 8 KiB by default, or a smaller value derived from `tools.max_inline_result_chars`. Repeat the raw read with the offset from the next header until EOF; the suggested page keeps the follow-up result inline instead of spilling it to an artifact where the middle of the line would be omitted.
+
+An empty file returns `[file is empty (0 bytes); do not retry]` in every mode, so the model does not keep re-reading a file that has no content.
 
 Lines longer than `tools.read_file.max_line_length` characters are cut after that many characters with a ` ... [truncated]` marker and the read continues with the next line, so a single long line cannot consume the whole byte budget. If the byte budget itself runs out mid-line, the header reports the mid-line cut instead.
 

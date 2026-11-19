@@ -750,9 +750,10 @@ func (p *Pipeline) CallLLM(
 			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 			return ControlContinue, nil
 		}
-		// A SubTurn may not finish before its async children: let the model
-		// react to their results instead of orphaning them.
-		if ts.parentTurnState != nil && !exec.gracefulTerminal {
+		// A SubTurn (and a CLI root turn) may not finish before its async
+		// children: let the model react to their results instead of orphaning
+		// them.
+		if (ts.parentTurnState != nil || ts.joinSubTurns) && !exec.gracefulTerminal {
 			if msgs := ts.joinChildren(turnCtx, al.cfg.FilterSensitiveData); len(msgs) > 0 {
 				cancelConfiguredStreamingLLM(turnCtx, exec)
 				logger.InfoCF("agent", "Joined async children after direct LLM response; continuing turn",

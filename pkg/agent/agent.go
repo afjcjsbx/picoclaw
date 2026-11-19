@@ -67,7 +67,10 @@ type AgentLoop struct {
 	pendingSkills  sync.Map
 	voiceModes     sync.Map
 	pendingStops   sync.Map
-	mu             sync.RWMutex
+	// pendingExecApprovals maps approval tokens to the user waiting for an
+	// answer when exec cannot classify a command.
+	pendingExecApprovals sync.Map
+	mu                   sync.RWMutex
 
 	// workerSem limits concurrent turn processing workers.
 	workerSem chan struct{}
@@ -114,6 +117,7 @@ type processOptions struct {
 	SuppressToolFeedback    bool                   // Whether to suppress inline tool feedback messages
 	NoHistory               bool                   // If true, don't load session history (for heartbeat)
 	SkipInitialSteeringPoll bool                   // If true, skip the steering poll at loop start (used by Continue)
+	JoinSubTurns            bool                   // Root turn waits for spawned children before answering (CLI)
 	InboundContext          *bus.InboundContext    // Normalized inbound facts for events/hooks
 	RouteResult             *routing.ResolvedRoute // Route decision snapshot for events/hooks
 	SessionScope            *session.SessionScope  // Session scope snapshot for events/hooks
@@ -216,6 +220,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		case msg, ok := <-al.bus.InboundChan():
 			if !ok {
 				return nil
+			}
+
+			// Approval replies must be consumed before steering and routing:
+			// the turn that asked is still blocked inside the approval hook.
+			if al.tryHandleExecApproval(ctx, msg) {
+				continue
 			}
 
 			// Resolve the session key for this message
@@ -666,6 +676,7 @@ func (al *AgentLoop) runAgentLoop(
 	ts.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
 	// Needed by Finish(true) to cascade a hard abort to this turn's SubTurns.
 	ts.al = al
+	ts.joinSubTurns = opts.JoinSubTurns
 
 	pipeline := NewPipeline(al)
 	result, err := al.runTurn(ctx, ts, pipeline)

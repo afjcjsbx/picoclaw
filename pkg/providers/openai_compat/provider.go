@@ -183,8 +183,13 @@ func (p *Provider) buildRequestBody(
 	model = normalizeModel(model, p.apiBase)
 
 	requestBody := map[string]any{
-		"model":    model,
-		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
+		"model": model,
+		"messages": common.SerializeMessagesWithOptions(
+			p.prepareMessagesForRequest(messages),
+			common.SerializeOptions{
+				GeminiThoughtSignatureFallback: isGeminiHost(p.apiBase),
+			},
+		),
 	}
 
 	nativeSearch := p.nativeSearchEnabled(options)
@@ -389,6 +394,15 @@ func isVolcengineHost(apiBase string) bool {
 func isDashScopeHost(apiBase string) bool {
 	host := normalizedHostname(apiBase)
 	return host == "dashscope.aliyuncs.com" || strings.HasSuffix(host, ".dashscope.aliyuncs.com")
+}
+
+// isGeminiHost reports whether the endpoint is Google's Gemini API (native or
+// OpenAI-compatible). Gemini 3 requires every functionCall part to carry a
+// thought_signature; requests with unsigned parts are rejected with HTTP 400.
+func isGeminiHost(apiBase string) bool {
+	host := normalizedHostname(apiBase)
+	return host == "generativelanguage.googleapis.com" ||
+		strings.HasSuffix(host, ".generativelanguage.googleapis.com")
 }
 
 func normalizedHostname(rawURL string) string {
@@ -906,9 +920,10 @@ func parseStreamResponse(
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
 	type toolAccum struct {
-		id       string
-		name     string
-		argsJSON strings.Builder
+		id               string
+		name             string
+		argsJSON         strings.Builder
+		thoughtSignature string
 	}
 	activeTools := map[int]*toolAccum{}
 
@@ -931,9 +946,15 @@ func parseStreamResponse(
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Function *struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
+							Name             string `json:"name"`
+							Arguments        string `json:"arguments"`
+							ThoughtSignature string `json:"thought_signature"`
 						} `json:"function"`
+						ExtraContent *struct {
+							Google *struct {
+								ThoughtSignature string `json:"thought_signature"`
+							} `json:"google"`
+						} `json:"extra_content"`
 					} `json:"tool_calls"`
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
@@ -995,6 +1016,14 @@ func parseStreamResponse(
 				}
 				if tc.Function.Arguments != "" {
 					acc.argsJSON.WriteString(tc.Function.Arguments)
+				}
+				if tc.Function.ThoughtSignature != "" {
+					acc.thoughtSignature = tc.Function.ThoughtSignature
+				}
+			}
+			if ec := tc.ExtraContent; ec != nil && ec.Google != nil {
+				if ec.Google.ThoughtSignature != "" {
+					acc.thoughtSignature = ec.Google.ThoughtSignature
 				}
 			}
 		}
@@ -1070,11 +1099,18 @@ func parseStreamResponse(
 				args["raw"] = raw
 			}
 		}
-		toolCalls = append(toolCalls, ToolCall{
-			ID:        acc.id,
-			Name:      acc.name,
-			Arguments: args,
-		})
+		toolCall := ToolCall{
+			ID:               acc.id,
+			Name:             acc.name,
+			Arguments:        args,
+			ThoughtSignature: acc.thoughtSignature,
+		}
+		if acc.thoughtSignature != "" {
+			toolCall.ExtraContent = &ExtraContent{
+				Google: &GoogleExtra{ThoughtSignature: acc.thoughtSignature},
+			}
+		}
+		toolCalls = append(toolCalls, toolCall)
 	}
 
 	if finishReason == "" {

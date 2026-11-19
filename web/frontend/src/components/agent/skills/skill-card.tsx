@@ -38,6 +38,13 @@ export function SkillCard({ skill, onView, onDelete }: SkillCardProps) {
                   {skill.registry_name}
                 </span>
               ) : null}
+              {skill.plugin_id ? (
+                <span className="inline-flex items-center rounded-md bg-violet-100 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-violet-700 uppercase ring-1 ring-violet-200 ring-inset">
+                  {t("pages.agent.skills.plugin_badge", {
+                    id: skill.plugin_id,
+                  })}
+                </span>
+              ) : null}
             </div>
             <CardDescription className="line-clamp-2 text-sm leading-relaxed">
               {skill.description || t("pages.agent.skills.no_description")}

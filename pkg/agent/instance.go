@@ -139,15 +139,25 @@ func NewAgentInstance(
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		switch cfg.Tools.ReadFile.EffectiveMode() {
 		case config.ReadFileModeLines:
-			toolsRegistry.Register(fstools.NewReadFileLinesTool(
+			readTool := fstools.NewReadFileLinesTool(
 				workspace, readRestrict, maxReadFileSize,
 				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
 				allowReadPaths,
-			))
-		default:
+			)
+			readTool.SetMaxInlineResultChars(cfg.Tools.GetMaxInlineResultChars())
+			toolsRegistry.Register(readTool)
+		case config.ReadFileModeBytes:
 			toolsRegistry.Register(fstools.NewReadFileTool(
 				workspace, readRestrict, maxReadFileSize, allowReadPaths,
 			))
+		default:
+			readTool := fstools.NewReadFileAutoTool(
+				workspace, readRestrict, maxReadFileSize,
+				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
+				allowReadPaths,
+			)
+			readTool.SetMaxInlineResultChars(cfg.Tools.GetMaxInlineResultChars())
+			toolsRegistry.Register(readTool)
 		}
 	}
 	// MEMORY.md and USER.md belong to the memory tool, which enforces their
@@ -188,7 +198,13 @@ func NewAgentInstance(
 		toolsRegistry.Register(fstools.NewSearchFilesTool(workspace, readRestrict, allowReadPaths))
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
-		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
+		// exec can write and delete paths, so it must not inherit the
+		// configured read-only allowlist. The internal media temp dir is the
+		// one intentional exception: attachment processing through exec needs
+		// access to files that live outside the workspace.
+		execAllowPaths := append([]*regexp.Regexp(nil), allowWritePaths...)
+		execAllowPaths = append(execAllowPaths, regexp.MustCompile(mediaTempDirPattern()))
+		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, execAllowPaths)
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 				map[string]any{"error": err.Error()})

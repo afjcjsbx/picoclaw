@@ -448,37 +448,53 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `append_file` | Append to files  | Only files within workspace            |
 | `exec`        | Execute commands | Command paths must be within workspace |
 
+> The workspace restriction is a static path policy, not an OS sandbox. It validates command paths, home expansion and directory changes, but child processes and script contents remain outside its reach. Use containers, VMs, or a dedicated user for untrusted workloads.
+
 #### Additional Exec Protection
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
 
-* `rm -rf`, `del /f`, `rmdir /s` — Bulk deletion
+* `del /f`, `rmdir /s` — Bulk deletion (Unix `rm` is risk-classified: plain `rm` is `medium`, `rm -r` is `high`, `rm -rf` is `critical`)
 * `format`, `mkfs`, `diskpart` — Disk formatting (always-on for disk formats)
 * `dd if=` — Disk imaging (always-on)
 * Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
 * `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
+* Self-protection: killing the PicoClaw process or service, deleting its state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or `PICOCLAW_HOME`), or deleting the running executable — Always-on
+* Hardline and custom deny matching resolves `$IFS`, ANSI-C `$'...'` strings, backslash-newline continuations and AST quote splicing before applying the patterns — Always-on
+* Exec (Unix) workspace boundary: when `restrict_to_workspace` is enabled, `~`/`$HOME` path expansion, bare `..` in `cd`/`pushd`/`-C` targets, `cd`/`pushd` changes, dynamic redirection targets and nested `sh -c`/`exec`/`find -exec` scripts are validated against the workspace, including symlink escapes; `env -C`, `eval`, `trap`, `file:` URIs and `HOME`/`PWD`/`OLDPWD`/`CDPATH` assignments are rejected — Static best effort; use OS isolation for untrusted workloads
+* Windows PowerShell: recursive `Remove-Item`, `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, `iwr ... | iex`, `taskkill /F`, `Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — Always-on
 
 ### File Access Control
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
-| `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for reading outside workspace |
-| `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
+| `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for read-only filesystem tools outside workspace; `exec` does not inherit them |
+| `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace, including `exec` |
 | `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob/substring filename search |
 | `tools.message.media_enabled` | bool | `false` | Allows the `message` tool to attach local media files by path. This is separate from `tools.send_file.enabled`; enable it only when unified text/media/caption delivery is intended. |
 
 ### Read File Mode
 
-`read_file` has two mutually exclusive implementations selected by config. PicoClaw registers exactly one of them at startup:
+`read_file` has three modes selected by config. PicoClaw registers exactly one implementation at startup:
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `tools.read_file.enabled` | bool | `true` | Enables the `read_file` tool |
-| `tools.read_file.mode` | string | `bytes` | Selects the `read_file` implementation: `bytes` or `lines` |
+| `tools.read_file.mode` | string | `auto` | Selects the `read_file` implementation: `auto`, `bytes`, or `lines` |
 | `tools.read_file.max_read_file_size` | int | `65536` | Maximum bytes returned by `read_file` |
 | `tools.read_file.max_lines` | int | `2000` | Upper bound on lines returned by a single line-mode read; larger `max_lines` requests are clamped |
 | `tools.read_file.max_line_length` | int | `2000` | Maximum characters per line in the line-numbered view; the remainder is replaced by a ` ... [truncated]` marker |
+
+#### Mode: `auto` (default)
+
+Inspects the first 512 bytes. Text files use the line-numbered behavior below, while binary-looking files fall back to raw byte output instead of being rejected. The tool exposes both parameter sets:
+
+* `start_line` / `max_lines` select line mode for text files
+* `offset` / `length` select byte mode; supplying either one forces byte mode even for text files (useful for minified files with very long lines)
+* For binary files, omitting both `offset` and `length` reads the default `max_read_file_size` range
+* Mixing the two parameter sets in one call is rejected
+* An empty file returns `[file is empty (0 bytes); do not retry]` in every mode
 
 #### Mode: `bytes`
 
@@ -507,7 +523,7 @@ Parameters:
 
 Behavior notes:
 
-* Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes`
+* Binary-looking files are rejected with guidance to switch `read_file` to `mode = bytes` or `mode = auto`
 * Extremely long single lines are cut after `tools.read_file.max_line_length` characters with a ` ... [truncated]` marker, and the read continues with the next line; if the byte budget runs out mid-line, the header reports that cut instead
 
 Use `mode = lines` when:
@@ -523,7 +539,7 @@ Use `mode = lines` when:
   "tools": {
     "read_file": {
       "enabled": true,
-      "mode": "lines",
+      "mode": "auto",
       "max_read_file_size": 65536,
       "max_lines": 2000,
       "max_line_length": 2000
@@ -538,8 +554,12 @@ Use `mode = lines` when:
 |------------|------|---------|-------------|
 | `tools.exec.allow_remote` | bool | `false` | Allow exec tool from remote channels (Telegram/Discord etc.) |
 | `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
+| `tools.exec.unknown_command_policy` | string | `"ask"` | `ask` (default) requests user approval for commands the risk classifier cannot resolve, `allow` runs them, `block` rejects them |
+| `tools.exec.approval_timeout_seconds` | int | `300` | Seconds an unknown-command approval prompt waits before the command is denied |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
-| `tools.exec.custom_allow_patterns` | string[] | `[]` | Custom regex patterns to allow |
+| `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
+
+The AST risk classifier (`risk_threshold`), unknown-command approval (`unknown_command_policy`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification).
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 
@@ -1281,7 +1301,7 @@ PicoClaw supports cron-style scheduled tasks via the `cron` tool. The agent can 
 
 Scheduled tasks persist across restarts and are stored in `~/.picoclaw/workspace/cron/`.
 
-Command cron jobs can execute shell commands. By default, remote channels cannot schedule command jobs. To allow specific remote channels, set `command_allowed_remotes` to entries such as `"telegram"` or `"telegram:1234567890"`; use `"*"` only if every non-empty channel should be allowed. The `"*"` wildcard is potentially dangerous because any remote channel that can talk to PicoClaw can schedule shell commands. This does not bypass `allow_command`, `command_confirm`, or exec safety checks.
+Command cron jobs can execute shell commands. By default, remote channels cannot schedule command jobs. To allow specific remote channels, set `command_allowed_remotes` to entries such as `"telegram"` or `"telegram:1234567890"`; use `"*"` only if every non-empty channel should be allowed. The `"*"` wildcard is potentially dangerous because any remote channel that can talk to PicoClaw can schedule shell commands. This does not bypass `allow_command`, `command_confirm`, or exec safety checks. `command_allowed_remotes` is independent of `tools.exec.allow_remote`, which controls direct exec calls: remote cron command jobs do not require `allow_remote`, and PicoClaw re-checks the cron allowlist when a job fires.
 
 ### Advanced Topics
 
