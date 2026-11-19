@@ -113,7 +113,7 @@ Rules for `expose_paths`:
 Platform note:
 
 - Linux uses a real `source -> target` mount view.
-- Linux probes optional bubblewrap namespace flags once. If the kernel rejects one with `Creating new namespace failed` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active. This weakens isolation for that namespace; other probe failures stop startup.
+- Linux probes bubblewrap namespace flags once at startup. The PID namespace (`--unshare-pid`) is required: if the probe fails (for example, in a Docker container whose `/proc` is masked by default), startup fails with a clear error naming the fix (`--security-opt systempaths=unconfined` for Docker, `procMount: Unmasked` for Kubernetes). To opt out entirely, set `"isolation.enabled": false in config.json` (risk: no filesystem isolation). Optional flags such as `--unshare-ipc` are dropped with a warning when the kernel rejects them with `Creating new namespace failed` (EINVAL) while mount namespace, filesystem view, and user environment remain active.
 - macOS requires `target` to match `source`; Seatbelt does not remap paths.
   Read-only rules under the instance root are rejected because Seatbelt cannot
   revoke the root's write access.
@@ -176,6 +176,7 @@ The Linux backend currently depends on `bwrap` (`bubblewrap`).
 Capabilities:
 
 - minimal filesystem view
+- `pid` namespace isolation (required; sandbox has its own PID table with `/proc` only describing its own processes)
 - `ipc` namespace isolation
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
@@ -338,7 +339,7 @@ is reflected in the next system prompt.
 ## Current Limits
 
 - Linux isolation is implemented with `bwrap`, not a custom in-process isolation runtime.
-- Linux does not currently enable a dedicated `pid` namespace by default.
+- Linux now enables a dedicated `pid` namespace by default; Docker containers must add `--security-opt systempaths=unconfined`.
 - Windows does not yet implement full host ACL enforcement for every allowed or denied path.
 - macOS Seatbelt does not support `source -> target` path remapping and relies on Apple's deprecated `sandbox-exec` command.
 - The current design isolates child processes, not the main `picoclaw` process.
