@@ -172,7 +172,8 @@ func (h *execUnknownCommandApprovalHook) ask(
 	}
 	message := fmt.Sprintf(
 		"Approval required for an unknown exec command.\n"+
-			"Reply \"approve %s\" to run it or \"deny %s\" to cancel. "+
+			"Reply \"approve\" to run it or \"deny\" to cancel. "+
+			"If more than one request is pending, reply \"approve %s\" or \"deny %s\" instead. "+
 			"This request expires in %s.\n\n%sCommand: %s",
 		token, token, remaining.Round(time.Second), reasonLine, display,
 	)
@@ -247,16 +248,39 @@ func formatExecApprovalCommand(command string) (string, bool) {
 func (al *AgentLoop) tryHandleExecApproval(ctx context.Context, msg bus.InboundMessage) bool {
 	msg = bus.NormalizeInboundMessage(msg)
 	parts := strings.Fields(strings.TrimSpace(msg.Content))
-	if len(parts) < 2 {
+	if len(parts) == 0 {
 		return false
 	}
 	// Channel group triggers may leave a leading @mention in the text, so match
-	// the trailing pair instead of requiring exactly two words.
-	action := strings.ToLower(parts[len(parts)-2])
+	// the trailing pair instead of requiring exactly two words. A lone word is
+	// the short form, which avoids retyping the token on a phone.
+	action, token := strings.ToLower(parts[0]), ""
+	if len(parts) > 1 {
+		action, token = strings.ToLower(parts[len(parts)-2]), strings.ToLower(parts[len(parts)-1])
+	}
 	if action != "approve" && action != "deny" && action != "/approve" && action != "/deny" {
 		return false
 	}
-	token := strings.ToLower(parts[len(parts)-1])
+	if token == "" {
+		// The short form answers the only live request addressed to this user.
+		// With none it is ordinary chat; with several the user must pick one.
+		var pending int
+		token, pending = al.soleExecApprovalToken(msg.Context)
+		if pending == 0 {
+			return false
+		}
+		if pending > 1 {
+			al.sendExecApprovalReply(
+				ctx,
+				msg.Context,
+				fmt.Sprintf(
+					"%d approvals are pending; reply \"%s <token>\" with the token from the request.",
+					pending, action,
+				),
+			)
+			return true
+		}
+	}
 	if len(token) != execApprovalTokenBytes*2 {
 		return false
 	}
@@ -274,16 +298,10 @@ func (al *AgentLoop) tryHandleExecApproval(ctx context.Context, msg bus.InboundM
 		incoming := msg.Context
 		origin := pending.origin
 		unexpired := time.Now().Before(pending.expires)
-		sameRequester := origin.Channel == incoming.Channel &&
-			origin.Account == incoming.Account &&
-			origin.ChatID == incoming.ChatID &&
-			origin.TopicID == incoming.TopicID &&
-			origin.SpaceID == incoming.SpaceID &&
-			origin.SenderID == incoming.SenderID
 		switch {
 		case !unexpired:
 			response = "That approval request has expired."
-		case !sameRequester:
+		case !sameExecRequester(origin, incoming):
 			response = "Only the requesting user can answer this approval."
 		default:
 			if _, loaded := al.pendingExecApprovals.LoadAndDelete(token); loaded {
@@ -301,6 +319,35 @@ func (al *AgentLoop) tryHandleExecApproval(ctx context.Context, msg bus.InboundM
 
 	al.sendExecApprovalReply(ctx, msg.Context, response)
 	return true
+}
+
+// sameExecRequester reports whether both contexts identify the same user in the
+// same conversation.
+func sameExecRequester(a, b bus.InboundContext) bool {
+	return a.Channel == b.Channel &&
+		a.Account == b.Account &&
+		a.ChatID == b.ChatID &&
+		a.TopicID == b.TopicID &&
+		a.SpaceID == b.SpaceID &&
+		a.SenderID == b.SenderID
+}
+
+// soleExecApprovalToken returns the token of a live request addressed to
+// requester and how many such requests exist. The token is only meaningful when
+// the count is exactly one.
+func (al *AgentLoop) soleExecApprovalToken(requester bus.InboundContext) (string, int) {
+	var token string
+	var count int
+	now := time.Now()
+	al.pendingExecApprovals.Range(func(key, value any) bool {
+		pending, _ := value.(*pendingExecApproval)
+		if pending != nil && now.Before(pending.expires) && sameExecRequester(pending.origin, requester) {
+			token, _ = key.(string)
+			count++
+		}
+		return true
+	})
+	return token, count
 }
 
 // sendExecApprovalReply delivers a short operational reply to the requester

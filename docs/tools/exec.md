@@ -92,13 +92,13 @@ When the classifier returns unknown and `unknown_command_policy` is `ask` (the d
 
 ```text
 Approval required for an unknown exec command.
-Reply "approve <token>" to run it or "deny <token>" to cancel. This request expires in 1m0s.
+Reply "approve" to run it or "deny" to cancel. If more than one request is pending, reply "approve <token>" or "deny <token>" instead. This request expires in 1m0s.
 
 Reason: command is not in the risk table
 Command: "./deploy.sh --target staging"
 ```
 
-The command runs only after the requesting user replies `approve <token>`; `deny <token>` cancels it and returns a denial to the model. The token is bound to the requesting channel, account, chat, topic, space and sender, so another user in the same group cannot approve it. Approval replies are consumed by the agent loop and never enter the conversation or the LLM context.
+The command runs only after the requesting user replies `approve`; `deny` cancels it and returns a denial to the model. The bare reply answers the single live request addressed to that user, so it needs no token on a phone keyboard. When several requests are pending the bare reply is refused and the user must send `approve <token>` or `deny <token>` with the token from the request; the tokenized form always works. A request is bound to the requesting channel, account, chat, topic, space and sender, so another user in the same group cannot answer it. Approval replies are consumed by the agent loop and never enter the conversation or the LLM context.
 
 The prompt uses `hooks.defaults.approval_timeout_ms` (default `60000`). A timeout, a missing or stopped channel, an automated sender (`cron`, `heartbeat`) or a missing origin denies the command. An unknown command longer than 12,000 characters is denied too: it cannot be reviewed safely in chat. This is deliberate fail-closed behavior: an unclassified command is never approved silently.
 

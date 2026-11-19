@@ -246,6 +246,79 @@ func TestExecUnknownApprovalSkipsPromptForDeniedCommands(t *testing.T) {
 	}
 }
 
+func TestExecUnknownApprovalShortReply(t *testing.T) {
+	t.Parallel()
+	requireUnixRiskClassifier(t)
+
+	al, mgr, origin, cleanup := newExecApprovalTestLoop(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	reply := func(from bus.InboundContext, content string) bool {
+		return al.tryHandleExecApproval(ctx, bus.InboundMessage{Context: from, Content: content})
+	}
+	ask := func(command string) chan ApprovalDecision {
+		done := make(chan ApprovalDecision, 1)
+		go func() { done <- al.hooks.ApproveTool(ctx, execApprovalRequest(origin, command)) }()
+		return done
+	}
+
+	// Nothing pending: the word is ordinary chat and must reach the LLM.
+	if reply(origin, "approve") {
+		t.Fatal("short reply was consumed without a pending request")
+	}
+
+	done := ask("docker ps")
+	waitExecApprovalPrompt(t, mgr)
+
+	// Another user cannot answer for the requester.
+	other := origin
+	other.SenderID = "bob"
+	if reply(other, "approve") {
+		t.Fatal("short reply from another sender was consumed")
+	}
+	select {
+	case <-done:
+		t.Fatal("another sender approved the command")
+	default:
+	}
+
+	if !reply(origin, "/approve") {
+		t.Fatal("short reply was not intercepted")
+	}
+	if decision := <-done; !decision.Approved {
+		t.Fatalf("short approve denied the command: %s", decision.Reason)
+	}
+
+	done = ask("docker ps")
+	waitExecApprovalPrompt(t, mgr)
+	if !reply(origin, "deny") {
+		t.Fatal("short denial was not intercepted")
+	}
+	if decision := <-done; decision.Approved {
+		t.Fatal("short deny approved the command")
+	}
+
+	// Two live requests: the short form is ambiguous and must not pick one.
+	first, second := ask("docker ps"), ask("docker images")
+	token := execApprovalToken(t, waitExecApprovalPrompt(t, mgr))
+	waitExecApprovalPrompt(t, mgr)
+	if !reply(origin, "approve") {
+		t.Fatal("ambiguous short reply was not intercepted")
+	}
+	select {
+	case <-first:
+		t.Fatal("ambiguous short reply answered a request")
+	case <-second:
+		t.Fatal("ambiguous short reply answered a request")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if !reply(origin, "deny "+token) {
+		t.Fatal("tokenized reply was not intercepted")
+	}
+}
+
 func TestExecUnknownApprovalFailsClosedWithoutUser(t *testing.T) {
 	t.Parallel()
 	requireUnixRiskClassifier(t)
