@@ -145,6 +145,7 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 - `ipc namespace`
 - 子进程用户环境重定向
 - `source -> target` 只读或读写挂载
+- 新会话（`--new-session`）：沙盒在独立 session 中运行，不持有控制终端，从而阻止通过 TIOCSTI 注入终端字符（CVE-2017-5226）
 
 默认映射包括实例根，以及 `/usr`、`/bin`、`/lib`、`/lib64`、`/etc/resolv.conf` 等最小运行时系统路径。
 

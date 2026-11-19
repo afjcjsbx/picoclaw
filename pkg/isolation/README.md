@@ -154,6 +154,7 @@ Capabilities:
 - `ipc` namespace isolation
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
+- new session (`--new-session`): the sandbox runs in a detached session with no controlling terminal, blocking TIOCSTI-based terminal injection (CVE-2017-5226)
 
 Default mounts include the instance root plus the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf`.
 
