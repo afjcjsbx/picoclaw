@@ -171,6 +171,16 @@ Install examples:
 - `pacman -S bubblewrap`
 - `apk add bubblewrap`
 
+#### Supported bubblewrap versions
+
+| Version range       | Support status                                                                      |
+|---------------------|-------------------------------------------------------------------------------------|
+| < 0.3.3             | **Refused at startup.** 0.1.x and 0.2.x lack the `--` argument separator PicoClaw always passes; they fail with an obscure `Unknown option --` error. |
+| >= 0.3.3, < 0.12.0  | Accepted; a one-time warning is logged. CVE-2026-87766 (symlink traversal during sandbox setup can create files outside the sandbox) is not fixed. Distro packages may carry a backport the version string cannot show; upgrading bubblewrap or using such a distro build is recommended. |
+| >= 0.12.0           | Fully supported and recommended. CVE-2026-87766 is fixed.                           |
+
+Setuid bubblewrap binaries are **always refused** regardless of version. The setuid execution model is the attack surface of privilege-escalation CVEs such as CVE-2026-41163. bubblewrap 0.12+ no longer uses setuid; remove the setuid bit or install a 0.12+ package.
+
 If isolation must be disabled temporarily:
 
 ```json
