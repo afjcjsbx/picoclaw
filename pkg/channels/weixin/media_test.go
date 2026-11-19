@@ -39,7 +39,8 @@ func TestDownloadRemoteMediaToTemp_BlocksPrivateRedirect(t *testing.T) {
 		api:         &ApiClient{HttpClient: &http.Client{}},
 	}
 
-	_, _, _, err = ch.downloadRemoteMediaToTemp(context.Background(), public.URL, "file.bin")
+	_, _, _, err = ch.downloadRemoteMediaToTemp( //nolint:dogsled // Only the error is relevant here.
+		context.Background(), public.URL, "file.bin")
 	if err == nil {
 		t.Fatal("expected downloadRemoteMediaToTemp to reject redirect to private host")
 	}
