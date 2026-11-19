@@ -542,121 +542,37 @@ type envArgs struct {
 func parseEnvArgs(args []word) envArgs {
 	var out envArgs
 	i := 0
+
+options:
 	for i < len(args) {
 		w := args[i]
 		text := w.text
-		if isAssignment(text) {
+		stop := false
+		switch {
+		case isAssignment(text):
 			out.assignments = append(out.assignments, w)
 			i++
-			continue
-		}
-		if w.dynamic {
+		case w.dynamic:
 			out.dynamic = true
 			return out
-		}
-		switch {
 		case text == "--":
 			i++
-			goto command
+			break options
 		case text == "-":
 			out.ignoreEnv = true
 			i++
-			continue
 		case !strings.HasPrefix(text, "-"):
-			goto command
+			break options
 		case strings.HasPrefix(text, "--"):
-			switch {
-			case text == "--ignore-environment":
-				out.ignoreEnv = true
-			case text == "--null":
-				// no value
-			case text == "--unset":
-				if i+1 >= len(args) {
-					out.dynamic = true
-					return out
-				}
-				i++
-				if args[i].dynamic {
-					out.unsetDynamic = true
-				} else {
-					out.unset = append(out.unset, args[i].text)
-				}
-			case strings.HasPrefix(text, "--unset="):
-				out.unset = append(out.unset, strings.TrimPrefix(text, "--unset="))
-			case text == "--chdir":
-				if i+1 >= len(args) {
-					out.dynamic = true
-					return out
-				}
-				i++
-				out.chdir = args[i]
-				out.hasChdir = true
-			case strings.HasPrefix(text, "--chdir="):
-				out.chdir = word{text: strings.TrimPrefix(text, "--chdir=")}
-				out.hasChdir = true
-			case text == "--split-string":
-				out.splitString = true
-				if i+1 < len(args) {
-					out.splitValue = args[i+1]
-				}
-				return out
-			case strings.HasPrefix(text, "--split-string="):
-				out.splitString = true
-				out.splitValue = word{
-					text: strings.TrimPrefix(text, "--split-string="),
-				}
-				return out
-			}
-			i++
-			continue
+			i, stop = out.longOption(args, i)
+		default:
+			i, stop = out.shortOptions(args, i)
 		}
-
-		for j := 1; j < len(text); j++ {
-			switch text[j] {
-			case 'i':
-				out.ignoreEnv = true
-			case '0':
-				// no value
-			case 'u':
-				value, hasValue := optionValue(text, j+1, args, i)
-				if !hasValue {
-					out.dynamic = true
-					return out
-				}
-				if !value.word.dynamic {
-					out.unset = append(out.unset, value.word.text)
-				} else {
-					out.unsetDynamic = true
-				}
-				if value.next {
-					i++
-				}
-				j = len(text) - 1
-			case 'C':
-				value, hasValue := optionValue(text, j+1, args, i)
-				if !hasValue {
-					out.dynamic = true
-					return out
-				}
-				out.chdir = value.word
-				out.hasChdir = true
-				if value.next {
-					i++
-				}
-				j = len(text) - 1
-			case 'S':
-				out.splitString = true
-				value, hasValue := optionValue(text, j+1, args, i)
-				if hasValue {
-					out.splitValue = value.word
-				}
-				return out
-			}
+		if stop {
+			return out
 		}
-		i++
 	}
 
-command:
 	for i < len(args) && !args[i].dynamic && isAssignment(args[i].text) {
 		out.assignments = append(out.assignments, args[i])
 		i++
@@ -665,6 +581,89 @@ command:
 		out.command = args[i:]
 	}
 	return out
+}
+
+// longOption parses the --option at args[i]. It returns the index of the next
+// word and whether parsing is over: a split string swallows the rest, and an
+// option missing its value makes the command unresolvable.
+func (o *envArgs) longOption(args []word, i int) (next int, done bool) {
+	text := args[i].text
+	switch {
+	case text == "--ignore-environment":
+		o.ignoreEnv = true
+	case text == "--unset":
+		if i+1 >= len(args) {
+			o.dynamic = true
+			return i, true
+		}
+		i++
+		o.addUnset(args[i])
+	case strings.HasPrefix(text, "--unset="):
+		o.unset = append(o.unset, strings.TrimPrefix(text, "--unset="))
+	case text == "--chdir":
+		if i+1 >= len(args) {
+			o.dynamic = true
+			return i, true
+		}
+		i++
+		o.chdir, o.hasChdir = args[i], true
+	case strings.HasPrefix(text, "--chdir="):
+		o.chdir, o.hasChdir = word{text: strings.TrimPrefix(text, "--chdir=")}, true
+	case text == "--split-string":
+		o.splitString = true
+		if i+1 < len(args) {
+			o.splitValue = args[i+1]
+		}
+		return i, true
+	case strings.HasPrefix(text, "--split-string="):
+		o.splitString = true
+		o.splitValue = word{text: strings.TrimPrefix(text, "--split-string=")}
+		return i, true
+	}
+	// --null and unknown long options take no value.
+	return i + 1, false
+}
+
+// shortOptions parses the clustered -iu... options at args[i], with the same
+// result as longOption.
+func (o *envArgs) shortOptions(args []word, i int) (next int, done bool) {
+	text := args[i].text
+	for j := 1; j < len(text); j++ {
+		switch text[j] {
+		case 'i':
+			o.ignoreEnv = true
+		case 'u', 'C':
+			value, hasValue := optionValue(text, j+1, args, i)
+			if !hasValue {
+				o.dynamic = true
+				return i, true
+			}
+			if text[j] == 'u' {
+				o.addUnset(value.word)
+			} else {
+				o.chdir, o.hasChdir = value.word, true
+			}
+			if value.next {
+				i++
+			}
+			j = len(text) - 1
+		case 'S':
+			o.splitString = true
+			if value, hasValue := optionValue(text, j+1, args, i); hasValue {
+				o.splitValue = value.word
+			}
+			return i, true
+		}
+	}
+	return i + 1, false
+}
+
+func (o *envArgs) addUnset(name word) {
+	if name.dynamic {
+		o.unsetDynamic = true
+		return
+	}
+	o.unset = append(o.unset, name.text)
 }
 
 type envOptionValue struct {

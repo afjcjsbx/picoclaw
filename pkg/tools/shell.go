@@ -15,7 +15,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
@@ -345,71 +344,55 @@ func NewExecToolWithConfig(
 	cfg *config.Config,
 	allowPaths ...[]*regexp.Regexp,
 ) (*ExecTool, error) {
-	denyPatterns := make([]*regexp.Regexp, 0)
-	customDenyPatterns := make([]*regexp.Regexp, 0)
-	customAllowPatterns := make([]*regexp.Regexp, 0)
+	// Fail closed when no config is supplied: the default guard is on and
+	// remote exec is off. Callers that need remote exec must opt in explicitly
+	// through cfg.Tools.Exec.AllowRemote.
+	execConfig := config.ExecConfig{EnableDenyPatterns: true}
+	maxInlineResultChars := 0
+	if cfg != nil {
+		execConfig = cfg.Tools.Exec
+		maxInlineResultChars = cfg.Tools.GetMaxInlineResultChars()
+	}
+	enableDefaultGuard := execConfig.EnableDenyPatterns
+
 	var allowedPathPatterns []*regexp.Regexp
-	// Fail closed when no config is supplied. Callers that need remote exec
-	// must opt in explicitly through cfg.Tools.Exec.AllowRemote.
-	allowRemote := false
-	enableDefaultGuard := true
-	var err error
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
 
-	if cfg != nil {
-		execConfig := cfg.Tools.Exec
-		enableDefaultGuard = execConfig.EnableDenyPatterns
-		allowRemote = execConfig.AllowRemote
-		if !enableDefaultGuard {
-			// Only the optional built-in default set is disabled here. The
-			// hardline floor and operator-defined custom deny rules still apply.
-			logger.WarnCF(
-				"tools",
-				"default deny patterns are disabled; hardline and custom deny patterns still apply",
-				nil,
-			)
-		}
-		if len(execConfig.CustomDenyPatterns) > 0 {
-			logger.InfoCF("tools", "using custom deny patterns", map[string]any{
-				"patterns": execConfig.CustomDenyPatterns,
-			})
-			customDenyPatterns, err = compilePatterns(execConfig.CustomDenyPatterns, regexp.Compile, "custom deny")
-			if err != nil {
-				return nil, err
-			}
-		}
-		customAllowPatterns, err = compilePatterns(
-			execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow",
+	if !enableDefaultGuard {
+		// Only the optional built-in default set is disabled here. The
+		// hardline floor and operator-defined custom deny rules still apply.
+		logger.WarnCF(
+			"tools",
+			"default deny patterns are disabled; hardline and custom deny patterns still apply",
+			nil,
 		)
+	}
+	var customDenyPatterns []*regexp.Regexp
+	if len(execConfig.CustomDenyPatterns) > 0 {
+		logger.InfoCF("tools", "using custom deny patterns", map[string]any{
+			"patterns": execConfig.CustomDenyPatterns,
+		})
+		var err error
+		customDenyPatterns, err = compilePatterns(execConfig.CustomDenyPatterns, regexp.Compile, "custom deny")
 		if err != nil {
 			return nil, err
 		}
 	}
+	customAllowPatterns, err := compilePatterns(
+		execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var denyPatterns []*regexp.Regexp
 	if enableDefaultGuard && runtime.GOOS == "windows" {
-		denyPatterns = append(denyPatterns, windowsDenyPatterns...)
+		denyPatterns = windowsDenyPatterns
 	}
 
-	var timeout time.Duration
-	if cfg != nil {
-		timeout = time.Duration(cfg.Tools.Exec.GetTimeoutSeconds()) * time.Second
-	} else {
-		timeout = config.DefaultExecTimeoutSeconds * time.Second
-	}
-
-	maxOutputChars := config.DefaultExecMaxOutputChars
-	maxInlineResultChars := 0
-	var execEnvSet map[string]string
-	var execEnvAllowlist []string
-	if cfg != nil {
-		maxOutputChars = cfg.Tools.Exec.GetMaxOutputChars()
-		maxInlineResultChars = cfg.Tools.GetMaxInlineResultChars()
-		execEnvSet = cfg.Tools.Exec.EnvSet
-		execEnvAllowlist = cfg.Tools.Exec.EnvAllowlist
-	}
-
-	riskGuard, err := newRiskGuard(cfg, enableDefaultGuard)
+	riskGuard, err := newRiskGuard(execConfig.RiskThreshold, enableDefaultGuard)
 	if err != nil {
 		return nil, err
 	}
@@ -418,10 +401,10 @@ func NewExecToolWithConfig(
 	hardlinePatterns = append(hardlinePatterns, hardlineDenyPatterns...)
 	hardlinePatterns = append(hardlinePatterns, selfProtectionHardlinePatterns()...)
 
-	baseEnv := newExecEnv(workingDir, execEnvSet, execEnvAllowlist)
+	baseEnv := newExecEnv(workingDir, execConfig.EnvSet, execConfig.EnvAllowlist)
 	return &ExecTool{
 		workingDir:           workingDir,
-		timeout:              timeout,
+		timeout:              time.Duration(execConfig.GetTimeoutSeconds()) * time.Second,
 		foregroundCap:        maxForegroundTimeout,
 		denyPatterns:         denyPatterns,
 		blockOpaque:          enableDefaultGuard,
@@ -430,8 +413,8 @@ func NewExecToolWithConfig(
 		customAllowPatterns:  customAllowPatterns,
 		allowedPathPatterns:  allowedPathPatterns,
 		restrictToWorkspace:  restrict,
-		allowRemote:          allowRemote,
-		maxOutputChars:       maxOutputChars,
+		allowRemote:          execConfig.AllowRemote,
+		maxOutputChars:       execConfig.GetMaxOutputChars(),
 		maxInlineResultChars: maxInlineResultChars,
 		baseEnv:              baseEnv,
 		baseEnvList:          buildEnvList(baseEnv),
@@ -673,310 +656,6 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 		msg += "\n\nOutput tail:\n" + output
 	}
 	return NewToolResult(msg)
-}
-
-// executeRun handles action=run. A call passes through these stages in order;
-// the first one that fails returns an error result and nothing is executed.
-//
-//  1. Arguments: command is required.
-//  2. Remote gate: Execute rejects every action from a non-internal channel
-//     unless allow_remote is set, so a run never reaches this function from
-//     an untrusted caller.
-//  3. Normalization: a trailing unquoted '&' becomes background=true so the
-//     process is tracked. The guard still inspects the original command.
-//  4. Timeout: must be a non-negative integer. A foreground request above the
-//     foreground cap, or timeout=0, is promoted to a tracked background
-//     session instead of being clamped or rejected.
-//  5. Conversation state: only the remembered cwd for this agent/session is
-//     loaded. Environment variables are not per-call state; the child always
-//     starts from the sanitized base environment.
-//  6. Working directory: explicit cwd, else the remembered cwd (revalidated),
-//     else the workspace. With restrict_to_workspace an explicit cwd must
-//     resolve inside the workspace.
-//  7. Command guard: guardCommandWithAnalysis runs the layered guard described
-//     in its comment (hardline, patterns, workspace and risk).
-//  8. Symlinks in cwd are resolved again right before execution to narrow the
-//     TOCTOU window between validation and cmd.Dir.
-//  9. State persistence: cwd is remembered only after the guard passed.
-//  10. Launch: background and promoted runs go to runBackground, which returns
-//     a sessionId; everything else goes to runSync. Both build the child env
-//     from the sanitized base (allowlisted parent variables plus env_set) and
-//     PICOCLAW_EXEC_*, and start the process through the isolation layer.
-//     runSync bounds the output (head and tail, with the full stream spilled to
-//     an artifact), kills the process tree on timeout and prefixes the result
-//     with an "[exec] {...}" status header.
-//
-// Secret redaction is not done here. After the tool returns, the registry
-// spills oversized results to an artifact that keeps the raw output on disk,
-// and the agent loop then replaces known secrets in the model-facing content
-// with [FILTERED] (tools.filter_sensitive_data).
-func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
-	command, ok := args["command"].(string)
-	if !ok {
-		return ErrorResult("command is required")
-	}
-
-	isPty := boolArg(args, "pty")
-	explicitBackground := boolArg(args, "background")
-	isBackground := explicitBackground
-	notify := boolArg(args, "notify")
-	backgroundNote := ""
-
-	// Keep the exact command for the safety guard. Normalization must not
-	// change which deny or allow rules apply, for example a custom pattern that
-	// matches a trailing '&'.
-	guardedCommand := command
-
-	// Parse once. The trailing-'&' converter, detach check, command guard and
-	// exit note all consume the same AST instead of re-parsing the text.
-	analysis := shellguard.Analyze(guardedCommand)
-
-	// On Unix, `sh -c "server &"` returns as soon as the job starts: a
-	// foreground call would report success while the process keeps running
-	// untracked and its output pipe is closed. Normalize the trailing operator
-	// into a tracked background session instead. Windows shells do not use '&'
-	// as a background operator, so the helper is a no-op there.
-	trailingConverted := false
-	if normalized, converted := normalizeTrailingBackgroundAmpersand(command, analysis, runtime.GOOS); converted {
-		trailingConverted = true
-		command = normalized
-		if !isBackground {
-			isBackground = true
-			backgroundNote = "Trailing '&' was converted to background=true so the process is tracked."
-		}
-	}
-
-	timeout := t.timeout
-	timeoutDisabled := false
-	if value, provided, valid := numberArg(args, "timeout", 0); provided {
-		const maxTimeoutSeconds = (1<<63 - 1) / int64(time.Second)
-		if !valid || value > float64(maxTimeoutSeconds) {
-			return ErrorResult("timeout must be a non-negative integer number of seconds")
-		}
-		seconds := int64(value)
-		// timeout=0 means "no timeout", which is already how background sessions behave.
-		if isBackground && seconds != 0 {
-			if explicitBackground {
-				return ErrorResult("timeout is only supported for foreground commands")
-			}
-			// The caller asked for a foreground timeout, but the trailing '&'
-			// already moved the command to the background, where timeouts do
-			// not apply. Keep the command and explain the ignored argument.
-			backgroundNote += " The requested timeout was ignored because background sessions are not time-limited."
-		} else {
-			timeoutDisabled = seconds == 0
-			timeout = time.Duration(seconds) * time.Second
-		}
-	}
-
-	// The exec tool caps a foreground call at t.foregroundCap. Requests that
-	// would exceed it (including timeout=0, which disables the limit) are
-	// promoted to a tracked background session instead of being clamped or
-	// rejected.
-	promoteToBackground := !isBackground && t.foregroundCap > 0 &&
-		(timeoutDisabled || timeout > t.foregroundCap)
-
-	// A foreground nohup/setsid/disown or an inner '&' leaves a process the
-	// session manager cannot track. The trailing '&' converter above already
-	// turned the unambiguous single-operator form into a tracked run.
-	if reason := untrackedDetachReason(
-		command, analysis, isBackground || promoteToBackground, trailingConverted,
-	); reason != "" {
-		return ErrorResult(reason)
-	}
-
-	if isPty {
-		if runtime.GOOS == "windows" {
-			return ErrorResult("PTY is not supported on Windows. Use background=true without pty.")
-		}
-	}
-
-	if notify && !isBackground && !promoteToBackground {
-		return ErrorResult("notify is only supported with background=true or when the run is promoted to background")
-	}
-
-	savedCwd := t.state.load(ctx)
-
-	requestedCwd, cwdProvided := args["cwd"].(string)
-	cwdProvided = cwdProvided && requestedCwd != ""
-	rememberedCwd := false
-
-	cwd := t.workingDir
-	switch {
-	case cwdProvided:
-		cwd = requestedCwd
-	case savedCwd != "":
-		if resolved, ok := t.rememberedCwd(ctx, savedCwd); ok {
-			cwd = resolved
-			rememberedCwd = true
-		}
-	}
-
-	if cwdProvided && t.restrictToWorkspace && t.workingDir != "" {
-		resolvedWD, err := t.validateCwd(cwd)
-		if err != nil {
-			return t.blockedResult(ctx, command, "Command blocked by safety guard ("+err.Error()+")")
-		}
-		cwd = resolvedWD
-	}
-
-	if cwd == "" {
-		wd, err := os.Getwd()
-		if err == nil {
-			cwd = wd
-		}
-	}
-
-	// Remember the path that passed workspace validation, not the post-symlink
-	// resolved path: on platforms where the workspace itself lives behind a
-	// symlink (for example /var -> /private/var on macOS), storing the resolved
-	// path would fail validation on the next call.
-	stateCwd := cwd
-
-	if guardError := t.guardCommandWithAnalysis(guardedCommand, cwd, analysis); guardError != "" {
-		return t.blockedResult(ctx, command, guardError)
-	}
-
-	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
-	// between validation and cmd.Dir assignment.
-	if t.restrictToWorkspace && t.workingDir != "" && cwd != t.workingDir {
-		resolved, err := t.validateCwd(cwd)
-		if err != nil {
-			if rememberedCwd {
-				t.forgetRememberedCwd(ctx, cwd, err)
-			}
-			return t.blockedResult(ctx, command, "Command blocked by safety guard ("+err.Error()+")")
-		}
-		cwd = resolved
-	}
-
-	// Persist only a cwd that passed validation and the command guard.
-	if cwdProvided && stateCwd != "" {
-		t.rememberCwd(ctx, stateCwd)
-	}
-
-	// Any allowed run breaks the blocked-command streak.
-	t.blockBreaker.reset(ctx)
-
-	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty, backgroundNote, notify, cb)
-	}
-	if promoteToBackground {
-		return t.runBackground(
-			ctx,
-			command,
-			cwd,
-			isPty,
-			t.foregroundPromotionNote(timeoutDisabled, timeout),
-			notify,
-			cb,
-		)
-	}
-
-	return t.runSync(ctx, command, cwd, timeout, analysis)
-}
-
-// resolvedWorkspace returns the workspace with symlinks resolved, so paths
-// produced by `pwd -P` compare correctly on systems where the workspace itself
-// lives behind a symlink (for example /var -> /private/var on macOS).
-func (t *ExecTool) resolvedWorkspace() string {
-	workspace := t.workingDir
-	if abs, err := filepath.Abs(workspace); err == nil {
-		workspace = abs
-	}
-	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
-		workspace = resolved
-	}
-	return workspace
-}
-
-// validateCwd applies the workspace and allow-path policy to a cwd. It is the
-// single policy used by initial validation, the pre-execution re-check,
-// observed-cwd acceptance and remembered-cwd validation. It tries the
-// symlink-resolved form first so a workspace behind /var -> /private/var and a
-// path reported by `pwd -P` compare correctly; the original pair is the
-// fallback for operator allow patterns that name the unresolved path.
-func (t *ExecTool) validateCwd(cwd string) (string, error) {
-	if !t.restrictToWorkspace || t.workingDir == "" {
-		return cwd, nil
-	}
-	candidate := cwd
-	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
-		candidate = resolved
-	}
-	if validated, err := fstools.ValidatePathWithAllowPaths(
-		candidate, t.resolvedWorkspace(), true, t.allowedPathPatterns,
-	); err == nil {
-		return validated, nil
-	}
-	return fstools.ValidatePathWithAllowPaths(cwd, t.workingDir, true, t.allowedPathPatterns)
-}
-
-// acceptObservedCwd reports whether the cwd observed after a command is a real
-// directory that the workspace policy allows. The observed path is used for
-// the result header even when it is rejected, but only accepted paths are
-// remembered for the next call.
-func (t *ExecTool) acceptObservedCwd(cwd string) bool {
-	if cwd == "" || !filepath.IsAbs(cwd) {
-		return false
-	}
-	info, err := os.Stat(cwd)
-	if err != nil || !info.IsDir() {
-		return false
-	}
-	_, err = t.validateCwd(cwd)
-	return err == nil
-}
-
-// rememberedCwd revalidates a cwd stored for the conversation. It returns
-// ok=false and forgets the value when the directory disappeared or no longer
-// satisfies the workspace policy, so the caller can fall back to the default.
-func (t *ExecTool) rememberedCwd(ctx context.Context, cwd string) (string, bool) {
-	if cwd == "" {
-		return "", false
-	}
-	resolved := cwd
-	if t.restrictToWorkspace && t.workingDir != "" {
-		validated, err := t.validateCwd(cwd)
-		if err != nil {
-			t.forgetRememberedCwd(ctx, cwd, err)
-			return "", false
-		}
-		resolved = validated
-	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		t.forgetRememberedCwd(ctx, cwd, err)
-		return "", false
-	}
-	if !info.IsDir() {
-		t.forgetRememberedCwd(ctx, cwd, fmt.Errorf("not a directory"))
-		return "", false
-	}
-	if abs, err := filepath.Abs(resolved); err == nil {
-		resolved = abs
-	}
-	return resolved, true
-}
-
-func (t *ExecTool) forgetRememberedCwd(ctx context.Context, cwd string, cause error) {
-	if t.state != nil {
-		t.state.clearCwd(ctx)
-	}
-	logger.WarnCF("shell", "forgetting unusable remembered cwd", map[string]any{
-		"cwd":   cwd,
-		"error": cause.Error(),
-	})
-}
-
-func (t *ExecTool) rememberCwd(ctx context.Context, cwd string) {
-	if t.state == nil {
-		return
-	}
-	if abs, err := filepath.Abs(cwd); err == nil {
-		cwd = abs
-	}
-	t.state.rememberCwd(ctx, cwd)
 }
 
 func (t *ExecTool) SetTimeout(timeout time.Duration) {
