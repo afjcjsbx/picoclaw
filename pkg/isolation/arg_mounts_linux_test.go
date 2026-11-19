@@ -110,6 +110,49 @@ func TestIsLinuxBroadMount(t *testing.T) {
 	}
 }
 
+// TestIsLinuxPseudoFilesystemPath verifies that paths owned by the sandbox's
+// own /proc, /sys and /dev trees are never auto-mounted from the host.
+func TestIsLinuxPseudoFilesystemPath(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{path: "/proc", want: true},
+		{path: "/proc/cpuinfo", want: true},
+		// /proc/self resolves to a host PID that does not exist in the
+		// sandbox PID namespace; mounting it breaks bwrap setup.
+		{path: "/proc/self/status", want: true},
+		{path: "/proc/1/root", want: true},
+		{path: "/sys/class/net", want: true},
+		{path: "/dev/null", want: true},
+
+		// Names that merely start with the prefix string are not pseudo-fs.
+		{path: "/processes", want: false},
+		{path: "/sysroot", want: false},
+		{path: "/devices", want: false},
+		{path: "/tmp/proc/cpuinfo", want: false},
+		{path: "/home/bob/proc", want: false},
+	} {
+		if got := isLinuxPseudoFilesystemPath(tc.path); got != tc.want {
+			t.Errorf("isLinuxPseudoFilesystemPath(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestAppendLinuxArgumentMountsSkipsPseudoFilesystems verifies that argument
+// paths under /proc, /sys and /dev do not add bind rules to the mount plan.
+func TestAppendLinuxArgumentMountsSkipsPseudoFilesystems(t *testing.T) {
+	plan := appendLinuxArgumentMounts(nil, []string{
+		"/proc/self/status",
+		"/proc/cpuinfo",
+		"/sys/class/net",
+		"/dev/null",
+	})
+	if len(plan) != 0 {
+		t.Fatalf("pseudo-filesystem arguments added mount rules: %+v", plan)
+	}
+}
+
 // TestLinuxPlanCoversPath verifies the ancestor-coverage check that prevents
 // stacking a conflicting mount mode on top of an existing rule.
 func TestLinuxPlanCoversPath(t *testing.T) {

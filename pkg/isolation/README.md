@@ -208,8 +208,16 @@ Capabilities:
 - `ipc` namespace isolation
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
+- all Linux capabilities dropped (`--cap-drop ALL`) inside every sandbox
 - new session (`--new-session`): the sandbox runs in a detached session with no controlling terminal, blocking TIOCSTI-based terminal injection (CVE-2017-5226)
 - optional network namespace isolation (`block_network: true`)
+
+**Do not run PicoClaw as root.** When the effective uid is 0, bwrap does not
+create a user namespace automatically, so the sandboxed process would otherwise
+retain the full host capability set even after `--cap-drop`. PicoClaw works
+around this by passing `--unshare-user` for root callers, which creates a new
+user namespace where capabilities are reset to zero. Running as root still
+leaves a wider attack surface than a dedicated non-privileged user.
 
 Default mounts inside the instance root are intentionally narrow:
 
@@ -228,6 +236,7 @@ At runtime, PicoClaw also adds the executable path, its directory, the effective
 Absolute path arguments are auto-exposed with the following rules:
 
 - An argument is treated as a path only when it is a plain absolute token with no whitespace, control characters, or shell metacharacters (`;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`, backtick, quotes, `\`, `*`, `?`, `[`, `]`, `{`, `}`). Shell command strings passed to `sh -c` are therefore never treated as paths.
+- Paths under `/proc`, `/sys`, and `/dev` are never auto-mounted from the host. The sandbox provides its own `/proc` and `/dev`, and host pseudo-filesystem state is not exposed.
 - Existing paths are exposed **read-only**. Directories passed on the command line do not become writable holes in the sandbox; writable locations come from `expose_paths` or the effective working directory.
 - Non-existent paths expose their parent directory **read-write** so the command can create output files. This supports tools such as the Weixin SILK voice decoder that write to a not-yet-existing output path.
 - Broad paths are **refused** automatically: `/`, any path directly under `/` (e.g. `/home`, `/etc`, `/tmp`, `/proc`), the invoking user's home directory, and every ancestor of the home directory. A single warning is logged per distinct refused path. Use `isolation.expose_paths` in `config.json` to grant access to these paths explicitly when needed.
@@ -373,7 +382,7 @@ is reflected in the next system prompt.
 ## Current Limits
 
 - Linux isolation is implemented with `bwrap`, not a custom in-process isolation runtime.
-- Linux now enables a dedicated `pid` namespace by default; Docker containers must add `--security-opt systempaths=unconfined`.
+- Linux enables a dedicated `pid` namespace by default; Docker containers must add `--security-opt systempaths=unconfined`.
 - Windows does not yet implement full host ACL enforcement for every allowed or denied path.
 - macOS Seatbelt does not support `source -> target` path remapping and relies on Apple's deprecated `sandbox-exec` command.
 - The current design isolates child processes, not the main `picoclaw` process.

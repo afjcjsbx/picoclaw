@@ -192,8 +192,11 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 - `ipc namespace`
 - 子进程用户环境重定向
 - `source -> target` 只读或读写挂载
+- 沙箱内始终丢弃全部 Linux 特权（`--cap-drop ALL`）
 - 新会话（`--new-session`）：沙盒在独立 session 中运行，不持有控制终端，从而阻止通过 TIOCSTI 注入终端字符（CVE-2017-5226）
 - 可选网络命名空间隔离（`block_network: true`）
+
+**不建议以 root 运行 PicoClaw。** 当有效 uid 为 0 时，bwrap 不会自动创建 user namespace，沙箱进程在 `--cap-drop` 之后仍会保留完整的宿主特权集。PicoClaw 会在 root 模式下额外传入 `--unshare-user`，在新的 user namespace 中将 CapEff 清零。以 root 运行的风险面仍大于使用专用非特权用户。
 
 实例根目录内的默认挂载范围刻意收窄：
 
@@ -212,6 +215,7 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 命令行绝对路径参数的自动挂载规则如下：
 
 - 参数须是不含空白字符、控制字符或 Shell 元字符（`;`、`&`、`|`、`<`、`>`、`(`、`)`、`$`、反引号、引号、`\`、`*`、`?`、`[`、`]`、`{`、`}`）的纯绝对路径 token。传给 `sh -c` 的命令字符串因此永远不会被当作路径。
+- `/proc`、`/sys`、`/dev` 下的路径永远不会从宿主自动挂载。沙箱会提供自己的 `/proc` 和 `/dev`，不会暴露宿主的伪文件系统状态。
 - 已存在的路径以**只读**方式挂载。命令行传入的目录不会成为沙箱的可写漏洞；可写位置来自 `expose_paths` 或生效后的工作目录。
 - 不存在的路径会将其**父目录**以**读写**方式挂载，使命令可以创建输出文件（例如 Weixin SILK 语音解码器将输出写入尚未存在的文件时）。
 - 过于宽泛的路径会被**拒绝**：`/`、`/` 直接子目录（如 `/home`、`/etc`、`/tmp`、`/proc`）、当前用户的家目录及其所有祖先目录。每个被拒绝的路径只记录一条警告日志。如需访问这些路径，请在 `config.json` 的 `isolation.expose_paths` 中显式配置。
@@ -327,7 +331,7 @@ macOS 调试日志名：`macOS Seatbelt profile prepared`。
 ## 当前限制
 
 - Linux 基于 `bwrap` 实现，而不是纯内建 isolation runtime。
-- Linux 现已默认启用独立的 `pid namespace`；Docker 容器需要添加 `--security-opt systempaths=unconfined`。
+- Linux 默认启用独立的 `pid` namespace；Docker 容器需要添加 `--security-opt systempaths=unconfined`。
 - Windows 还没有对所有允许/拒绝路径做完整 ACL 落地。
 - macOS Seatbelt 不支持 `source -> target` 路径重映射，并依赖 Apple 已弃用的 `sandbox-exec` 命令。
 - 当前隔离的是子进程，不是 `picoclaw` 主进程自身。
