@@ -81,7 +81,7 @@
 
 平台说明：
 
-- Linux 会真实使用 `source -> target` 挂载视图。
+- Linux 会真实使用 `source -> target` 挂载视图。Linux 会对可选的 bubblewrap namespace 标志按 bwrap 二进制路径缓存一次探测结果。若内核以 `Creating new namespace failed: Invalid argument`（EINVAL）拒绝某个标志，该 namespace 隔离会以警告形式跳过，其余挂载 namespace、文件系统视图和用户环境隔离仍然生效。任何其他失败（EPERM、seccomp 策略、AppArmor、权限不足）都会返回含操作建议的错误（包括真实 bwrap 输出及 Docker `--security-opt seccomp=unconfined`、`--cap-add SYS_ADMIN` 或自定义 Kubernetes seccomp 配置文件的修复建议）并终止启动。探测失败不会被缓存，环境修正后无需重启即可自动恢复。
 - macOS 要求 `target` 与 `source` 相同；Seatbelt 不支持路径重映射。
 - Windows 当前不支持 `expose_paths`。
 

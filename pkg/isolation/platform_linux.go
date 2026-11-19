@@ -3,14 +3,12 @@
 package isolation
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -117,43 +115,66 @@ func cleanupPendingPlatformResources(cmd *exec.Cmd) {
 // can still run; the dropped namespace is an explicit security tradeoff.
 var linuxOptionalNamespaceFlags = []string{"--unshare-ipc"}
 
-var linuxNamespaceProbe struct {
-	once  sync.Once
-	flags map[string]bool
-	err   error
-}
-
 func cachedLinuxNamespaceFlags(bwrapPath string) (map[string]bool, error) {
-	linuxNamespaceProbe.once.Do(func() {
-		linuxNamespaceProbe.flags, linuxNamespaceProbe.err = probeLinuxNamespaceFlags(
-			bwrapPath,
-			func(path string, args ...string) ([]byte, error) {
-				var stderr bytes.Buffer
-				cmd := exec.Command(path, args...)
-				cmd.Stderr = &stderr
-				err := cmd.Run()
-				return stderr.Bytes(), err
-			},
-		)
-		if linuxNamespaceProbe.err != nil {
-			return
+	// Fast path: return a previously-cached successful probe result.
+	linuxNamespaceProbe.mu.Lock()
+	if linuxNamespaceProbe.results != nil {
+		if flags, ok := linuxNamespaceProbe.results[bwrapPath]; ok {
+			linuxNamespaceProbe.mu.Unlock()
+			return flags, nil
 		}
-		for _, flag := range linuxOptionalNamespaceFlags {
-			if !linuxNamespaceProbe.flags[flag] {
-				logger.WarnCF(
-					"isolation",
-					"bubblewrap dropped "+flag+"; corresponding namespace isolation is not active",
-					map[string]any{
-						"flag":                flag,
-						"namespace_isolation": "not active",
-						"reason":              "kernel lacks this namespace; bwrap returned 'Creating new namespace failed' (EINVAL)",
-						"remaining_isolation": "mount namespace, filesystem view, and user environment remain active",
-					},
-				)
+	}
+	linuxNamespaceProbe.mu.Unlock()
+
+	// Run the probe unlocked.  Errors are not cached so a container environment
+	// corrected with --security-opt or --cap-add recovers without a restart.
+	flags, err := probeLinuxNamespaceFlags(bwrapPath, linuxNamespaceProbeRun)
+
+	linuxNamespaceProbe.mu.Lock()
+	defer linuxNamespaceProbe.mu.Unlock()
+
+	if err != nil {
+		// Warn once per distinct error message to avoid log spam when every
+		// command triggers a re-probe in a misconfigured environment.
+		msg := err.Error()
+		if _, seen := linuxNamespaceProbe.warned[msg]; !seen {
+			if linuxNamespaceProbe.warned == nil {
+				linuxNamespaceProbe.warned = make(map[string]struct{})
 			}
+			linuxNamespaceProbe.warned[msg] = struct{}{}
+			logger.WarnCF("isolation", "bubblewrap namespace probe failed; isolation blocked",
+				map[string]any{"bwrap_path": bwrapPath, "error": msg})
 		}
-	})
-	return linuxNamespaceProbe.flags, linuxNamespaceProbe.err
+		return nil, err
+	}
+
+	// Another goroutine may have cached a result for this path while the probe
+	// was running; prefer it to avoid double-logging "dropped" warnings.
+	if linuxNamespaceProbe.results != nil {
+		if existing, ok := linuxNamespaceProbe.results[bwrapPath]; ok {
+			return existing, nil
+		}
+	}
+	if linuxNamespaceProbe.results == nil {
+		linuxNamespaceProbe.results = make(map[string]map[string]bool)
+	}
+	linuxNamespaceProbe.results[bwrapPath] = flags
+
+	for _, flag := range linuxOptionalNamespaceFlags {
+		if !flags[flag] {
+			logger.WarnCF("isolation", "bubblewrap dropped "+flag+"; corresponding namespace isolation is not active",
+				map[string]any{
+					"flag":                flag,
+					"bwrap_path":          bwrapPath,
+					"namespace_isolation": "not active",
+					// Only EINVAL reaches this path; EPERM and other failures are
+					// returned as errors above.
+					"reason":              "kernel does not support this namespace type; bwrap: Creating new namespace failed: Invalid argument",
+					"remaining_isolation": "mount namespace, filesystem view, and user environment remain active",
+				})
+		}
+	}
+	return flags, nil
 }
 
 func probeLinuxNamespaceFlags(
@@ -173,16 +194,15 @@ func probeLinuxNamespaceFlags(
 			flags[flag] = true
 			continue
 		}
-		if strings.Contains(string(output), "Creating new namespace failed") {
+		stderr := string(output)
+		if isNamespaceUnsupported(stderr) {
+			// EINVAL: the kernel does not support this namespace type.
 			flags[flag] = false
 			continue
 		}
-		return nil, fmt.Errorf(
-			"probe bubblewrap namespace flag %s: %w: %s",
-			flag,
-			err,
-			strings.TrimSpace(string(output)),
-		)
+		// EPERM or any other failure: environment policy blocked the syscall.
+		// Fail closed with an actionable message.
+		return nil, namespaceProbeError(flag, stderr, err)
 	}
 	return flags, nil
 }

@@ -88,7 +88,7 @@ Rules for `expose_paths`:
 Platform note:
 
 - Linux uses a real `source -> target` mount view.
-- Linux probes optional bubblewrap namespace flags once. If the kernel rejects one with `Creating new namespace failed` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active. This weakens isolation for that namespace; other probe failures stop startup.
+- Linux probes optional bubblewrap namespace flags once per bwrap binary path. If the kernel rejects one with `Creating new namespace failed: Invalid argument` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active; this weakens isolation for that namespace but lets the rest proceed. Any other failure — EPERM, seccomp policy, AppArmor, missing capabilities — stops startup with an actionable error that includes the real bwrap output and suggests concrete fixes (Docker `--security-opt seccomp=unconfined`, `--cap-add SYS_ADMIN`, or a custom Kubernetes seccomp profile). Failed probes are not cached so the process recovers automatically when the environment is corrected without a restart.
 - macOS requires `target` to match `source`; Seatbelt does not remap paths.
   Read-only rules under the instance root are rejected because Seatbelt cannot
   revoke the root's write access.
