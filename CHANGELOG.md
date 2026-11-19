@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Exec now breaks out of a retry loop on blocked commands: after three consecutive identical guard rejections in one conversation, the result carries a `HARD STOP` message telling the model to stop retrying, rewording or splitting the command and to report the blocker instead. The breaker is process-local and bounded (64 conversations, one 64-bit hash and a counter each), and resets on a different command, an allowed run or `/clear`.
+- `/usage` (alias `/cost`) chat command and `picoclaw usage` CLI command that report provider-reported token usage and cost per session, with per-model and input cache breakdowns.
+- Exec remembers the cwd where a foreground command ended and reuses it in later calls of the same conversation. On Unix a shell wrapper appends a `pwd -P` marker, so `cd` inside the command is observed; the path is reported as `cwd` in the `[exec]` header and stored only when it is inside the workspace and still exists. The model-side `env` argument was removed because environment variables are not visible to the command guard; operators still control the child environment with `tools.exec.env_set` and `tools.exec.env_allowlist`, and per-command values use an inline `FOO=bar command` assignment.
+
+### Changed
+
+- Exec now asks the originating user to approve commands the AST risk classifier cannot resolve. The new `tools.exec.unknown_command_policy` accepts `ask` (default), `allow` and `block`; `ask` sends a token-bound prompt to the requester and denies on timeout (`tools.exec.approval_timeout_seconds`, default 300), a missing channel or an automated sender. A bare `approve` or `deny` answers the single pending request, so the token is only needed when several are pending. Known commands above `risk_threshold` stay blocked and approval does not raise the threshold.
+- Exec on Unix now treats the AST risk classifier as the single source of truth for command danger. The default deny set only covers shell constructs the AST cannot inspect (command substitution, pipe-to-shell, shell heredocs) and reads them from the parse, so quoted text such as `echo '$(date)'` and arithmetic `$((1+2))` no longer match; text patterns remain the fallback for commands that do not parse. Command patterns such as `sudo`, `chmod`, `git push` and `rm -rf` now follow `risk_threshold`. Windows keeps the equivalent generic command patterns in its Windows-only regex floor because the classifier is POSIX-only.
+- The exec tool description is about 40% shorter and renders the OS and shell in its first line. Windows gets PowerShell-specific chaining guidance and omits the Unix-only trailing-`&`, `nohup`, `setsid` and `disown` notes, so the model is not taught commands the platform rejects.
+- Exec (Unix): a trailing `&` now starts a tracked background session instead of leaving an untracked process whose output pipe is closed. A foreground command that times out now points the model at `background=true` for servers, daemons, and watch processes. Other detaching forms — an inner `&` (`a & b`, `a & # comment`) and `nohup`/`setsid`/`disown` in a foreground run — are rejected with guidance to use `background=true`, so no process escapes session tracking.
+- Background sessions now keep only a 100 KB rolling window in memory; the complete stream spills to an artifact (up to 5,000,000 bytes) as soon as the window overflows. `poll`, `wait`, `read` and `kill` return `artifactPath`/`artifactCapped`, so earlier output stays readable without 1 MB of RAM per session.
+- A background run without `notify=true` now says that no completion message will be sent and points at `wait`/`poll`/`read`/`kill`, so the model no longer assumes it will be woken when a bounded job ends.
+- Foreground results now include an `exitNote` for well-known non-error statuses: `grep`/`rg` exit 1 (no matches), `diff` exit 1 (files differ), `test`/`[` exit 1 (false) and `git` exit 1 (often normal). This avoids turns spent investigating expected results.
+- The exec guard now parses a command once and shares the AST for quoted-heredoc stripping, canonical deny forms, workspace validation and risk classification. Fixed rewrites such as `$IFS` use a normalized risk parse, so an obfuscated command name cannot fall back to an allowed unknown.
+
+### Security
+
+- Exec hardline now also blocks recursive deletion of `/etc`, `/usr`, `/home`, `/root` and the other top-level system directories, plus `kill -1` and `kill -9 1`; these commands are always rejected.
+- `tools.exec.custom_allow_patterns` is now anchored to the full command and exempts only the default regex deny set. Commands the AST risk classifier rejects must be allowed by raising `risk_threshold`; `custom_allow_patterns` no longer bypasses the risk layer.
+- Exec hardline and custom deny matching now normalizes `$IFS`/`${IFS}`, ANSI-C `$'...'` quoting, backslash-newline continuations and AST-resolved quote splicing, so obfuscated critical commands such as `r''m -rf /` or `rm${IFS}-rf${IFS}/` cannot bypass the floor when the risk classifier is disabled.
+- Exec (Unix) workspace restriction now validates the constructs the absolute-path regex cannot see: `~`/`$HOME` expansion, bare `..` in `cd`/`pushd`/`-C` targets, `cd`/`pushd` changes (including symlink escapes), dynamic redirection targets, and nested scripts reached through `sh -c`, heredocs, `exec` and `find -exec`. `env -C`, `eval` and `trap` are rejected under workspace restriction; assignments or unsets of `HOME`, `PWD`, `OLDPWD` and `CDPATH` are rejected, and `file:` URIs are rejected fail-closed. `cd -`, bare `cd` and dynamic `cd` targets are rejected when they cannot be validated statically. Relative operands are resolved against every directory the command entered, so a chained `cd`, a relative operand such as `cd sub; cat link/secret.txt`, or a bare filename that resolves to an outside-pointing symlink under the new directory is also rejected. This is a static best-effort layer; OS isolation remains the hard boundary for untrusted workloads.
+- Exec (Unix) workspace restriction resolves backslash escapes before checking paths, so `cat \/etc/passwd` is rejected like `cat /etc/passwd`, and it now follows the command strings of `flock -c`, `runuser -c` and `capsh --` instead of treating them as one operand. A working directory that cannot be resolved blocks the command instead of skipping the workspace check.
+- `install` and `mkswap` are classified by the risk table; they were unclassified and therefore allowed.
+- Exec now has a self-protection hardline floor: it refuses to kill the PicoClaw process or service, delete the state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or the resolved `PICOCLAW_HOME`), or delete the running executable, even when default deny patterns are disabled or a broad custom allow rule is configured.
+- Exec (Unix) now parses commands with an AST-based risk classifier before execution and blocks commands above `tools.exec.risk_threshold` (default `medium`). It catches variable indirection and quoting that the regex deny list cannot resolve, parses literal `sh -c` scripts recursively, and inspects common wrapper commands. Known commands keep their low/medium/high/critical base level, argument modifiers cover the destructive verbs of `rm`, `git`, `systemctl`, `service`, the disk tools, the container tools, `find`, `kill` and the AWS CLI, and commands not in the table are unknown. It is part of the built-in guard set and is disabled with `enable_deny_patterns: false`.
+- Exec (Unix) now recognizes `runuser`, `setpriv`, `capsh`, `machinectl`, `lxc`, `incus`, `busybox`, `flock`, `chrt` and `taskset` as wrappers, so the command they launch is classified; `runuser -c` and `flock -c` command strings are parsed as scripts.
+- Exec on Windows now blocks PowerShell and Windows management commands that recursively delete data, wipe or reformat disks, delete shadow copies, change boot configuration, delete registry keys, grant Everyone access, download and execute code, or force-kill processes, in addition to the existing encoding-obfuscation patterns.
+- Exec child processes now receive a sanitized environment instead of inheriting every PicoClaw process variable. Only safe variables (PATH, HOME, locale, proxies, and similar) are inherited; `tools.exec.env_allowlist` extends that set and `tools.exec.env_set` injects fixed values. Workflows that relied on inherited credentials must allowlist the variable name or set the value explicitly. Per-command values use an inline `FOO=bar command` assignment, which the guard can inspect.
+
+### Changed
+
+- The exec tool strips ANSI escape sequences (colors, cursor movement, OSC/DCS/APC strings) from foreground and background output as it is read. Stripping happens in place before truncation and spilling, so escape bytes neither consume the output budget nor reach the model or an artifact.
+
+### Fixed
+
+- The exec tool schema now declares `background` and `pty` as booleans, matching their documentation and the values the tool already accepted; string `"true"`/`"false"` arguments are still tolerated for models that emit the previous form.
+- Background `spawn` no longer drops requests above `agents.defaults.subturn.max_concurrent`: the tool reserves a concurrency slot before acknowledging, and CLI one-shot turns join their spawned children before answering.
+
+### Changed
+
+- The opt-in gateway config watcher now polls every 60 seconds instead of every 2 seconds (still scaled by `power.poll_interval_multiplier`), reducing its idle wake-ups from 43,200 to 1,440 per day when hot reload is enabled.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

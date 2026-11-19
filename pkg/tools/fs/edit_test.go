@@ -41,11 +41,9 @@ func TestEditTool_EditFile_Success(t *testing.T) {
 		t.Fatal("Expected ForUser to contain the diff preview")
 	}
 
-	if result.ForLLM == result.ForUser {
-		t.Fatalf("Expected ForLLM to be a compact summary, got identical outputs %q", result.ForLLM)
-	}
-	if result.ForLLM != fmt.Sprintf("File edited: %s", testFile) {
-		t.Fatalf("Expected compact ForLLM summary, got %q", result.ForLLM)
+	if result.ForLLM != result.ForUser {
+		t.Fatalf("Expected a shared unified diff for a small edit, got\nForLLM: %q\nForUser: %q",
+			result.ForLLM, result.ForUser)
 	}
 
 	diffPath := strings.TrimLeft(filepath.ToSlash(testFile), "/")
@@ -57,8 +55,11 @@ func TestEditTool_EditFile_Success(t *testing.T) {
 		"-Hello World",
 		"+Hello Universe",
 	} {
+		if !strings.Contains(result.ForLLM, want) {
+			t.Fatalf("Expected model-facing edit diff to contain %q, got:\n%s", want, result.ForLLM)
+		}
 		if !strings.Contains(result.ForUser, want) {
-			t.Fatalf("Expected edit diff to contain %q, got:\n%s", want, result.ForUser)
+			t.Fatalf("Expected user-facing edit diff to contain %q, got:\n%s", want, result.ForUser)
 		}
 	}
 
@@ -470,7 +471,12 @@ func TestEditFileTool_Restricted_InPlaceEdit(t *testing.T) {
 	result := tool.Execute(ctx, args)
 	assert.False(t, result.IsError, "Expected success, got: %s", result.ForLLM)
 	assert.False(t, result.Silent)
-	assert.Equal(t, "File edited: edit_target.txt", result.ForLLM)
+	assert.Contains(t, result.ForLLM, "File edited: edit_target.txt")
+	assert.Contains(t, result.ForLLM, "```diff")
+	assert.Contains(t, result.ForLLM, "--- a/edit_target.txt")
+	assert.Contains(t, result.ForLLM, "+++ b/edit_target.txt")
+	assert.Contains(t, result.ForLLM, "-Hello World")
+	assert.Contains(t, result.ForLLM, "+Hello Go")
 	assert.Contains(t, result.ForUser, "```diff")
 	assert.Contains(t, result.ForUser, "--- a/edit_target.txt")
 	assert.Contains(t, result.ForUser, "+++ b/edit_target.txt")

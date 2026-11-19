@@ -8,6 +8,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func TestAgentLoop_TryHandleActiveTurnCommandRejectsMutatingCommand(t *testing.T) {
@@ -65,6 +66,28 @@ func TestAgentLoop_TryHandleActiveTurnCommandRunsReadOnlyCommands(t *testing.T) 
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, &plainProvider{})
 
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected a default agent")
+	}
+	if err := defaultAgent.Sessions.AddFullMessage(
+		context.Background(),
+		"agent:main:test:chat1",
+		providers.Message{
+			Role:      "assistant",
+			Content:   "previous reply",
+			ModelName: "test-model",
+			Usage: &providers.UsageInfo{
+				PromptTokens:     100,
+				CompletionTokens: 20,
+				TotalTokens:      120,
+				Requests:         1,
+			},
+		},
+	); err != nil {
+		t.Fatalf("seed session usage: %v", err)
+	}
+
 	tests := []struct {
 		name string
 		text string
@@ -77,6 +100,7 @@ func TestAgentLoop_TryHandleActiveTurnCommandRunsReadOnlyCommands(t *testing.T) 
 		{name: "list channels", text: "/list channels", want: "No channels enabled"},
 		{name: "check channel", text: "/check channel test", want: "channel manager not initialized"},
 		{name: "context", text: "/context", want: "Context usage"},
+		{name: "usage", text: "/usage", want: "Usage for this session"},
 		{name: "subagents", text: "/subagents", want: "Nothing is running in this chat right now."},
 	}
 

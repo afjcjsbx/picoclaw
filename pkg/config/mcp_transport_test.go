@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestMCPServerConfigEffectiveDeferred(t *testing.T) {
 	tests := []struct {
@@ -63,3 +66,14 @@ func TestMCPServerConfigEffectiveDeferred(t *testing.T) {
 }
 
 func boolPointer(b bool) *bool { return &b }
+
+func TestMCPServerConfigSupportsParallelToolCallsDefaultsFalse(t *testing.T) {
+	var servers map[string]MCPServerConfig
+	if err := json.Unmarshal([]byte(`{"a":{},"b":{"supports_parallel_tool_calls":true}}`), &servers); err != nil {
+		t.Fatal(err)
+	}
+	if servers["a"].SupportsParallelToolCalls || !servers["b"].SupportsParallelToolCalls {
+		t.Fatalf("got a=%v b=%v, want false/true",
+			servers["a"].SupportsParallelToolCalls, servers["b"].SupportsParallelToolCalls)
+	}
+}

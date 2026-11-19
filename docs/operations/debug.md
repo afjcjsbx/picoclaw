@@ -1,3 +1,6 @@
+---
+description: "PicoClaw performs multiple complex interactions under the hood for every single request it receives, from routing messages and evaluating complexity."
+---
 # Debugging PicoClaw
 
 PicoClaw performs multiple complex interactions under the hood for every single request it receives—from routing messages and evaluating complexity, to executing tools and adapting to model failures. Being able to see exactly what is happening is crucial, not just for troubleshooting potential issues, but also for truly understanding how the agent operates.

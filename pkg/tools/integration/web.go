@@ -36,13 +36,28 @@ const (
 	perplexityTimeout = 30 * time.Second // Perplexity (LLM-based, slower)
 	fetchTimeout      = 60 * time.Second // WebFetchTool
 
-	// defaultMaxChars is a flood guard, not a context budget: content under it
-	// reaches the generic spillover path intact, which keeps a head+tail
-	// preview inline and stores the full page as a pageable workspace
-	// artifact. Only floods are lossy. Callers can request a smaller maxChars
-	// per call; the same head+tail truncation then applies at that cap.
+	// defaultMaxChars is a flood-guard fallback used only when the caller does
+	// not supply a preview budget (for example when large-result spilling is
+	// disabled). Normal runtime constructs the tool with
+	// tools.max_inline_result_chars, so maxChars defaults to the same threshold
+	// as the spill layer. A per-call maxChars may only lower that budget; the
+	// full page is still persisted up to maxArtifactChars, so an explicit small
+	// preview remains recoverable from the artifact.
 	defaultMaxChars = 2_000_000
 	maxRedirects    = 5
+
+	// maxArtifactChars caps the full page persisted for a truncated web_fetch
+	// preview, independently of the requested maxChars. It bounds flash writes
+	// and artifact size on low-resource devices; when a page exceeds it, the
+	// artifact keeps a head+tail window plus an explicit truncation notice.
+	// Counted in Unicode characters, so multibyte text can use up to 4x this
+	// value in bytes.
+	maxArtifactChars = 2_000_000
+
+	// minMaxChars is the floor for a per-call maxChars. A smaller request is
+	// raised to the floor so the model cannot ask for a preview too small to
+	// be useful; the configured budget still wins when it is below the floor.
+	minMaxChars = 1500
 
 	// maxSearchResponseBytes caps how much of a search provider's HTTP response
 	// is buffered in memory. Search providers return compact JSON; anything
@@ -2338,7 +2353,7 @@ func (t *WebFetchTool) Parameters() map[string]any {
 			"maxChars": map[string]any{
 				"type":        "integer",
 				"description": "Maximum characters to extract",
-				"minimum":     100.0,
+				"minimum":     float64(minMaxChars),
 			},
 		},
 		"required": []string{"url"},
@@ -2375,9 +2390,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// A per-call maxChars may only lower the configured flood guard: the value
 	// comes from the model, so an out-of-range number must not be able to
-	// disable truncation entirely.
+	// disable truncation entirely. Requests below the advertised floor are
+	// raised to it, but never above the configured budget.
 	maxChars := t.maxChars
-	if mc, ok := args["maxChars"].(float64); ok && mc > 100 {
+	if mc, ok := args["maxChars"].(float64); ok {
+		if mc < minMaxChars {
+			mc = minMaxChars
+		}
 		if mc > float64(maxChars) {
 			mc = float64(maxChars)
 		}
@@ -2560,11 +2579,19 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			extractor,
 			truncated,
 		),
+		// The full page is capped even when the preview is not: an explicitly
+		// requested small maxChars must not leave a huge artifact, and a page
+		// larger than the cap still gets a head+tail artifact with a notice.
+		ArtifactMaxRunes: maxArtifactChars,
 	}
 	if truncated {
 		// Hand the large-result spill the full page so a capped fetch stays
-		// pageable from the artifact instead of losing the omitted middle.
+		// pageable from the artifact instead of losing the omitted middle. The
+		// preview stays at the caller's maxChars when it fits the inline
+		// budget; ForceArtifact persists the full text even when it would
+		// otherwise fit under that budget.
 		toolResult.FullText = fullText
+		toolResult.ForceArtifact = true
 	}
 	return toolResult
 }

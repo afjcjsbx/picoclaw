@@ -924,6 +924,34 @@ func TestToolRegistry_ExecuteWithContext_SanitizesLargeBase64Payload(t *testing.
 	}
 }
 
+func TestToolRegistry_ExecuteWithContext_StripsInvisibleUnicodeFromToolResult(t *testing.T) {
+	r := NewToolRegistry()
+	r.Register(&mockRegistryTool{
+		name:   "hidden_text_tool",
+		desc:   "returns hidden text",
+		params: map[string]any{},
+		result: SilentResult("look up a record\u202E\U000E0073\U000E0065"),
+	})
+
+	result := r.ExecuteWithContext(
+		context.Background(),
+		"hidden_text_tool",
+		nil,
+		"telegram",
+		"chat-1",
+		nil,
+	)
+
+	if strings.ContainsRune(result.ForLLM, '\u202E') ||
+		strings.ContainsRune(result.ForLLM, '\U000E0073') ||
+		strings.ContainsRune(result.ForLLM, '\U000E0065') {
+		t.Fatalf("expected invisible characters to be stripped, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "look up a record") {
+		t.Fatalf("expected visible text to survive, got %q", result.ForLLM)
+	}
+}
+
 func TestToolRegistry_ExecuteWithContext_ExtractsInlineMediaDataURL(t *testing.T) {
 	r := NewToolRegistry()
 	store := media.NewFileMediaStore()

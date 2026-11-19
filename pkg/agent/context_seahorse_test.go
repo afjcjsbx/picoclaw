@@ -198,6 +198,60 @@ func TestProviderToSeahorseMessageWithReasoning(t *testing.T) {
 	}
 }
 
+func TestProviderToSeahorseMessagePreservesReasoningWhenProviderStrips(t *testing.T) {
+	msg := protocoltypes.Message{
+		Role:             "assistant",
+		Content:          "answer",
+		ReasoningContent: strings.Repeat("reasoning ", 1000),
+	}
+
+	converted := providerToSeahorseMessageWithProvider(
+		reasoningReplayTestProvider{replay: false},
+		msg,
+	)
+	if converted.ReasoningContent != msg.ReasoningContent {
+		t.Fatal("provider token accounting must not drop ReasoningContent")
+	}
+	if converted.TokenCount >= EstimateMessageTokens(msg) {
+		t.Fatalf(
+			"stripped-provider token count = %d, want below full estimate %d",
+			converted.TokenCount,
+			EstimateMessageTokens(msg),
+		)
+	}
+
+	engine, err := seahorse.NewEngine(seahorse.Config{
+		DBPath: t.TempDir() + "/test.db",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	const sessionKey = "audit-reasoning"
+	if _, ingestErr := engine.Ingest(
+		context.Background(),
+		sessionKey,
+		[]seahorse.Message{converted},
+	); ingestErr != nil {
+		t.Fatalf("Ingest: %v", ingestErr)
+	}
+	assembled, err := engine.Assemble(
+		context.Background(),
+		sessionKey,
+		seahorse.AssembleInput{Budget: 100000},
+	)
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if len(assembled.Messages) != 1 {
+		t.Fatalf("assembled messages = %d, want 1", len(assembled.Messages))
+	}
+	if assembled.Messages[0].ReasoningContent != msg.ReasoningContent {
+		t.Fatal("ReasoningContent was not preserved in the Seahorse DB")
+	}
+}
+
 func TestSeahorseToProviderMessagesWithReasoning(t *testing.T) {
 	result := &seahorse.AssembleResult{
 		Messages: []seahorse.Message{
@@ -599,6 +653,59 @@ func TestSeahorseCompactRetryUsesCompactUntilUnder(t *testing.T) {
 	}
 	// Compaction attempted — no assertion on exact count since no LLM
 	_ = result.Summary
+}
+
+func TestSeahorseCompactProtectsActiveTurnMessages(t *testing.T) {
+	engine, err := seahorse.NewEngine(seahorse.Config{
+		DBPath: t.TempDir() + "/test.db",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	mgr := &seahorseContextManager{engine: engine}
+	ctx := context.Background()
+
+	for i := 0; i < 40; i++ {
+		_ = mgr.Ingest(ctx, &IngestRequest{
+			SessionKey: "active-turn-boundary",
+			Message:    protocoltypes.Message{Role: "assistant", Content: fmt.Sprintf("old context %d", i)},
+		})
+	}
+	_ = mgr.Ingest(ctx, &IngestRequest{
+		SessionKey: "active-turn-boundary",
+		Message:    protocoltypes.Message{Role: "user", Content: "APRI LA PR ADESSO"},
+	})
+	for i := 0; i < 39; i++ {
+		_ = mgr.Ingest(ctx, &IngestRequest{
+			SessionKey: "active-turn-boundary",
+			Message:    protocoltypes.Message{Role: "tool", Content: fmt.Sprintf("tool result %d", i)},
+		})
+	}
+
+	if compactErr := mgr.Compact(ctx, &CompactRequest{
+		SessionKey:         "active-turn-boundary",
+		Reason:             ContextCompressReasonThreshold,
+		Budget:             100000,
+		ActiveTurnMessages: 40,
+	}); compactErr != nil {
+		t.Fatalf("Compact: %v", compactErr)
+	}
+
+	assembled, err := engine.Assemble(ctx, "active-turn-boundary", seahorse.AssembleInput{Budget: 100000})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if assembled == nil {
+		t.Fatal("expected non-nil assemble result")
+	}
+	for _, msg := range assembled.Messages {
+		if msg.Content == "APRI LA PR ADESSO" {
+			return
+		}
+	}
+	t.Fatal("active-turn user message missing after compaction")
 }
 
 // TestSeahorseRealLoopNoDuplicateMessages tests the real-world scenario:
@@ -1217,6 +1324,42 @@ func newPruneTestManager(t *testing.T) (*seahorseContextManager, *session.JSONLB
 	return mgr, backend
 }
 
+func TestSeahorseBootstrapSessionInvalidatesEmptyHistory(t *testing.T) {
+	mgr, backend := newPruneTestManager(t)
+	ctx := context.Background()
+	const sessionKey = "agent:main:empty-history"
+
+	if err := backend.AddMessage(ctx, sessionKey, "user", "stale message"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err := mgr.Ingest(ctx, &IngestRequest{
+		SessionKey: sessionKey,
+		Message:    providers.Message{Role: "user", Content: "stale message"},
+	}); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	before, err := mgr.ContextTokens(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("ContextTokens before: %v", err)
+	}
+	if before == 0 {
+		t.Fatal("expected stored context before clearing history")
+	}
+
+	if err = backend.SetHistory(ctx, sessionKey, []providers.Message{}); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	mgr.bootstrapSession(ctx, sessionKey)
+
+	after, err := mgr.ContextTokens(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("ContextTokens after: %v", err)
+	}
+	if after != 0 {
+		t.Fatalf("context tokens after empty bootstrap = %d, want 0", after)
+	}
+}
+
 func waitForSessionCount(t *testing.T, backend *session.JSONLBackend, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -1433,9 +1576,17 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	err = mgr.Compact(ctx, &CompactRequest{SessionKey: "manual-test", Reason: ContextCompressReasonManual})
+	emptyOutcome := &CompactOutcome{}
+	err = mgr.Compact(ctx, &CompactRequest{
+		SessionKey: "manual-test",
+		Reason:     ContextCompressReasonManual,
+		Outcome:    emptyOutcome,
+	})
 	if !errors.Is(err, ErrNothingToCompact) {
 		t.Fatalf("empty session: err = %v, want ErrNothingToCompact", err)
+	}
+	if emptyOutcome.Reason != CompactReasonTooShort {
+		t.Fatalf("empty session reason = %q, want %q", emptyOutcome.Reason, CompactReasonTooShort)
 	}
 
 	for i := 0; i < 40; i++ {
@@ -1448,13 +1599,21 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 		}
 	}
 
+	outcome := &CompactOutcome{}
 	err = mgr.Compact(ctx, &CompactRequest{
 		SessionKey:   "manual-test",
 		Reason:       ContextCompressReasonManual,
 		Instructions: "database migration",
+		Outcome:      outcome,
 	})
 	if err != nil {
 		t.Fatalf("Compact manual: %v", err)
+	}
+	if !outcome.Compacted || outcome.Reason != CompactReasonCompacted {
+		t.Fatalf("manual outcome = %+v, want compacted", outcome)
+	}
+	if outcome.LeafSummaries+outcome.CondensedSummaries == 0 {
+		t.Fatalf("manual outcome reported no summaries: %+v", outcome)
 	}
 	if len(prompts) == 0 || !strings.Contains(prompts[0], "database migration") {
 		t.Fatalf("summarizer prompt missing focus: %q", prompts)
@@ -1472,6 +1631,62 @@ func TestSeahorseCompact_Manual(t *testing.T) {
 	}
 	if payload.SummarizedMessages == 0 {
 		t.Fatal("event payload missing summarized message count")
+	}
+
+	// A high budget makes manual compaction a no-op with a specific reason.
+	belowSession := "manual-below-target"
+	for i := 0; i < 2; i++ {
+		_ = mgr.Ingest(ctx, &IngestRequest{
+			SessionKey: belowSession,
+			Message:    protocoltypes.Message{Role: "user", Content: fmt.Sprintf("short %d", i)},
+		})
+	}
+	belowOutcome := &CompactOutcome{}
+	err = mgr.Compact(ctx, &CompactRequest{
+		SessionKey: belowSession,
+		Reason:     ContextCompressReasonManual,
+		Budget:     100000,
+		Outcome:    belowOutcome,
+	})
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("below target: err = %v, want ErrNothingToCompact", err)
+	}
+	if belowOutcome.Reason != CompactReasonBelowTarget {
+		t.Fatalf("below target reason = %q, want %q", belowOutcome.Reason, CompactReasonBelowTarget)
+	}
+	if belowOutcome.Target != 100000 {
+		t.Fatalf("below target target = %d, want 100000", belowOutcome.Target)
+	}
+
+	// Force ignores the target and compacts the same kind of history.
+	forceSession := "manual-force"
+	for i := 0; i < 40; i++ {
+		for _, role := range []string{"user", "assistant"} {
+			_ = mgr.Ingest(ctx, &IngestRequest{
+				SessionKey: forceSession,
+				Message: protocoltypes.Message{
+					Role:    role,
+					Content: fmt.Sprintf("%s force message %d with some body text", role, i),
+				},
+			})
+		}
+	}
+	forceOutcome := &CompactOutcome{}
+	err = mgr.Compact(ctx, &CompactRequest{
+		SessionKey: forceSession,
+		Reason:     ContextCompressReasonManual,
+		Budget:     100000,
+		Force:      true,
+		Outcome:    forceOutcome,
+	})
+	if err != nil {
+		t.Fatalf("forced compact: %v", err)
+	}
+	if !forceOutcome.Compacted || forceOutcome.Reason != CompactReasonCompacted {
+		t.Fatalf("forced outcome = %+v, want compacted", forceOutcome)
+	}
+	if forceOutcome.LeafSummaries+forceOutcome.CondensedSummaries == 0 {
+		t.Fatalf("forced outcome reported no summaries: %+v", forceOutcome)
 	}
 }
 

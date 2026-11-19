@@ -47,6 +47,10 @@ func (t *ReadFileLinesTool) ParallelSafety(args map[string]any) toolshared.Paral
 	return pathSafety(t.workspace, pathArg(args), false)
 }
 
+func (t *ReadFileAutoTool) ParallelSafety(args map[string]any) toolshared.ParallelSafety {
+	return pathSafety(t.workspace, pathArg(args), false)
+}
+
 func (t *ListDirTool) ParallelSafety(args map[string]any) toolshared.ParallelSafety {
 	return pathSafety(t.workspace, pathArg(args), false)
 }
@@ -56,7 +60,11 @@ func (t *LoadImageTool) ParallelSafety(args map[string]any) toolshared.ParallelS
 }
 
 func (t *WriteFileTool) ParallelSafety(args map[string]any) toolshared.ParallelSafety {
-	return pathSafety(t.workspace, pathArg(args), true)
+	path := pathArg(args)
+	if path == "" {
+		return toolshared.ParallelSafety{}
+	}
+	return pathSafety("", resolveToolPath(t.fs, path), true)
 }
 
 func (t *EditFileTool) ParallelSafety(args map[string]any) toolshared.ParallelSafety {

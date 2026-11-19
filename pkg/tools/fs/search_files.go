@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -313,6 +314,7 @@ func (t *SearchFilesTool) searchNames(ctx context.Context, opts searchFilesOptio
 
 func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOptions) *ToolResult {
 	pattern, _ := regexp.Compile(opts.pattern) // validated in parseSearchFilesOptions
+	matcher := newSearchMatcher(pattern)
 	rows := make([]string, 0, opts.limit+1)
 	rowsSeen := 0
 	bytesScanned := int64(0)
@@ -322,7 +324,7 @@ func (t *SearchFilesTool) searchContents(ctx context.Context, opts searchFilesOp
 			return false, nil
 		}
 		fileResult, err := t.scanSearchFile(
-			path, pattern, opts, &rowsSeen, opts.limit+1-len(rows), maxSearchBytesScanned-bytesScanned,
+			path, matcher, opts, &rowsSeen, opts.limit+1-len(rows), maxSearchBytesScanned-bytesScanned,
 		)
 		if err != nil {
 			return false, errSearchSkipFile
@@ -413,7 +415,7 @@ type searchFileResult struct {
 // (see redact.go).
 func (t *SearchFilesTool) scanSearchFile(
 	path string,
-	pattern *regexp.Regexp,
+	matcher searchMatcher,
 	opts searchFilesOptions,
 	rowsSeen *int,
 	remainingRows int,
@@ -482,17 +484,21 @@ func (t *SearchFilesTool) scanSearchFile(
 			return
 		}
 		var block strings.Builder
+		var num [20]byte
 		block.WriteString(path)
 		block.WriteString(":\n")
 		for _, line := range lines {
-			prefix := " "
 			if line.hit() {
-				prefix = ">"
+				block.WriteString("> ")
+			} else {
+				block.WriteString("  ")
 			}
-			rendered := renderSearchLine(line, pattern)
-			block.WriteString(fmt.Sprintf("%s %d: %s\n", prefix, line.number, rendered))
+			block.Write(strconv.AppendInt(num[:0], int64(line.number), 10))
+			block.WriteString(": ")
+			block.WriteString(renderSearchLine(line, matcher))
+			block.WriteByte('\n')
 		}
-		rows = append(rows, strings.TrimRight(block.String(), "\n"))
+		rows = append(rows, strings.TrimSuffix(block.String(), "\n"))
 		if len(rows) >= remainingRows {
 			done = true
 		}
@@ -503,8 +509,15 @@ func (t *SearchFilesTool) scanSearchFile(
 		if *rowsSeen+seen <= opts.offset {
 			return
 		}
-		rendered := renderSearchLine(line, pattern)
-		rows = append(rows, fmt.Sprintf("%s:%d: %s", path, line.number, rendered))
+		var row strings.Builder
+		var num [20]byte
+		row.Grow(len(path) + len(line.text) + 16)
+		row.WriteString(path)
+		row.WriteByte(':')
+		row.Write(strconv.AppendInt(num[:0], int64(line.number), 10))
+		row.WriteString(": ")
+		row.WriteString(renderSearchLine(line, matcher))
+		rows = append(rows, row.String())
 		if len(rows) >= remainingRows {
 			done = true
 		}
@@ -561,7 +574,7 @@ func (t *SearchFilesTool) scanSearchFile(
 		if line != "" {
 			number++
 			text := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-			current := searchLine{number: number, text: text, loc: pattern.FindStringIndex(text)}
+			current := searchLine{number: number, text: text, loc: matcher.findIndex(text)}
 			if current.hit() {
 				result.matches++
 			}
@@ -623,13 +636,45 @@ func (t *SearchFilesTool) scanSearchFile(
 			if opts.outputMode == "files_only" {
 				rows = append(rows, path)
 			} else {
-				rows = append(rows, fmt.Sprintf("%s: %d", path, result.matches))
+				rows = append(rows, path+": "+strconv.Itoa(result.matches))
 			}
 		}
 	}
 	*rowsSeen += seen
 	result.rows = rows
 	return result, nil
+}
+
+// searchMatcher memoizes the literal prefix of a content pattern, so a fully
+// literal pattern is matched with strings.Index and a partially literal one
+// skips the regexp engine on lines that lack its prefix.
+type searchMatcher struct {
+	pattern  *regexp.Regexp
+	literal  string
+	complete bool
+}
+
+func newSearchMatcher(pattern *regexp.Regexp) searchMatcher {
+	literal, complete := pattern.LiteralPrefix()
+	return searchMatcher{pattern: pattern, literal: literal, complete: complete}
+}
+
+// findIndex returns the leftmost match in text with the same semantics as
+// regexp.Regexp.FindStringIndex.
+func (m searchMatcher) findIndex(text string) []int {
+	if m.complete {
+		if m.literal == "" {
+			return []int{0, 0}
+		}
+		if i := strings.Index(text, m.literal); i >= 0 {
+			return []int{i, i + len(m.literal)}
+		}
+		return nil
+	}
+	if m.literal != "" && !strings.Contains(text, m.literal) {
+		return nil
+	}
+	return m.pattern.FindStringIndex(text)
 }
 
 // truncateSearchLine bounds a line to maxSearchLineLength bytes. When
@@ -640,11 +685,11 @@ func (t *SearchFilesTool) scanSearchFile(
 // the output window is masked in full instead of leaking a partial token. The
 // match position is recomputed on the redacted text because masking shifts
 // byte offsets.
-func renderSearchLine(line searchLine, pattern *regexp.Regexp) string {
+func renderSearchLine(line searchLine, matcher searchMatcher) string {
 	text := redactSecrets(line.text)
 	loc := line.loc
 	if loc != nil {
-		if found := pattern.FindStringIndex(text); found != nil {
+		if found := matcher.findIndex(text); found != nil {
 			loc = found
 		} else if loc[0] > len(text) {
 			loc = nil

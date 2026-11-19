@@ -4,13 +4,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 type countingStatefulProvider struct {
@@ -79,6 +82,37 @@ func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 	}
 	if agent.Temperature != 1.0 {
 		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 1.0)
+	}
+}
+
+func TestNewAgentInstance_ConfiguresArtifactRetention(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         1234,
+				MaxToolIterations: 5,
+			},
+		},
+	}
+	cfg.Tools.ArtifactMaxFiles = 7
+	cfg.Tools.ArtifactMaxAgeHours = 2
+
+	oldMaxAge, oldMaxFiles := toolshared.ArtifactRetention()
+	t.Cleanup(func() { toolshared.SetArtifactRetention(oldMaxAge, oldMaxFiles) })
+
+	provider := &mockProvider{}
+	NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+	maxAge, maxFiles := toolshared.ArtifactRetention()
+	if maxAge != 2*time.Hour {
+		t.Fatalf("artifact max age = %s, want 2h", maxAge)
+	}
+	if maxFiles != 7 {
+		t.Fatalf("artifact max files = %d, want 7", maxFiles)
 	}
 }
 
@@ -384,6 +418,127 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 	}
 	if !strings.Contains(execResult.ForLLM, "attachment content") {
 		t.Fatalf("exec output missing media content: %s", execResult.ForLLM)
+	}
+}
+
+func TestNewAgentInstance_ExecUsesWriteAllowPathsOnly(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	readable := filepath.Join(outside, "readable.txt")
+	if err := os.WriteFile(readable, []byte("READ_CANARY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deleteMe := filepath.Join(outside, "delete-me.txt")
+	if err := os.WriteFile(deleteMe, []byte("DELETE_CANARY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pattern := `^` + regexp.QuoteMeta(outside) + `(?:/|$)`
+	newAgent := func(allowRead, allowWrite []string) *AgentInstance {
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{
+				Defaults: config.AgentDefaults{
+					Workspace:           workspace,
+					ModelName:           "test-model",
+					RestrictToWorkspace: true,
+				},
+			},
+			Tools: config.ToolsConfig{
+				ReadFile:        config.ReadFileToolConfig{Enabled: true},
+				WriteFile:       config.ToolConfig{Enabled: true},
+				AllowReadPaths:  allowRead,
+				AllowWritePaths: allowWrite,
+				Exec: config.ExecConfig{
+					ToolConfig:         config.ToolConfig{Enabled: true},
+					EnableDenyPatterns: true,
+					AllowRemote:        true,
+				},
+			},
+		}
+		return NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	}
+
+	readOnlyAgent := newAgent([]string{pattern}, nil)
+	ctx := tools.WithToolContext(context.Background(), "cli", "sec04")
+
+	execTool, ok := readOnlyAgent.Tools.Get("exec")
+	if !ok {
+		t.Fatal("exec tool not registered")
+	}
+	writePath := filepath.Join(outside, "exec-write-via-read-allow.txt")
+	result := execTool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "echo PWNED > " + writePath,
+	})
+	if !result.IsError {
+		t.Fatalf("exec must not write through allow_read_paths, got: %s", result.ForLLM)
+	}
+	if _, err := os.Stat(writePath); !os.IsNotExist(err) {
+		t.Fatalf("exec created %s through allow_read_paths", writePath)
+	}
+
+	deleteResult := execTool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "rm -f " + deleteMe,
+	})
+	if !deleteResult.IsError {
+		t.Fatalf("exec must not delete through allow_read_paths, got: %s", deleteResult.ForLLM)
+	}
+	if _, err := os.Stat(deleteMe); err != nil {
+		t.Fatalf("exec deleted %s through allow_read_paths: %v", deleteMe, err)
+	}
+
+	readExecResult := execTool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "cat " + readable,
+	})
+	if !readExecResult.IsError {
+		t.Fatalf("exec must not read through allow_read_paths, got: %s", readExecResult.ForLLM)
+	}
+
+	readTool, ok := readOnlyAgent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read_file tool not registered")
+	}
+	if got := readTool.Execute(ctx, map[string]any{"path": readable}); got.IsError {
+		t.Fatalf("read_file should use allow_read_paths, got: %s", got.ForLLM)
+	}
+
+	writeTool, ok := readOnlyAgent.Tools.Get("write_file")
+	if !ok {
+		t.Fatal("write_file tool not registered")
+	}
+	nativePath := filepath.Join(outside, "native-write-via-read-allow.txt")
+	if got := writeTool.Execute(ctx, map[string]any{"path": nativePath, "content": "PWNED\n"}); !got.IsError {
+		t.Fatalf("write_file must not use allow_read_paths, got: %s", got.ForLLM)
+	}
+	if _, err := os.Stat(nativePath); !os.IsNotExist(err) {
+		t.Fatalf("write_file created %s through allow_read_paths", nativePath)
+	}
+
+	writeAgent := newAgent(nil, []string{pattern})
+	writeExec, ok := writeAgent.Tools.Get("exec")
+	if !ok {
+		t.Fatal("write exec tool not registered")
+	}
+	allowedPath := filepath.Join(outside, "exec-write-via-write-allow.txt")
+	allowedResult := writeExec.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "echo PWNED > " + allowedPath,
+	})
+	if allowedResult.IsError {
+		t.Fatalf("exec should write through allow_write_paths, got: %s", allowedResult.ForLLM)
+	}
+	if _, err := os.Stat(allowedPath); err != nil {
+		t.Fatalf("exec did not create %s through allow_write_paths: %v", allowedPath, err)
 	}
 }
 
@@ -962,6 +1117,78 @@ func TestNewAgentInstance_ReadFileModeSelectsSchema(t *testing.T) {
 	}
 }
 
+func TestNewAgentInstance_ReadFileAutoModeIsDefault(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "test-model",
+			},
+		},
+		Tools: config.ToolsConfig{
+			ReadFile: config.ReadFileToolConfig{
+				Enabled:         true,
+				MaxReadFileSize: 4096,
+			},
+		},
+	}
+
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	readTool, ok := agent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read_file tool not registered")
+	}
+
+	params := readTool.Parameters()
+	props, _ := params["properties"].(map[string]any)
+	for _, key := range []string{"start_line", "max_lines", "offset", "length"} {
+		if _, ok := props[key]; !ok {
+			t.Fatalf("expected auto-mode schema to expose %s, got %#v", key, props)
+		}
+	}
+}
+
+func TestNewAgentInstance_PassesInlineBudgetToReadFileHint(t *testing.T) {
+	workspace := t.TempDir()
+	testFile := filepath.Join(workspace, "long.txt")
+	if err := os.WriteFile(testFile, []byte(strings.Repeat("x", 100)+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "test-model",
+			},
+		},
+		Tools: config.ToolsConfig{
+			MaxInlineResultChars: 4096,
+			ReadFile: config.ReadFileToolConfig{
+				Enabled:         true,
+				MaxReadFileSize: 4096,
+				MaxLineLength:   20,
+			},
+		},
+	}
+
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	readTool, ok := agent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read_file tool not registered")
+	}
+
+	result := readTool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("read_file error = %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "length=3072") {
+		t.Fatalf("expected hint page size 3072 from max_inline_result_chars, got: %s", result.ForLLM)
+	}
+}
+
 // write_file copy names append_file/edit_file only when they are registered.
 func TestNewAgentInstance_WriteFileCopyReflectsAvailableAltTools(t *testing.T) {
 	newCfg := func(editEnabled, appendEnabled bool) *config.Config {
@@ -1390,21 +1617,24 @@ func TestNewAgentInstance_RegistersMemoryToolWhenEnabled(t *testing.T) {
 
 func TestNewAgentInstance_FileToolsLeaveMemoryFilesToTheMemoryTool(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		ws := t.TempDir()
-		cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-			Workspace: ws,
-			ModelName: "test-model",
-			Memory:    config.MemoryConfig{Enabled: enabled},
-		}}}
-		cfg.Tools.WriteFile.Enabled = true
-		cfg.Tools.AppendFile.Enabled = true
-		cfg.Tools.EditFile.Enabled = true
-		agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
-
 		for name, args := range map[string]map[string]any{
 			"write_file":  {"content": "x"},
 			"append_file": {"content": "x"},
 		} {
+			// Each tool gets its own workspace: append_file creates MEMORY.md,
+			// so sharing it would make write_file fail with "already exists"
+			// depending on map iteration order.
+			ws := t.TempDir()
+			cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+				Workspace: ws,
+				ModelName: "test-model",
+				Memory:    config.MemoryConfig{Enabled: enabled},
+			}}}
+			cfg.Tools.WriteFile.Enabled = true
+			cfg.Tools.AppendFile.Enabled = true
+			cfg.Tools.EditFile.Enabled = true
+			agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
 			tool, ok := agent.Tools.Get(name)
 			if !ok {
 				t.Fatalf("%s not registered", name)

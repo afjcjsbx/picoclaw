@@ -192,6 +192,11 @@ func (p *Provider) GetDefaultModel() string {
 	return "claude-sonnet-4.6"
 }
 
+// ReplaysReasoningContent reports that this provider never sends the stored
+// ReasoningContent string back; its request builder only emits text and
+// tool_use blocks.
+func (p *Provider) ReplaysReasoningContent() bool { return false }
+
 // buildRequestBody converts internal message format to Anthropic Messages API format.
 func buildRequestBody(
 	messages []Message,

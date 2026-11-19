@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "将 PicoClaw 接入 LINE：通过 LINE Messaging API 与 Webhook 回调收发消息，含通道密钥与配置示例。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # Line

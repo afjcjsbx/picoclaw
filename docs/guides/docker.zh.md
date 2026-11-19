@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "Docker 与快速开始"
+description: "您也可以使用 Docker Compose 运行 PicoClaw，无需在本地安装任何环境。launcher 镜像包含两个二进制文件（picoclaw、picoclaw-launcher），默认启动 Web 控制台，提供基于浏览器的配置和聊天界面。"
+---
 # 🐳 Docker 与快速开始
 
 > 返回 [README](../project/README.zh.md)

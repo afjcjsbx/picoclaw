@@ -1,3 +1,6 @@
+---
+description: "PicoClaw prevents 429 errors from LLM provider APIs by enforcing configurable per-model request-rate limits before sending each request."
+---
 # Dynamic Rate Limiting
 
 PicoClaw prevents 429 errors from LLM provider APIs by enforcing configurable per-model request-rate limits **before** sending each request. Unlike the reactive cooldown/fallback system (which activates *after* a 429 is received), rate limiting is **proactive**: it keeps outbound QPS within the provider's free-tier or plan limits.

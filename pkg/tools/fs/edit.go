@@ -35,6 +35,7 @@ func (t *EditFileTool) Description() string {
 		"The old_text must exist exactly in the file. Prefer patch for multi-hunk edits: it accepts " +
 		"'*** Begin Patch' / '*** End Patch' with an optional '*** Update File: <path>' header, and hunk lines " +
 		"starting with ' ' (context), '-' (remove), or '+' (add). Hunks may be given in any order and each needs at least one context or removed line; a hunk with no context appends at end of file when it ends with '*** End of File'. Provide either patch or old_text/new_text, not both. " +
+		"The result includes a unified diff when the file is small enough; if the diff is truncated or skipped, call read_file to verify the change. " +
 		"Standard JSON escaping applies: \\n for newline and \\\\n for literal backslash-n."
 }
 
@@ -163,7 +164,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("content is required")
 	}
 
-	if err := appendFile(t.fs, path, content); err != nil {
+	if err := appendFile(t.fs, path, []byte(content)); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("Appended to %s", path))
@@ -213,10 +214,11 @@ func editFile(sysFs fileSystem, path, oldText, newText string) ([]byte, []byte, 
 
 // appendFile appends content through the filesystem's append implementation
 // when available, falling back to read+write for filesystems that cannot
-// append in place.
-func appendFile(sysFs fileSystem, path, appendContent string) error {
+// append in place. It takes []byte so callers that already hold the content
+// can pass a slice without copying it.
+func appendFile(sysFs fileSystem, path string, appendContent []byte) error {
 	if appender, ok := sysFs.(fileAppender); ok {
-		return appender.AppendFile(path, []byte(appendContent))
+		return appender.AppendFile(path, appendContent)
 	}
 
 	content, err := sysFs.ReadFile(path)
@@ -224,7 +226,7 @@ func appendFile(sysFs fileSystem, path, appendContent string) error {
 		return err
 	}
 
-	return sysFs.WriteFile(path, append(content, []byte(appendContent)...))
+	return sysFs.WriteFile(path, append(content, appendContent...))
 }
 
 // replaceEditContent handles the core logic of finding and replacing a single occurrence of oldText.

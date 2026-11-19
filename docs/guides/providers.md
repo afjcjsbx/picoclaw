@@ -1,6 +1,10 @@
+---
+description: "Configure PicoClaw model providers: OpenAI-compatible endpoints, Anthropic, Gemini, local models, routing, and per-task model choice."
+title: "Providers & Model Configuration"
+---
 # 🔌 Providers & Model Configuration
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ### Providers
 
@@ -409,6 +413,12 @@ picks the endpoint from the model ID prefix, so just name the model:
 }
 ```
 
+> When `provider` is set explicitly, use the bare model ID:
+> `{"provider": "opencode-go", "model": "glm-5.3-flash"}`. A redundant
+> `opencode-go/` prefix is dropped before routing and before the upstream
+> request, so `{"provider": "opencode-go", "model": "opencode-go/glm-5.3-flash"}`
+> keeps working as well.
+>
 > `api_base` is optional and defaults to `https://opencode.ai/inference/go`.
 > OpenCode Go rejects requests without an `x-opencode-session` header, so
 > PicoClaw always sends it: the conversation session key during a chat turn, or
@@ -773,5 +783,5 @@ picoclaw agent -m "Hello"
 ---
 
 <div align="center">
-  <img src="../../assets/logo.jpg" alt="PicoClaw Meme" width="512">
+  <img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/logo.jpg" alt="PicoClaw Meme" width="512">
 </div>

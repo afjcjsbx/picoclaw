@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "MQTT 渠道"
+description: "PicoClaw 支持将任意 MQTT 客户端作为消息渠道。设备或服务向 Broker 发布请求，PicoClaw 订阅后处理并将响应发布回去。"
+---
 # 📡 MQTT 渠道
 
 PicoClaw 支持将任意 MQTT 客户端作为消息渠道。设备或服务向 Broker 发布请求，PicoClaw 订阅后处理并将响应发布回去。

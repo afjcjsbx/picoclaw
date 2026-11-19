@@ -5,10 +5,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sipeed/picoclaw/pkg/constants"
 )
 
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
@@ -40,12 +43,20 @@ type ProcessSession struct {
 	ExitTime     int64
 	ExitCode     int
 	Status       string
+	ownerAgentID string
+	ownerChannel string
+	ownerChatID  string
 	stdinWriter  io.Writer
 	stdoutPipe   io.Reader
 	outputBuffer *bytes.Buffer
 	outputBase   int64
 	totalOutput  int64
 	ptyMaster    *os.File
+
+	// spill receives the full session stream once the in-memory window
+	// overflows. Its path is the artifact returned to the model; the file is
+	// capped at maxOutputSpillBytes like a foreground artifact.
+	spill spillFile
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -105,22 +116,10 @@ func (s *ProcessSession) GetStatus() string {
 	return s.Status
 }
 
-func (s *ProcessSession) SetStatus(status string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Status = status
-}
-
 func (s *ProcessSession) GetExitCode() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ExitCode
-}
-
-func (s *ProcessSession) SetExitCode(code int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ExitCode = code
 }
 
 func (s *ProcessSession) killProcess() error {
@@ -180,6 +179,12 @@ func (s *ProcessSession) finishLocked(exitCode int) {
 	if !s.doneClosed {
 		close(s.done)
 		s.doneClosed = true
+	}
+	// A non-PTY reader calls finish after its last append, so the artifact can
+	// be closed now. PTY readers can deliver a final tail after Wait returns;
+	// their descriptor is released by the session cleanup instead.
+	if !s.PTY {
+		_ = s.spill.close()
 	}
 }
 
@@ -284,7 +289,9 @@ func (s *ProcessSession) Write(data string) error {
 
 // appendOutput appends p to the rolling session log. The retained window is
 // capped at maxOutputBufferSize; dropped prefixes move outputBase forward so
-// absolute offsets remain stable for ReadRange callers.
+// absolute offsets remain stable for ReadRange callers. The first overflow
+// opens an artifact and writes the full stream so far; later overflow writes
+// only the dropped prefix.
 func (s *ProcessSession) appendOutput(p []byte) {
 	if len(p) == 0 {
 		return
@@ -297,11 +304,37 @@ func (s *ProcessSession) appendOutput(p []byte) {
 	}
 	s.totalOutput += int64(len(p))
 	_, _ = s.outputBuffer.Write(p)
-	if s.outputBuffer.Len() > maxOutputBufferSize {
-		drop := s.outputBuffer.Len() - maxOutputBufferSize
-		s.outputBuffer.Next(drop)
-		s.outputBase += int64(drop)
+	if s.outputBuffer.Len() <= maxOutputBufferSize {
+		return
 	}
+
+	// The opening snapshot already contains the bytes appended so far (the
+	// buffer includes p). Every later chunk is written immediately, so the
+	// artifact is always the complete stream and trimming the buffer no longer
+	// needs to copy dropped bytes.
+	if s.spill.active() {
+		s.spill.write(p)
+	} else {
+		s.spill.start(s.outputBuffer.Bytes())
+	}
+
+	drop := s.outputBuffer.Len() - maxOutputBufferSize
+	s.outputBuffer.Next(drop)
+	s.outputBase += int64(drop)
+}
+
+// SpillInfo returns the session artifact path and whether it reached the size
+// cap. Both values are set only after the in-memory window overflows.
+func (s *ProcessSession) SpillInfo() (path string, capped bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.spill.path, s.spill.capped
+}
+
+func (s *ProcessSession) closeSpill() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.spill.close()
 }
 
 // Read returns the retained output without consuming it. The idle counter is
@@ -388,14 +421,25 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 	defer s.mu.Unlock()
 
 	return SessionInfo{
-		ID:        s.ID,
-		Command:   s.Command,
-		Status:    s.Status,
-		PID:       s.PID,
-		StartedAt: s.StartTime,
-		ExitCode:  s.ExitCode,
-		ExitedAt:  s.ExitTime,
+		ID:           s.ID,
+		Command:      s.Command,
+		Status:       s.Status,
+		PID:          s.PID,
+		StartedAt:    s.StartTime,
+		ExitCode:     s.ExitCode,
+		ExitedAt:     s.ExitTime,
+		ArtifactPath: s.spill.path,
 	}
+}
+
+// isOwnedBy reports whether the session belongs to the caller identified by
+// agentID, channel and chatID. Ownership is recorded when the session starts.
+func (s *ProcessSession) isOwnedBy(agentID, channel, chatID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ownerAgentID == agentID &&
+		s.ownerChannel == strings.TrimSpace(channel) &&
+		s.ownerChatID == chatID
 }
 
 // retentionTime returns the session's terminal state and the timestamp the
@@ -462,6 +506,7 @@ func (sm *SessionManager) cleanupOldSessions() {
 	for id, session := range sm.sessions {
 		done, ts := session.retentionTime()
 		if done && ts < cutoff.Unix() {
+			session.closeSpill()
 			delete(sm.sessions, id)
 		}
 	}
@@ -485,6 +530,26 @@ func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {
 	return session, nil
 }
 
+// GetForCaller returns a session only when the caller may access it. Internal
+// channels can see every session; remote callers can only access sessions
+// created by the same agent, channel and chat. Unauthorized lookups return
+// ErrSessionNotFound so callers cannot probe for session existence.
+func (sm *SessionManager) GetForCaller(
+	sessionID, agentID, channel, chatID string,
+) (*ProcessSession, error) {
+	session, err := sm.Get(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if constants.IsInternalChannel(strings.TrimSpace(channel)) {
+		return session, nil
+	}
+	if !session.isOwnedBy(agentID, channel, chatID) {
+		return nil, ErrSessionNotFound
+	}
+	return session, nil
+}
+
 func (sm *SessionManager) Remove(sessionID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -497,6 +562,24 @@ func (sm *SessionManager) List() []SessionInfo {
 
 	result := make([]SessionInfo, 0, len(sm.sessions))
 	for _, session := range sm.sessions {
+		result = append(result, session.ToSessionInfo())
+	}
+
+	return result
+}
+
+// ListForCaller returns the sessions visible to the caller. Internal channels
+// see everything; remote callers only see sessions they own.
+func (sm *SessionManager) ListForCaller(agentID, channel, chatID string) []SessionInfo {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	showAll := constants.IsInternalChannel(strings.TrimSpace(channel))
+	result := make([]SessionInfo, 0, len(sm.sessions))
+	for _, session := range sm.sessions {
+		if !showAll && !session.isOwnedBy(agentID, channel, chatID) {
+			continue
+		}
 		result = append(result, session.ToSessionInfo())
 	}
 

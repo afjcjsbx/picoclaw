@@ -521,18 +521,19 @@ export function ExecSection({ form, onFieldChange }: ExecSectionProps) {
       .split("\n")
       .map((p) => p.trim())
       .filter((p) => p.length > 0)
-    const denyPatterns = form.enableDenyPatterns
-      ? form.customDenyPatternsText
-          .split("\n")
-          .map((p) => p.trim())
-          .filter((p) => p.length > 0)
-      : []
+    const denyPatterns = form.customDenyPatternsText
+      .split("\n")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
 
     setIsLoading(true)
     try {
       const res = await fetch("/api/config/test-command-patterns", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+        },
         body: JSON.stringify({
           allow_patterns: allowPatterns,
           deny_patterns: denyPatterns,
@@ -583,23 +584,21 @@ export function ExecSection({ form, onFieldChange }: ExecSectionProps) {
             }
           />
 
-          {form.enableDenyPatterns && (
-            <Field
-              label={t("pages.config.custom_deny_patterns")}
-              hint={t("pages.config.custom_deny_patterns_hint")}
-              layout="setting-row"
-              controlClassName="md:max-w-md"
-            >
-              <Textarea
-                value={form.customDenyPatternsText}
-                placeholder={t("pages.config.custom_patterns_placeholder")}
-                className="min-h-[88px]"
-                onChange={(e) =>
-                  onFieldChange("customDenyPatternsText", e.target.value)
-                }
-              />
-            </Field>
-          )}
+          <Field
+            label={t("pages.config.custom_deny_patterns")}
+            hint={t("pages.config.custom_deny_patterns_hint")}
+            layout="setting-row"
+            controlClassName="md:max-w-md"
+          >
+            <Textarea
+              value={form.customDenyPatternsText}
+              placeholder={t("pages.config.custom_patterns_placeholder")}
+              className="min-h-[88px]"
+              onChange={(e) =>
+                onFieldChange("customDenyPatternsText", e.target.value)
+              }
+            />
+          </Field>
 
           <Field
             label={t("pages.config.custom_allow_patterns")}

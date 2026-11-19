@@ -1,0 +1,37 @@
+# Jekyll configuration for the PicoClaw documentation site.
+#
+# GitHub Pages builds this directory in "legacy" mode. That mode already
+# enables a fixed plugin set (github-pages lib/github-pages/plugins.rb,
+# DEFAULT_PLUGINS) and unions it with whatever is listed here, so the entries
+# below are additive and cannot disable the defaults. Both jekyll-seo-tag and
+# jekyll-sitemap are on the GitHub Pages plugin whitelist.
+#
+# url and baseurl are intentionally not set: GitHub Pages derives them from
+# the repository, and hardcoding them would go stale on a rename or a move to
+# a custom domain.
+#
+# This file does not change any page URL: the theme is already
+# jekyll-theme-primer through the GitHub Pages defaults and stays unchanged.
+
+title: PicoClaw
+
+description: >-
+  Documentation for PicoClaw, an ultra-lightweight open-source personal AI
+  assistant in Go for RISC-V, ARM and other single-board computers. Setup,
+  configuration, model providers, chat apps, tools, MCP, memory, plugins, and
+  runtime architecture.
+
+lang: en-US
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# jekyll-readme-index only rewrites a README into its directory index when the
+# README is a static file, that is when it has no front matter. Hub pages such
+# as guides/README.md now carry a per-page description, so they are Pages and
+# would otherwise stop being published as guides/index.html. This flag makes
+# the plugin treat READMEs with front matter the same way, keeping every
+# existing directory URL intact.
+readme_index:
+  with_frontmatter: true

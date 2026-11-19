@@ -1,3 +1,6 @@
+---
+description: "PicoClaw Gateway HTTP API: the two built-in servers, health and readiness endpoints, the chat WebSocket protocol, and authentication."
+---
 # Gateway HTTP API
 
 PicoClaw exposes two HTTP servers:

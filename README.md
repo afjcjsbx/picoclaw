@@ -9,14 +9,14 @@
 _Small on purpose. Small is not lesser. Small is enough._
 
 <p>
-  <img src="https://img.shields.io/badge/Go-1.27.3+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go 1.27.3+">
+  <img src="https://img.shields.io/badge/Go-1.27.4+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go 1.27.4+">
   <img src="https://img.shields.io/badge/Platforms-x86__64%20%7C%20ARM64%20%7C%20MIPS%20%7C%20RISC--V%20%7C%20LoongArch-blue" alt="Supported platforms">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
   <img src="https://img.shields.io/github/v/release/afjcjsbx/picoclaw?style=flat&label=release" alt="Latest release">
   <img src="https://img.shields.io/github/stars/afjcjsbx/picoclaw?style=flat&label=stars" alt="GitHub stars">
   <br>
   <a href="https://afjcjsbx.github.io/picoclaw/"><img src="https://img.shields.io/badge/Docs-Read-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Documentation"></a>
-  <a href="https://discord.gg/bEuEDnKpf"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/XTt5Y6cJfY"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://deepwiki.com/afjcjsbx/picoclaw"><img src="https://img.shields.io/badge/Wiki-DeepWiki-FFA500?style=flat&logo=wikipedia&logoColor=white" alt="DeepWiki"></a>
 </p>
 
@@ -30,7 +30,7 @@ _Small on purpose. Small is not lesser. Small is enough._
 ---
 
 <p align="center">
-  <a href="https://discord.gg/bEuEDnKpf">
+  <a href="https://discord.gg/XTt5Y6cJfY">
     <img src="assets/discord-banner.png" alt="PicoClaw on Discord — meet builders, share ideas, get help" width="80%">
   </a>
 </p>
@@ -39,7 +39,18 @@ _Small on purpose. Small is not lesser. Small is enough._
 
 **PicoClaw** is an ultra-lightweight personal AI assistant written entirely in **Go** — not a fork of OpenClaw, NanoBot, or any other agent framework. Inspired by [NanoBot](https://github.com/HKUDS/nanobot), it was rebuilt from the ground up through a "self-bootstrapping" process: the agent itself drove the architecture migration and code optimization.
 
-This repository is the actively maintained, community-driven continuation of the project, with ongoing fixes, dependency updates, and new features.
+This repository is the actively maintained, community-driven continuation of [`sipeed/picoclaw`](https://github.com/sipeed/picoclaw), with ongoing fixes, dependency updates, and new features.
+
+### Maintenance status
+
+| | Upstream `sipeed/picoclaw` | This fork |
+| --- | --- | --- |
+| Latest release | [![upstream release](https://img.shields.io/github/v/release/sipeed/picoclaw?label=release&color=blue)](https://github.com/sipeed/picoclaw/releases) | [![fork release](https://img.shields.io/github/v/release/afjcjsbx/picoclaw?label=release&color=green)](https://github.com/afjcjsbx/picoclaw/releases) |
+| Last commit on `main` | [![upstream last commit](https://img.shields.io/github/last-commit/sipeed/picoclaw/main?label=last%20commit)](https://github.com/sipeed/picoclaw/commits/main) | [![fork last commit](https://img.shields.io/github/last-commit/afjcjsbx/picoclaw/main?label=last%20commit)](https://github.com/afjcjsbx/picoclaw/commits/main) |
+
+The badges are rendered by shields.io from GitHub, so the table updates automatically. Upstream still receives issue and pull-request activity; the badges describe release and `main`-branch activity, not whether the upstream project is archived.
+
+See [maintenance status](docs/project/maintenance-status.md) for the current comparison and [migration notes](docs/migration/from-sipeed-picoclaw.md) if you are switching from upstream.
 
 **Runs on $10 hardware. Uses 10–20 MB of RAM. Boots in under a second.**
 
@@ -119,7 +130,7 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 
 Prerequisites:
 
-- Go 1.27.3+
+- Go 1.27.4+
 - Node.js 22+ and pnpm 10.33.0+ for Web UI and launcher builds
 
 ```bash
@@ -487,6 +498,7 @@ Connect PicoClaw to the Agent Social Network by sending a single message via the
 | `picoclaw agent`          | Interactive chat mode                |
 | `picoclaw gateway`        | Start the gateway                    |
 | `picoclaw status`         | Show status                          |
+| `picoclaw usage`          | Show session token usage and cost    |
 | `picoclaw version`        | Show version info                    |
 | `picoclaw model`          | View or switch the default model     |
 | `picoclaw mcp list`       | List configured MCP servers          |
@@ -502,6 +514,58 @@ Connect PicoClaw to the Agent Social Network by sending a single message via the
 | `picoclaw skills install` | Install a skill                      |
 | `picoclaw migrate`        | Migrate data from older versions     |
 | `picoclaw auth login`     | Authenticate with providers          |
+
+### Chat commands
+
+Slash commands work in interactive CLI mode and in connected chat channels:
+
+| Command | Description |
+| --- | --- |
+| `/start` | Start the bot. |
+| `/help [command]` | Show all commands or detailed help for one command. |
+| `/stop` | Stop the current task. |
+| `/show [model\|channel\|agents\|mcp <server>]` | Show current configuration. |
+| `/list [model\|models\|channels\|agents\|skills\|mcp\|plugins]` | List available options. |
+| `/switch model <index\|name>` | Switch the active model. |
+| `/check channel <name>` | Check whether a channel is available. |
+| `/context` | Show session context and token usage. |
+| `/usage` (alias `/cost`) | Show token usage and cost for this session, with a per-model split when several models were used. |
+| `/compact [--force] [focus]` | Compact conversation context, optionally focusing the summary. |
+| `/clear` (alias `/new`) | Clear the chat history. |
+| `/subagents` | Show running tasks and subagents in this chat. |
+| `/use <skill> [message]` | Force an installed skill for one request. |
+| `/voice [off\|on\|tts\|status]` | Set automatic text-to-speech mode. |
+| `/reload` | Reload the configuration file. |
+| `/<name> [arguments]` | Run a [custom prompt command](docs/guides/custom-commands.md) from the workspace or global `commands/` directory. |
+
+Use `/help <command>` for usage details. Availability depends on the channel; unsupported commands return an explicit error.
+
+### Custom prompt commands
+
+You can build your own slash commands as Markdown files. Workspace commands live in `<workspace>/commands/`; global commands live in `~/.picoclaw/commands/`. Nested directories become nested command names, so `commands/team/review.md` becomes `/team/review`.
+
+```md
+---
+description: Review code for correctness
+---
+
+Review $ARGUMENTS for bugs and missing tests.
+```
+
+Invoke it like any other command:
+
+```text
+/review src/auth.ts
+```
+
+| Template feature | Behavior |
+| --- | --- |
+| `$ARGUMENTS` | Inserts the complete argument string as entered, including quotes. |
+| `$1`, `$2`, ... | Inserts positional arguments; quotes group words, and the highest placeholder consumes the rest. |
+| No placeholder | Appends non-empty arguments after a blank line. |
+| `description` frontmatter | Shown in `/help` and the Web UI command palette. |
+
+Workspace commands override global commands with the same name, while built-in commands always win. Custom commands appear in `/help` on every channel; the Web UI, Telegram, and Discord also list compatible names in their command menus. See [Custom Prompt Commands](docs/guides/custom-commands.md) for precedence, examples, and limitations.
 
 ### Scheduled tasks and reminders
 
@@ -520,6 +584,7 @@ For detailed guides beyond this README:
 | Topic | Description |
 |-------|-------------|
 | [Docker & Quick Start](docs/guides/docker.md) | Docker Compose setup, launcher/agent modes |
+| [Web UI & Launcher](docs/guides/webui.md) | Browser-based configuration, chat, remote access, tray, and logs |
 | [Chat Apps](docs/guides/chat-apps.md) | All 19+ channel setup guides |
 | [Configuration](docs/guides/configuration.md) | Environment variables, workspace layout, security sandbox |
 | [Plugin Installation](docs/guides/plugins.md) | Install and activate Agent Plugin packages |
@@ -529,12 +594,14 @@ For detailed guides beyond this README:
 | [Scheduled Tasks and Cron Jobs](docs/reference/cron.md) | Cron schedule types, deliver modes, command gates, job storage |
 | [Providers & Models](docs/guides/providers.md) | 30+ LLM providers, model routing, `model_list` configuration |
 | [Spawn & Async Tasks](docs/guides/spawn-tasks.md) | Quick tasks, long tasks with spawn, async sub-agent orchestration |
-| [Hooks](docs/architecture/hooks/README.md) | Event-driven hook system: observers, interceptors, approval hooks |
+| [Hooks](docs/architecture/hooks/) | Event-driven hook system: observers, interceptors, approval hooks |
 | [Steering](docs/architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](docs/architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
 | [Troubleshooting](docs/operations/troubleshooting.md) | Common issues and solutions |
 | [Tools Configuration](docs/reference/tools_configuration.md) | Tool switches, exec policies, path policies, MCP, skills |
 | [Hardware Compatibility](docs/guides/hardware-compatibility.md) | Tested boards, minimum requirements |
+| [Maintenance Status](docs/project/maintenance-status.md) | Upstream vs fork release dates and migration path |
+| [Migrating from sipeed/picoclaw](docs/migration/from-sipeed-picoclaw.md) | Back up, install, and verify the fork |
 
 ## Contributing
 
@@ -544,4 +611,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 **PicoClaw is built in the open. Come build it with us.**
 
-[⭐ Star PicoClaw](https://github.com/afjcjsbx/picoclaw) · [💬 Join Discord](https://discord.gg/bEuEDnKpf) · [🐛 Report an issue](https://github.com/afjcjsbx/picoclaw/issues)
+[⭐ Star PicoClaw](https://github.com/afjcjsbx/picoclaw) · [💬 Join Discord](https://discord.gg/XTt5Y6cJfY) · [🐛 Report an issue](https://github.com/afjcjsbx/picoclaw/issues)
+
+## Support PicoClaw
+
+PicoClaw is free and open source. If it saves you time — or gives an old machine a second life — you can help keep development going:
+
+- ☕ **Ko-fi:** [ko-fi.com/afjcjsbx](https://ko-fi.com/afjcjsbx)
+- 💸 **PayPal:** [paypal.me/afjcjsbx](https://paypal.me/afjcjsbx)
+- 🖥️ **Old hardware to spare?** Don't throw it away — donate it and we'll use it to test PicoClaw on real devices and widen hardware support.
+
+All donations are reinvested directly into PicoClaw development: testing, hardware, and infrastructure.

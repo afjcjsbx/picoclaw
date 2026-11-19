@@ -130,6 +130,16 @@ func DisableConsole() {
 	logger = logger.Output(io.MultiWriter(writers...))
 }
 
+// RedirectConsole sends console log lines to w instead of stdout. Commands that
+// write machine-readable output use it so log lines cannot corrupt stdout.
+func RedirectConsole(w io.Writer) {
+	mu.Lock()
+	defer mu.Unlock()
+	consoleWriter.Out = w
+	writers[0] = consoleWriter
+	logger = logger.Output(io.MultiWriter(writers...))
+}
+
 func EnableConsole() {
 	mu.Lock()
 	defer mu.Unlock()

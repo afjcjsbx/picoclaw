@@ -49,7 +49,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		return "", err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", err
+		al.warnMCPInitFailure(err)
 	}
 
 	senderID := "direct"
@@ -80,7 +80,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 		return "", err
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", err
+		al.warnMCPInitFailure(err)
 	}
 
 	agent := al.GetRegistry().GetDefaultAgent()
@@ -211,6 +211,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		EnableSummary:           true,
 		SendResponse:            false,
 		AllowInterimPicoPublish: true,
+		JoinSubTurns:            msg.Channel == "cli",
 	}
 	var err error
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)

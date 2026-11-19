@@ -80,6 +80,7 @@ type toolBatch struct {
 	messages           []providers.Message
 	handledAttachments []providers.Attachment
 	feedback           *toolFeedbackBatch
+	toolMessages       int // tool messages appended so far; the last one carries the budget notice
 
 	loopStatus loopStatus
 	loopCount  int
@@ -130,6 +131,10 @@ func (b *toolBatch) skipRemainingForLoop(start int) {
 // appendToolMessage adds msg to the turn and, unless the turn is history-less,
 // to the session store. ingest also hands it to the context manager.
 func (b *toolBatch) appendToolMessage(msg providers.Message, ingest bool) {
+	b.toolMessages++
+	if b.toolMessages == len(b.calls) {
+		msg.Content += b.budgetNotice() + b.runBudgetNotice()
+	}
 	b.messages = append(b.messages, msg)
 	if b.ts.opts.NoHistory {
 		return
@@ -143,6 +148,34 @@ func (b *toolBatch) appendToolMessage(msg providers.Message, ingest bool) {
 	if ingest {
 		b.ts.ingestMessage(b.turnCtx, b.al, msg)
 	}
+}
+
+// budgetNotice returns the iteration-budget checkpoint the first time the turn
+// reaches the agent's warning iteration, "" otherwise. It rides on the last
+// tool result of the batch so it is persisted with it and survives compaction
+// rebuilds, and it adds no message of its own.
+func (b *toolBatch) budgetNotice() string {
+	at := b.ts.agent.BudgetWarnAt
+	if at == 0 || b.iteration < at || b.exec.budgetWarned {
+		return ""
+	}
+	b.exec.budgetWarned = true
+	return "\n\n" + fmt.Sprintf(iterationBudgetWarningTemplate, b.iteration, b.ts.agent.MaxIterations)
+}
+
+// runBudgetNotice returns the wall-clock wrap-up once the turn has used the
+// warning share of its run budget, "" before that. Like budgetNotice it rides on
+// the last tool result and the latch closes only when it is attached, so
+// elapsed time with no tool result to carry it retries at the next batch. Only
+// root turns count; a sub-turn has no budget of its own.
+func (b *toolBatch) runBudgetNotice() string {
+	a := b.ts.agent
+	if a.RunBudget <= 0 || b.ts.parentTurnState != nil || b.exec.runBudgetWarned ||
+		time.Since(b.ts.startedAt) < a.RunBudgetWarnAfter {
+		return ""
+	}
+	b.exec.runBudgetWarned = true
+	return "\n\n" + runBudgetNotice
 }
 
 // denyByProfile marks pc denied when the active turn profile forbids the tool.
@@ -266,9 +299,9 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 		ts.sessionKey,
 		ts.opts.Dispatch.SessionScope,
 	)
-	if ts.parentTurnState != nil {
-		// SubTurns join their async children before finishing; root turns
-		// keep the fire-and-forget follow-up via the bus.
+	if ts.parentTurnState != nil || ts.joinSubTurns {
+		// SubTurns and CLI root turns join their async children before
+		// finishing; other root turns keep the fire-and-forget follow-up.
 		pc.execCtx = tools.WithChildTracker(pc.execCtx, ts)
 	}
 	return pc, toolStepContinue

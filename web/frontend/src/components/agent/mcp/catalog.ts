@@ -29,6 +29,13 @@ export interface MCPCatalogField {
   target: MCPCatalogFieldTarget
 }
 
+export interface MCPCatalogEntryIcon {
+  // Simple Icons slug used to load the brand logo, for example "github".
+  slug?: string
+  // Domain used as a favicon fallback when no Simple Icons logo is available.
+  domain?: string
+}
+
 export interface MCPCatalogEntry {
   // name is also the key used in tools.mcp.servers
   name: string
@@ -36,6 +43,7 @@ export interface MCPCatalogEntry {
   description: string
   category: MCPCatalogCategory
   docsUrl: string
+  icon?: MCPCatalogEntryIcon
   requires?: string
   transport: "stdio" | "http"
   command?: string

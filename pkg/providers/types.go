@@ -13,6 +13,7 @@ type (
 	LLMResponse            = protocoltypes.LLMResponse
 	StreamChunk            = protocoltypes.StreamChunk
 	UsageInfo              = protocoltypes.UsageInfo
+	ModelUsage             = protocoltypes.ModelUsage
 	Message                = protocoltypes.Message
 	ToolDefinition         = protocoltypes.ToolDefinition
 	ToolFunctionDefinition = protocoltypes.ToolFunctionDefinition
@@ -69,6 +70,15 @@ type StreamingEventProvider interface {
 // when thinking_level is configured but the active provider cannot use it.
 type ThinkingCapable interface {
 	SupportsThinking() bool
+}
+
+// ReasoningReplayCapable is an optional interface for providers that know
+// whether assistant reasoning_content is sent back to the model on replay.
+// Providers that strip it (for example opencode-go's OpenAI-compatible chat
+// route) should return false so context estimators do not count tokens the
+// model never receives.
+type ReasoningReplayCapable interface {
+	ReplaysReasoningContent() bool
 }
 
 // NativeSearchCapable is an optional interface for providers that support

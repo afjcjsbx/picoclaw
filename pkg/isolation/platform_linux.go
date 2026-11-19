@@ -4,7 +4,6 @@ package isolation
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,6 +39,11 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 			disableHint,
 		)
 	}
+	if versionErr := checkBwrapVersion(bwrapPath, func(path string, args ...string) ([]byte, error) {
+		return exec.Command(path, args...).Output()
+	}); versionErr != nil {
+		return versionErr
+	}
 	if cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
@@ -54,6 +58,10 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	if err != nil {
 		return err
 	}
+	// Resolve any symlink components so bwrap can use the directory as a
+	// mount target. bwrap >= 0.12 rejects symlink paths with
+	// "Can't mount on symlink destination".
+	execDir = resolveLinuxExecDir(execDir)
 	resolvedPath, err := resolveLinuxCommandPath(originalPath, execDir)
 	if err != nil {
 		return err
@@ -66,11 +74,11 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	plan = appendLinuxCommandMountRules(plan, resolvedPath)
 	if execDir != "" {
 		plan = ensureLinuxMountRule(plan, execDir, execDir, "rw")
-		if resolved, resolveErr := filepath.EvalSymlinks(execDir); resolveErr == nil && resolved != execDir {
-			plan = ensureLinuxMountRule(plan, resolved, resolved, "rw")
-		}
 	}
 	plan = appendLinuxArgumentMounts(plan, originalArgs[1:])
+	if guardErr := checkSymlinkMountTargets(plan); guardErr != nil {
+		return guardErr
+	}
 	logger.DebugCF("isolation", "linux isolation mount plan",
 		map[string]any{
 			"root":        root,
@@ -81,6 +89,9 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	bwrapArgs, err := buildLinuxBwrapArgs(originalPath, resolvedPath, originalArgs, execDir, plan, namespaceFlags)
 	if err != nil {
 		return err
+	}
+	if isolation.BlockNetwork {
+		bwrapArgs = insertLinuxUnshareNet(bwrapArgs)
 	}
 
 	cmd.Path = bwrapPath
@@ -125,15 +136,22 @@ var linuxNamespaceProbe struct {
 
 func cachedLinuxNamespaceFlags(bwrapPath string) (map[string]bool, error) {
 	linuxNamespaceProbe.once.Do(func() {
+		run := func(path string, args ...string) ([]byte, error) {
+			var stderr bytes.Buffer
+			cmd := exec.Command(path, args...)
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			return stderr.Bytes(), err
+		}
+		// PID namespace is required: fail closed if the probe fails rather than
+		// running without it and silently sharing the host PID table.
+		if err := probeLinuxPIDNamespace(bwrapPath, run); err != nil {
+			linuxNamespaceProbe.err = err
+			return
+		}
 		linuxNamespaceProbe.flags, linuxNamespaceProbe.err = probeLinuxNamespaceFlags(
 			bwrapPath,
-			func(path string, args ...string) ([]byte, error) {
-				var stderr bytes.Buffer
-				cmd := exec.Command(path, args...)
-				cmd.Stderr = &stderr
-				err := cmd.Run()
-				return stderr.Bytes(), err
-			},
+			run,
 		)
 		if linuxNamespaceProbe.err != nil {
 			return
@@ -200,13 +218,29 @@ func buildLinuxBwrapArgs(
 	bwrapArgs := []string{
 		"bwrap",
 		"--die-with-parent",
+		// --new-session calls setsid(2) in the sandbox so it has no controlling
+		// terminal and cannot inject characters into the caller's terminal via
+		// TIOCSTI (CVE-2017-5226).
+		"--new-session",
 	}
+	bwrapArgs = append(bwrapArgs, "--unshare-pid")
 	for _, flag := range linuxOptionalNamespaceFlags {
 		if namespaceFlags[flag] {
 			bwrapArgs = append(bwrapArgs, flag)
 		}
 	}
 	bwrapArgs = append(bwrapArgs, "--proc", "/proc", "--dev", "/dev")
+	// Drop all capabilities unconditionally so the sandboxed process cannot
+	// exercise Linux privileges it may have inherited from the caller.
+	bwrapArgs = append(bwrapArgs, "--cap-drop", "ALL")
+	// When running as root, bwrap does not create a user namespace by itself.
+	// Without one the process retains the full host capability set even after
+	// --cap-drop because the kernel only checks CapEff inside a user namespace.
+	// --unshare-user creates a new user namespace where the process appears as
+	// uid 0 but holds no host capabilities (CapEff stays all-zero).
+	if linuxEUID() == 0 {
+		bwrapArgs = append(bwrapArgs, "--unshare-user")
+	}
 	for _, rule := range plan {
 		flag, err := linuxBindFlag(rule)
 		if err != nil {
@@ -267,43 +301,24 @@ func appendLinuxArgumentMounts(plan []MountRule, args []string) []MountRule {
 		if !ok {
 			continue
 		}
-		clean := filepath.Clean(path)
-		if _, err := os.Stat(clean); err == nil {
-			// Absolute path arguments are exposed read-only: a directory passed
-			// on the command line must not become a writable hole in the
-			// sandbox. Writable locations come from expose_paths or the cwd.
-			plan = ensureLinuxMountRule(plan, clean, clean, "ro")
-			if resolved, resolveErr := filepath.EvalSymlinks(clean); resolveErr == nil && resolved != clean {
-				plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
-			}
-			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		parent := filepath.Dir(clean)
-		if parent == clean {
-			continue
-		}
-		if _, err := os.Stat(parent); err == nil {
-			plan = ensureLinuxMountRule(plan, parent, parent, "rw")
-		}
+		plan = appendLinuxArgumentMountsFor(plan, path)
 	}
 	return plan
 }
 
 func linuxArgumentPath(arg string) (string, bool) {
-	if filepath.IsAbs(arg) {
-		return arg, true
+	// Plain absolute path token: must contain no shell metacharacters so that
+	// command strings like "cat /home/bob/x; rm -rf /" are never treated as
+	// paths. See isLinuxArgPathCandidate in arg_mounts_linux.go.
+	if path, ok := isLinuxArgPathCandidate(arg); ok {
+		return path, true
 	}
+	// --flag=value form: extract the value and apply the same candidate check.
 	idx := strings.IndexRune(arg, '=')
 	if idx <= 0 || idx == len(arg)-1 {
 		return "", false
 	}
-	value := arg[idx+1:]
-	if !filepath.IsAbs(value) {
-		return "", false
-	}
-	return value, true
+	return isLinuxArgPathCandidate(arg[idx+1:])
 }
 
 func isRelativeCommandPath(path string) bool {

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -54,6 +55,7 @@ type issue3445FinalProvider struct {
 	mu      sync.Mutex
 	calls   int
 	content string
+	usage   *providers.UsageInfo
 }
 
 func (p *issue3445FinalProvider) Chat(
@@ -66,7 +68,7 @@ func (p *issue3445FinalProvider) Chat(
 	p.mu.Lock()
 	p.calls++
 	p.mu.Unlock()
-	return &providers.LLMResponse{Content: p.content, FinishReason: "stop"}, nil
+	return &providers.LLMResponse{Content: p.content, FinishReason: "stop", Usage: p.usage}, nil
 }
 
 func (p *issue3445FinalProvider) GetDefaultModel() string { return "primary-model" }
@@ -96,6 +98,55 @@ func configureIssue3445Routing(
 		EscalationPromptTokens:   promptTokens,
 		EscalationToolIterations: toolIterations,
 	})
+}
+
+func TestRunTurn_EscalationKeepsUsagePerModel(t *testing.T) {
+	primary := &issue3445FinalProvider{
+		content: "primary answer",
+		usage:   &providers.UsageInfo{PromptTokens: 500, CompletionTokens: 20, TotalTokens: 520, Requests: 1},
+	}
+	light := &issue3445ToolProvider{usagePromptTokens: 100}
+	al, agent, cleanup := newTurnCoordTestLoop(t, primary)
+	defer cleanup()
+
+	configureIssue3445Routing(agent, light, 0, 3)
+	agent.MaxIterations = 5
+
+	ts := newTurnState(agent, makeTestProcessOpts("test-escalation-usage"), turnEventScope{
+		turnID:  "turn-escalation-usage",
+		context: newTurnContext(nil, nil, nil),
+	})
+	if _, err := al.runTurn(context.Background(), ts, NewPipeline(al)); err != nil {
+		t.Fatalf("runTurn failed: %v", err)
+	}
+
+	history, err := agent.Sessions.GetHistory(context.Background(), ts.sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	var turnUsage *providers.UsageInfo
+	for _, msg := range history {
+		if msg.Role == "assistant" && msg.Content == "primary answer" {
+			turnUsage = msg.Usage
+		}
+	}
+	if turnUsage == nil {
+		t.Fatal("final assistant message has no usage")
+	}
+	if turnUsage.Requests != 4 || turnUsage.PromptTokens != 800 {
+		t.Fatalf("turn usage = %d calls, %d prompt tokens; want 4 calls and 800 prompt tokens",
+			turnUsage.Requests, turnUsage.PromptTokens)
+	}
+	want := []providers.ModelUsage{
+		{Model: "light-model", Usage: providers.UsageInfo{Requests: 3, PromptTokens: 300}},
+		{
+			Model: "primary-model",
+			Usage: providers.UsageInfo{Requests: 1, PromptTokens: 500, CompletionTokens: 20, TotalTokens: 520},
+		},
+	}
+	if !reflect.DeepEqual(turnUsage.ByModel, want) {
+		t.Fatalf("ByModel = %+v, want %+v", turnUsage.ByModel, want)
+	}
 }
 
 func TestRunTurn_EscalatesLightModelAfterToolStreak(t *testing.T) {

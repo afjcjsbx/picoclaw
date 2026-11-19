@@ -31,6 +31,8 @@ func DefaultConfig() *Config {
 				MaxTokens:                 32768,
 				Temperature:               nil, // nil means use provider default
 				MaxToolIterations:         50,
+				MaxToolBudgetWarningRatio: DefaultMaxToolBudgetWarningRatio,
+				RunBudgetWarningThreshold: DefaultRunBudgetWarningThreshold,
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
 				SteeringMode:              "one-at-a-time",
@@ -344,6 +346,8 @@ func DefaultConfig() *Config {
 			FilterSensitiveData:  true,
 			FilterMinLength:      8,
 			MaxInlineResultChars: DefaultMaxInlineResultChars,
+			ArtifactMaxFiles:     DefaultArtifactMaxFiles,
+			ArtifactMaxAgeHours:  DefaultArtifactMaxAgeHours,
 			MediaCleanup: MediaCleanupConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
@@ -423,10 +427,13 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				EnableDenyPatterns: true,
-				AllowRemote:        true,
-				TimeoutSeconds:     60,
-				MaxOutputChars:     DefaultExecMaxOutputChars,
+				EnableDenyPatterns:     true,
+				RiskThreshold:          "medium",
+				UnknownCommandPolicy:   ExecUnknownCommandAsk,
+				AllowRemote:            false,
+				TimeoutSeconds:         DefaultExecTimeoutSeconds,
+				MaxOutputChars:         DefaultExecMaxOutputChars,
+				ApprovalTimeoutSeconds: DefaultExecApprovalTimeoutSeconds,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{
@@ -499,9 +506,12 @@ func DefaultConfig() *Config {
 				},
 				MediaEnabled: false,
 			},
+			Reaction: ToolConfig{
+				Enabled: false,
+			},
 			ReadFile: ReadFileToolConfig{
 				Enabled:         true,
-				Mode:            ReadFileModeBytes,
+				Mode:            ReadFileModeAuto,
 				MaxReadFileSize: 64 * 1024, // 64KB
 				MaxLines:        DefaultReadFileMaxLines,
 				MaxLineLength:   DefaultReadFileMaxLineLength,
@@ -513,7 +523,7 @@ func DefaultConfig() *Config {
 			Spawn: ToolConfig{
 				Enabled: true,
 			},
-			Todo: ToolConfig{Enabled: true},
+			Todo: ToolConfig{Enabled: false},
 			SpawnStatus: ToolConfig{
 				Enabled: false,
 			},

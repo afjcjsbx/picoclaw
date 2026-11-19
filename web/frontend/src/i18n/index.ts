@@ -1,4 +1,5 @@
 import dayjs from "dayjs"
+import "dayjs/locale/cs"
 import "dayjs/locale/en"
 import "dayjs/locale/zh-cn"
 import localizedFormat from "dayjs/plugin/localizedFormat"
@@ -7,6 +8,7 @@ import i18n from "i18next"
 import LanguageDetector from "i18next-browser-languagedetector"
 import { initReactI18next } from "react-i18next"
 
+import cs from "./locales/cs.json"
 import en from "./locales/en.json"
 import zh from "./locales/zh.json"
 
@@ -29,9 +31,12 @@ i18n
       zh: {
         translation: zh,
       },
+      cs: {
+        translation: cs,
+      },
     },
     fallbackLng: "en",
-    supportedLngs: ["en", "zh"],
+    supportedLngs: ["en", "zh", "cs"],
     nonExplicitSupportedLngs: true,
     debug: false,
 
@@ -43,6 +48,8 @@ i18n
 i18n.on("languageChanged", (lng) => {
   if (lng.startsWith("zh")) {
     dayjs.locale("zh-cn")
+  } else if (lng.startsWith("cs")) {
+    dayjs.locale("cs")
   } else {
     dayjs.locale("en")
   }

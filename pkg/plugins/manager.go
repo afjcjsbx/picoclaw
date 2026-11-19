@@ -241,18 +241,7 @@ func (p *packagePlugin) Initialize(pc PluginContext) error {
 	for _, d := range diagnostics {
 		p.host.diagnostic(d)
 	}
-	if p.entry.SkillNames != nil {
-		kept := skillEntries[:0]
-		for _, skill := range skillEntries {
-			for _, name := range p.entry.SkillNames {
-				if skill.Info.Name == pc.ID+":"+name {
-					kept = append(kept, skill)
-					break
-				}
-			}
-		}
-		skillEntries = kept
-	}
+	skillEntries = filterPublishedSkills(pc.ID, p.entry.SkillNames, skillEntries)
 	hasResources := len(skillEntries) > 0 || componentExists(pc.Root, "references")
 	hooks, diagnostics := discoverHooks(p.manifest, pc)
 	for _, d := range diagnostics {

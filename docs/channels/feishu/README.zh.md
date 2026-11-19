@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "将 PicoClaw 接入飞书（Lark）：应用凭据、事件订阅、Webhook 回调、权限范围与 config.json 字段说明。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # 飞书

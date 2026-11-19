@@ -10,6 +10,7 @@ import {
   handlePicoActivityMessage,
   handlePicoMessage,
 } from "@/features/chat/protocol"
+import { clearsConversationHistory } from "@/features/chat/slash-commands"
 import {
   clearStoredSessionId,
   generateSessionId,
@@ -23,6 +24,7 @@ import {
   type ChatStoreState,
   chatAtom,
   clearSessionRunning,
+  composerFocusSignalAtom,
   getChatState,
   initializeSplitSessionState,
   markSessionRead,
@@ -951,10 +953,12 @@ export function sendChatMessage({
 
   const socket = wsRef
   const id = `msg-${++msgIdCounter}-${Date.now()}`
+  const sessionId = getChatState().activeSessionId
+  const clearsHistory = clearsConversationHistory(normalizedContent)
 
   updateChatStore((prev) => ({
     messages: [
-      ...prev.messages,
+      ...(clearsHistory ? [] : prev.messages),
       {
         id,
         role: "user",
@@ -965,7 +969,27 @@ export function sendChatMessage({
       },
     ],
     isTyping: true,
+    ...(clearsHistory
+      ? {
+          contextUsage: undefined,
+          historyStart: 0,
+          hasMoreHistory: false,
+        }
+      : {}),
   }))
+
+  if (clearsHistory) {
+    // Keep the cached split-pane snapshot in sync with the transcript that
+    // /clear just wiped; otherwise switching panes would restore stale
+    // messages that no longer exist on the server.
+    updateSplitSessionState(sessionId, {
+      messages: [],
+      isTyping: true,
+      contextUsage: undefined,
+      historyStart: 0,
+      hasMoreHistory: false,
+    })
+  }
 
   try {
     const payload: Record<string, unknown> = {
@@ -1081,6 +1105,7 @@ export async function switchChatSession(sessionId: string) {
 }
 
 export async function newChatSession(force = false) {
+  store.set(composerFocusSignalAtom, (signal) => signal + 1)
   if (!force && getChatState().messages.length === 0) {
     return undefined
   }

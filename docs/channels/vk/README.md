@@ -1,3 +1,6 @@
+---
+description: "The VK channel uses Bots Long Poll API for bot-based communication with VK social network."
+---
 # VK (VKontakte)
 
 The VK channel uses Bots Long Poll API for bot-based communication with VK social network. It supports text messages, media attachments (photos, videos, audio, documents, stickers), and group chat interactions.

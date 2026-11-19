@@ -56,7 +56,9 @@ type rpcClient struct {
 // begins the background read loop.
 func startRPC(serverPath, dataDir string) (*rpcClient, error) {
 	cmd := exec.Command(serverPath)
-	cmd.Env = append(cmd.Environ(), "DC_ACCOUNTS_PATH="+dataDir)
+	// When isolation is enabled, pass only the base allowed set plus the
+	// required accounts directory; when disabled, full parent env is kept.
+	cmd.Env = append(isolation.InheritedEnv(), "DC_ACCOUNTS_PATH="+dataDir)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

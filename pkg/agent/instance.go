@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -20,6 +22,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,
@@ -32,6 +35,9 @@ type AgentInstance struct {
 	Fallbacks               []string
 	Workspace               string
 	MaxIterations           int
+	BudgetWarnAt            int           // iteration that triggers the budget checkpoint notice; 0 = never
+	RunBudget               time.Duration // wall-clock budget of one turn; 0 = off
+	RunBudgetWarnAfter      time.Duration // elapsed time that triggers the run-budget wrap-up notice
 	MaxTokens               int
 	Temperature             float64
 	ThinkingLevel           ThinkingLevel
@@ -100,6 +106,7 @@ func NewAgentInstance(
 		// Keep the subprocess isolation runtime aligned with the latest loaded config
 		// before any tools or providers start spawning child processes.
 		isolation.Configure(cfg)
+		toolshared.SetArtifactRetention(cfg.Tools.GetArtifactMaxAge(), cfg.Tools.GetArtifactMaxFiles())
 	}
 
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
@@ -132,15 +139,25 @@ func NewAgentInstance(
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		switch cfg.Tools.ReadFile.EffectiveMode() {
 		case config.ReadFileModeLines:
-			toolsRegistry.Register(fstools.NewReadFileLinesTool(
+			readTool := fstools.NewReadFileLinesTool(
 				workspace, readRestrict, maxReadFileSize,
 				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
 				allowReadPaths,
-			))
-		default:
+			)
+			readTool.SetMaxInlineResultChars(cfg.Tools.GetMaxInlineResultChars())
+			toolsRegistry.Register(readTool)
+		case config.ReadFileModeBytes:
 			toolsRegistry.Register(fstools.NewReadFileTool(
 				workspace, readRestrict, maxReadFileSize, allowReadPaths,
 			))
+		default:
+			readTool := fstools.NewReadFileAutoTool(
+				workspace, readRestrict, maxReadFileSize,
+				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
+				allowReadPaths,
+			)
+			readTool.SetMaxInlineResultChars(cfg.Tools.GetMaxInlineResultChars())
+			toolsRegistry.Register(readTool)
 		}
 	}
 	// MEMORY.md and USER.md belong to the memory tool, which enforces their
@@ -181,7 +198,13 @@ func NewAgentInstance(
 		toolsRegistry.Register(fstools.NewSearchFilesTool(workspace, readRestrict, allowReadPaths))
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
-		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
+		// exec can write and delete paths, so it must not inherit the
+		// configured read-only allowlist. The internal media temp dir is the
+		// one intentional exception: attachment processing through exec needs
+		// access to files that live outside the workspace.
+		execAllowPaths := append([]*regexp.Regexp(nil), allowWritePaths...)
+		execAllowPaths = append(execAllowPaths, regexp.MustCompile(mediaTempDirPattern()))
+		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, execAllowPaths)
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 				map[string]any{"error": err.Error()})
@@ -232,6 +255,9 @@ func NewAgentInstance(
 	if maxIter == 0 {
 		maxIter = 20
 	}
+
+	budgetWarnAt := budgetWarnIteration(maxIter, defaults.MaxToolBudgetWarningRatio)
+	runBudget, runBudgetWarnAfter := runBudgetDurations(defaults.RunBudgetSeconds, defaults.RunBudgetWarningThreshold)
 
 	maxTokens := defaults.MaxTokens
 	if maxTokens == 0 {
@@ -364,6 +390,9 @@ func NewAgentInstance(
 		Fallbacks:               fallbacks,
 		Workspace:               workspace,
 		MaxIterations:           maxIter,
+		BudgetWarnAt:            budgetWarnAt,
+		RunBudget:               runBudget,
+		RunBudgetWarnAfter:      runBudgetWarnAfter,
 		MaxTokens:               maxTokens,
 		Temperature:             temperature,
 		ThinkingLevel:           thinkingLevel,
@@ -819,4 +848,34 @@ func initSessionStore(dir string, durableWrites bool) session.SessionStore {
 	}
 
 	return session.NewJSONLBackend(store)
+}
+
+// budgetWarnIteration returns the iteration at which the budget checkpoint
+// fires: ratio of maxIter, rounded, at least 1. An unset or out-of-range ratio
+// (config loading rejects those) uses the default. It returns 0 when the
+// threshold would not leave an iteration before the budget runs out.
+func budgetWarnIteration(maxIter int, ratio float64) int {
+	if !(ratio > 0 && ratio < 1) {
+		ratio = config.DefaultMaxToolBudgetWarningRatio
+	}
+	at := max(1, int(math.Round(ratio*float64(maxIter))))
+	if at >= maxIter {
+		return 0
+	}
+	return at
+}
+
+// runBudgetDurations converts agents.defaults.run_budget_seconds and
+// run_budget_warning_threshold into the budget and the elapsed time at which the
+// wrap-up notice fires. Seconds <= 0 turn the budget off; an unset or
+// out-of-range threshold (config loading rejects those) uses the default.
+func runBudgetDurations(seconds int, threshold float64) (budget, warnAfter time.Duration) {
+	if seconds <= 0 {
+		return 0, 0
+	}
+	if !(threshold > 0 && threshold < 1) {
+		threshold = config.DefaultRunBudgetWarningThreshold
+	}
+	budget = time.Duration(seconds) * time.Second
+	return budget, time.Duration(float64(budget) * threshold)
 }

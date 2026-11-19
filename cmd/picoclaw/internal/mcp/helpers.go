@@ -71,6 +71,7 @@ const mcpConfigSchemaJSON = `{
                   },
                   "env_file": { "type": "string" },
                   "inherit_env": { "type": "boolean" },
+                  "supports_parallel_tool_calls": { "type": "boolean" },
                   "type": {
                     "type": "string",
                     "enum": ["stdio", "http", "sse"]

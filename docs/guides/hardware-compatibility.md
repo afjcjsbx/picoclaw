@@ -1,3 +1,7 @@
+---
+description: "Verified PicoClaw hardware: chips, development boards and SBCs confirmed to run the binary, with notes and known limits."
+title: "PicoClaw Hardware Compatibility List"
+---
 # 🖥️ PicoClaw Hardware Compatibility List
 
 PicoClaw runs on virtually any Linux device. This page tracks verified chips, products, and development boards.
@@ -147,4 +151,4 @@ Available builds: `linux-amd64`, `linux-arm64`, `linux-arm`, `linux-riscv64`, `l
 3. Include: name, arch, SoC, RAM, year, and a link if available
 4. Submit a PR
 
-Hardware vendors: want to add official support or co-promote? Open an issue or reach out via [Discord](https://discord.gg/V4sAZ9XWpN).
+Hardware vendors: want to add official support or co-promote? Open an issue or reach out via [Discord](https://discord.gg/XTt5Y6cJfY).

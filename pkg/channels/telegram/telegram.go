@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -50,6 +51,12 @@ const (
 	defaultMediaGroupDelay = 500 * time.Millisecond
 	telegramCaptionLimit   = 1024
 
+	// telegramAckReaction is the emoji used to acknowledge inbound messages and
+	// by the reaction tool. Telegram only accepts a fixed set of standard
+	// reactions; 👀 is on that list and matches the acknowledgment reaction
+	// used by other channels such as Slack.
+	telegramAckReaction = "👀"
+
 	// telegramLongPollTimeoutSeconds is the getUpdates long-poll timeout sent
 	// to Telegram: the server holds the request until an update arrives or the
 	// timeout expires.
@@ -82,6 +89,7 @@ type TelegramChannel struct {
 	progress  *channels.ToolFeedbackAnimator
 
 	registerFunc      func(context.Context, []commands.Definition) error
+	commandDefs       func() []commands.Definition
 	commandRegDelayFn func(int) time.Duration
 	commandRegCancel  context.CancelFunc
 
@@ -129,10 +137,23 @@ func newTelegramHTTPClient(proxy func(*http.Request) (*url.URL, error)) *http.Cl
 	}
 }
 
+// TelegramChannelOption customizes a Telegram channel during construction.
+type TelegramChannelOption func(*TelegramChannel)
+
+// WithCommandDefinitionsProvider supplies the definitions used to register
+// Telegram's bot command menu. The provider runs when the channel starts so it
+// can include workspace custom commands discovered at startup.
+func WithCommandDefinitionsProvider(provider func() []commands.Definition) TelegramChannelOption {
+	return func(ch *TelegramChannel) {
+		ch.commandDefs = provider
+	}
+}
+
 func NewTelegramChannel(
 	bc *config.Channel,
 	telegramCfg *config.TelegramSettings,
 	bus *bus.MessageBus,
+	channelOpts ...TelegramChannelOption,
 ) (*TelegramChannel, error) {
 	channelName := bc.Name()
 	var opts []telego.BotOption
@@ -186,6 +207,11 @@ func NewTelegramChannel(
 		mediaGroupDelay: telegramMediaGroupDelay(telegramCfg),
 	}
 	ch.progress = channels.NewToolFeedbackAnimator(ch.EditMessage)
+	for _, opt := range channelOpts {
+		if opt != nil {
+			opt(ch)
+		}
+	}
 	return ch, nil
 }
 
@@ -194,6 +220,15 @@ func telegramMediaGroupDelay(telegramCfg *config.TelegramSettings) time.Duration
 		return time.Duration(telegramCfg.MediaGroupDelayMS) * time.Millisecond
 	}
 	return defaultMediaGroupDelay
+}
+
+func (c *TelegramChannel) commandDefinitions() []commands.Definition {
+	if c.commandDefs != nil {
+		if defs := c.commandDefs(); len(defs) > 0 {
+			return defs
+		}
+	}
+	return commands.BuiltinDefinitions()
 }
 
 func (c *TelegramChannel) Start(ctx context.Context) error {
@@ -225,7 +260,7 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 		"username": c.bot.Username(),
 	})
 
-	c.startCommandRegistration(c.ctx, commands.BuiltinDefinitions())
+	c.startCommandRegistration(c.ctx, c.commandDefinitions())
 
 	go func() {
 		if err = bh.Start(); err != nil {
@@ -593,6 +628,53 @@ func (c *TelegramChannel) DeleteMessage(ctx context.Context, chatID string, mess
 		ChatID:    tu.ID(cid),
 		MessageID: mid,
 	})
+}
+
+// ReactToMessage implements channels.ReactionCapable.
+// It adds the acknowledgment reaction (👀) to a message and returns an undo
+// function that removes all reactions previously set by the bot. Telegram
+// clears the bot's reactions when the reaction list is empty, so the undo
+// call needs no extra API method. The undo function is idempotent.
+func (c *TelegramChannel) ReactToMessage(ctx context.Context, chatID, messageID string) (func(), error) {
+	cid, _, err := parseTelegramChatID(chatID)
+	if err != nil {
+		return func() {}, fmt.Errorf("invalid chat ID %s: %w", chatID, err)
+	}
+	mid, err := strconv.Atoi(messageID)
+	if err != nil {
+		return func() {}, fmt.Errorf("invalid message ID %s: %w", messageID, err)
+	}
+
+	err = c.bot.SetMessageReaction(ctx, &telego.SetMessageReactionParams{
+		ChatID:    tu.ID(cid),
+		MessageID: mid,
+		Reaction: []telego.ReactionType{
+			&telego.ReactionTypeEmoji{Type: telego.ReactionEmoji, Emoji: telegramAckReaction},
+		},
+	})
+	if err != nil {
+		return func() {}, fmt.Errorf("telegram react: %w", classifyTelegramError(err))
+	}
+
+	var undone atomic.Bool
+	undo := func() {
+		if !undone.CompareAndSwap(false, true) {
+			return
+		}
+		undoCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := c.bot.SetMessageReaction(undoCtx, &telego.SetMessageReactionParams{
+			ChatID:    tu.ID(cid),
+			MessageID: mid,
+		}); err != nil {
+			logger.DebugCF("telegram", "Failed to remove reaction", map[string]any{
+				"chat_id":    chatID,
+				"message_id": messageID,
+				"error":      err.Error(),
+			})
+		}
+	}
+	return undo, nil
 }
 
 func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {
@@ -1218,6 +1300,12 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	isMentioned := false
 	if message.Chat.Type != "private" {
 		isMentioned = c.isBotMentioned(message)
+		// Replying directly to one of the bot's own messages is an implicit
+		// mention: users expect the conversation to continue without having
+		// to @mention the bot on every follow-up.
+		if !isMentioned && c.isReplyToSelf(message) {
+			isMentioned = true
+		}
 		if isMentioned {
 			content = c.stripBotMention(content)
 		}
@@ -1571,6 +1659,17 @@ func quotedTelegramMediaRefs(
 			failed = append(failed, "audio")
 		}
 	}
+	if message.Document != nil {
+		filename := strings.TrimSpace(message.Document.FileName)
+		if filename == "" {
+			filename = indexedMediaFilename("document", "", 0, 1)
+		}
+		if ref := resolve(message.Document.FileID, "", filename); ref != "" {
+			refs = append(refs, ref)
+		} else {
+			failed = append(failed, "file")
+		}
+	}
 	return refs, failed
 }
 
@@ -1696,8 +1795,16 @@ func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) st
 	// applies the shared HTTP retry policy (utils.DoRequestWithRetry) internally.
 	filename := file.FilePath + ext
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
-		LoggerPrefix: "telegram",
+		LoggerPrefix:        "telegram",
+		BlockPrivateTargets: c.blockPrivateMediaDownloads(),
 	})
+}
+
+// blockPrivateMediaDownloads keeps SSRF protection on for the public Bot API
+// while allowing explicitly configured Bot API servers (typically self-hosted
+// on a private network) to serve media.
+func (c *TelegramChannel) blockPrivateMediaDownloads() bool {
+	return c == nil || c.tgCfg == nil || strings.TrimSpace(c.tgCfg.BaseURL) == ""
 }
 
 func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) string {
@@ -1823,6 +1930,15 @@ func logParseFailed(err error, useMarkdownV2 bool) {
 			"error": err.Error(),
 		},
 	)
+}
+
+// isReplyToSelf reports whether the message is a direct reply to one of the
+// bot's own messages, which users treat as talking to the bot.
+func (c *TelegramChannel) isReplyToSelf(message *telego.Message) bool {
+	if message == nil || message.ReplyToMessage == nil {
+		return false
+	}
+	return c.isOwnBotUser(message.ReplyToMessage.From)
 }
 
 // isBotMentioned checks if the bot is mentioned in the message via entities.

@@ -26,15 +26,40 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 		return
 	}
 
-	toolTokens := EstimateToolDefsTokens(filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile))
+	toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
+	provider := exec.activeProvider
+	if provider == nil {
+		provider = ts.agent.Provider
+	}
+	toolTokens := EstimateToolDefsTokens(toolDefs)
 	threshold := summarizeThresholdTokens(ts.agent)
 	for pass := 0; pass < maxCompactionPasses; pass++ {
 		promptTokens := toolTokens
 		for _, m := range exec.messages {
-			promptTokens += EstimateMessageTokens(m)
+			promptTokens += estimateMessageTokensForProvider(provider, m)
 		}
-		if promptTokens < threshold {
+		// Assembly may already have evicted old items from the prompt. In that
+		// case promptTokens can be below the threshold while the stored context
+		// is still huge; compacting based only on the prompt would let the
+		// eviction silently discard history without ever summarizing it.
+		storedTokens := 0
+		if reporter, ok := p.ContextManager.(ContextTokenReporter); ok {
+			if n, err := reporter.ContextTokens(ctx, ts.sessionKey); err == nil {
+				storedTokens = n
+			}
+		}
+		if promptTokens < threshold && storedTokens < threshold {
 			return
+		}
+		if storedTokens > promptTokens {
+			logger.InfoCF("agent", "Stored context exceeds assembled prompt; compacting",
+				map[string]any{
+					"session_key":   ts.sessionKey,
+					"prompt_tokens": promptTokens,
+					"stored_tokens": storedTokens,
+					"threshold":     threshold,
+					"pass":          pass + 1,
+				})
 		}
 
 		logger.InfoCF("agent", "Prompt reached summarize threshold, compacting before LLM call",
@@ -45,9 +70,10 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 				"pass":          pass + 1,
 			})
 		if err := p.ContextManager.Compact(ctx, &CompactRequest{
-			SessionKey: ts.sessionKey,
-			Reason:     ContextCompressReasonThreshold,
-			Budget:     ts.agent.ContextWindow,
+			SessionKey:         ts.sessionKey,
+			Reason:             ContextCompressReasonThreshold,
+			Budget:             usableContextTokens(ts.agent),
+			ActiveTurnMessages: activeTurnMessageCount(ts, exec),
 		}); err != nil {
 			if !errors.Is(err, ErrNothingToCompact) {
 				logger.WarnCF("agent", "Threshold compaction failed", map[string]any{
@@ -66,6 +92,21 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 		exec.messages = rebuilt.build(rebuilt.stable)
 		exec.currentTurnStart = len(exec.messages) - len(rebuilt.protected) - len(exec.loopWarnings)
 	}
+}
+
+// activeTurnMessageCount returns how many trailing messages belong to the turn
+// in progress. Compaction uses it as a hard boundary: those messages are never
+// folded into a summary, so the user's instructions cannot disappear mid-turn.
+func activeTurnMessageCount(ts *turnState, exec *turnExecution) int {
+	if ts != nil {
+		if n := len(ts.persistedMessagesSnapshot()); n > 0 {
+			return n
+		}
+	}
+	if exec != nil && exec.currentTurnStart >= 0 && exec.currentTurnStart <= len(exec.messages) {
+		return len(exec.messages) - exec.currentTurnStart
+	}
+	return 0
 }
 
 // activeTurnPrompt is the prompt input re-read from the session after a

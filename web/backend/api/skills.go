@@ -18,6 +18,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
@@ -38,6 +39,7 @@ type skillSupportItem struct {
 	RegistryURL      string `json:"registry_url,omitempty"`
 	InstalledVersion string `json:"installed_version,omitempty"`
 	InstalledAt      int64  `json:"installed_at,omitempty"`
+	PluginID         string `json:"plugin_id,omitempty"`
 }
 
 type skillDetailResponse struct {
@@ -152,7 +154,7 @@ func (h *Handler) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		content, err := loadSkillContent(skillItem.Path)
+		content, err := loadSkillContentForItem(cfg, skillItem)
 		if err != nil {
 			http.Error(w, "Skill content not found", http.StatusNotFound)
 			return
@@ -502,7 +504,13 @@ func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 			matchedNonWorkspace = true
 			continue
 		}
-		if err := os.RemoveAll(filepath.Dir(skill.Path)); err != nil {
+		dirPath := filepath.Clean(filepath.Dir(skill.Path))
+		workspaceDir := filepath.Clean(cfg.WorkspacePath())
+		if !isWithinDir(dirPath, workspaceDir) {
+			http.Error(w, "path escapes workspace directory", http.StatusBadRequest)
+			return
+		}
+		if err := os.RemoveAll(dirPath); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to delete skill: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -516,6 +524,27 @@ func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Skill not found", http.StatusNotFound)
+}
+
+// isWithinDir reports whether dirPath is parentDir or a proper subdirectory of
+// it, after resolving symlinks. A skill loader path must never be allowed to
+// point RemoveAll outside the workspace.
+func isWithinDir(dirPath, parentDir string) bool {
+	if !strings.HasPrefix(dirPath, parentDir+string(os.PathSeparator)) && dirPath != parentDir {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(dirPath)
+	if err != nil {
+		// The path does not exist yet or cannot be resolved; the lexical check
+		// above is the only available answer.
+		return true
+	}
+	resolvedParent, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		return true
+	}
+	return strings.HasPrefix(resolved, resolvedParent+string(os.PathSeparator)) ||
+		resolved == resolvedParent
 }
 
 func newSkillsLoader(workspace string) *skills.SkillsLoader {
@@ -550,7 +579,53 @@ func buildSkillSupportItems(cfg *config.Config) ([]skillSupportItem, error) {
 		}
 		items = append(items, item)
 	}
+
+	// Plugin skills live in plugin packages outside the workspace skill roots,
+	// so the filesystem loader above never sees them. Discover them statically
+	// from the enabled plugin entries instead of requiring a running gateway.
+	packages, _ := plugins.PublishedSkills(cfg.Plugins, cfg.WorkspacePath())
+	for _, pkg := range packages {
+		for _, skill := range pkg.Skills {
+			items = append(items, skillSupportItem{
+				Name:        skill.Info.Name,
+				Path:        pluginSkillRelativePath(pkg.Root, skill.Info.Path),
+				Source:      skill.Info.Source,
+				Description: skill.Info.Description,
+				OriginKind:  "plugin",
+				PluginID:    pkg.ID,
+			})
+		}
+	}
 	return items, nil
+}
+
+// pluginSkillRelativePath returns a package-relative, slash-separated skill
+// path. Host paths are never exposed to the dashboard, matching how the agent
+// skill catalog handles plugin skills.
+func pluginSkillRelativePath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+func loadSkillContentForItem(cfg *config.Config, item skillSupportItem) (string, error) {
+	if item.PluginID == "" {
+		return loadSkillContent(item.Path)
+	}
+	packages, _ := plugins.PublishedSkills(cfg.Plugins, cfg.WorkspacePath())
+	for _, pkg := range packages {
+		if pkg.ID != item.PluginID {
+			continue
+		}
+		for _, skill := range pkg.Skills {
+			if skill.Info.Name == item.Name {
+				return skill.Body, nil
+			}
+		}
+	}
+	return "", fs.ErrNotExist
 }
 
 func buildWorkspaceSkillItemsByDirectory(cfg *config.Config) (map[string]skillSupportItem, error) {

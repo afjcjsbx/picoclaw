@@ -70,7 +70,7 @@ func (m *legacyContextManager) summarizeActiveTurn(
 	// An LLM call is only worth paying for when it reclaims a real share of the threshold.
 	middleTokens := 0
 	for _, msg := range middle {
-		middleTokens += EstimateMessageTokens(msg)
+		middleTokens += estimateMessageTokensForProvider(agent.Provider, msg)
 	}
 	if middleTokens < summarizeThresholdTokens(agent)/10 {
 		return false

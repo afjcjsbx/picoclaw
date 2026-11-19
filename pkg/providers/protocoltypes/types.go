@@ -77,6 +77,30 @@ type UsageInfo struct {
 	// Zero means the provider did not report a cost (for example most HTTP
 	// providers); the web UI falls back to an approximate list-price estimate.
 	CostUSD float64 `json:"cost_usd,omitempty"`
+
+	// Requests and ContextTokens are turn-level aggregates, not per-request
+	// provider values. Requests counts the LLM calls (including tool-call
+	// iterations) aggregated into a turn; ContextTokens is the prompt size of
+	// the last call, i.e. the context actually in the window at the end.
+	Requests      int `json:"requests,omitempty"`
+	ContextTokens int `json:"context_tokens,omitempty"`
+
+	// ByModel splits a turn aggregate by the model that served each call. It is
+	// set only when the turn used more than one model, for example after a
+	// light-model escalation, so per-model totals stay exact.
+	ByModel []ModelUsage `json:"by_model,omitempty"`
+}
+
+// ModelUsage is the usage of one model within a turn aggregate.
+type ModelUsage struct {
+	Model string    `json:"model"`
+	Usage UsageInfo `json:"usage"`
+}
+
+// HasUsage reports whether the report carries any tokens or cost.
+func (u UsageInfo) HasUsage() bool {
+	return u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0 ||
+		u.CacheReadTokens > 0 || u.CacheCreationTokens > 0 || u.CostUSD > 0
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.

@@ -1,3 +1,6 @@
+---
+description: "Design record for parallel tool calls: the concurrency model, ordering rules, and the max_parallel_tool_calls setting that bounds them."
+---
 # Parallel Tool Calling — Technical Specification
 
 Status: implemented (phases 1–4 of §5). The shipped behavior is described in [`../architecture/parallel-tool-calls.md`](../architecture/parallel-tool-calls.md); `max_parallel_tool_calls` defaults to `4`. Where PicoClaw already has a mechanism (hooks, steering, loop detection) this specification preserves it.

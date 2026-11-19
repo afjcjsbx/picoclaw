@@ -1,3 +1,6 @@
+---
+description: "Unify pkg/agent/ package file naming to resolve the loop_* prefix naming confusion and unclear responsibility boundaries."
+---
 # Agent File Rename Plan
 
 ## Goal

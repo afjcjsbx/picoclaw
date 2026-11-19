@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "提供商与模型配置"
+description: "如果你想看 agent 分发和轻量模型路由的完整示例，请看 路由使用指南。该设计同时支持多 Agent 场景，提供灵活的 Provider 选择：."
+---
 # 🔌 提供商与模型配置
 
 > 返回 [README](../project/README.zh.md)

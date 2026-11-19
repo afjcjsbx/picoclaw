@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "PicoClaw 硬件兼容性列表"
+description: "PicoClaw 几乎可以在任何 Linux 设备上运行。本页面记录了已验证的芯片、产品和开发板。已通过 PicoClaw 测试的消费产品、路由器和工业设备。"
+---
 > 返回 [README](../project/README.zh.md)
 
 # 🖥️ PicoClaw 硬件兼容性列表
@@ -149,4 +154,4 @@ tar xzf picoclaw_Linux_arm64.tar.gz
 3. 包含：名称、架构、SoC、内存、年份，以及可用的链接
 4. 提交 PR
 
-硬件厂商：想要添加官方支持或联合推广？请提交 issue 或通过 [Discord](https://discord.gg/V4sAZ9XWpN) 联系我们。
+硬件厂商：想要添加官方支持或联合推广？请提交 issue 或通过 [Discord](https://discord.gg/XTt5Y6cJfY) 联系我们。

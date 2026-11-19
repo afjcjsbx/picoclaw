@@ -53,6 +53,10 @@ export interface TokenUsage {
   total_tokens: number
   cache_read_tokens?: number
   cache_creation_tokens?: number
+  /** Number of LLM calls aggregated into the turn totals. */
+  requests?: number
+  /** Prompt size of the last LLM call (the context currently in the window). */
+  context_tokens?: number
   /** Absolute turn cost in USD when the backend reports it. */
   cost_usd?: number
 }
@@ -125,6 +129,10 @@ export interface ComposerInsertion {
 // Set by the command palette to drop a slash command into the composer. The
 // chat page consumes the request and clears it once the input is updated.
 export const composerInsertionAtom = atom<ComposerInsertion | null>(null)
+
+// Bumped whenever the chat composer should take focus, e.g. after starting a
+// new conversation.
+export const composerFocusSignalAtom = atom(0)
 
 export interface PendingScrollTarget {
   sessionId: string

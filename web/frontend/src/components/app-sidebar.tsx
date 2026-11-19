@@ -302,7 +302,9 @@ export function AppSidebar({
       onDrop={(event) => handleSessionDrop(event, session.id)}
     >
       <IconMessageCircle className="size-4 shrink-0 opacity-70" />
-      <span className="min-w-0 flex-1 truncate">{session.title}</span>
+      <span className="min-w-0 flex-1 truncate">
+        {session.title || t("chat.newChat")}
+      </span>
       <SessionStatusIndicator
         className="ml-auto"
         isRunning={isSessionRunning(session.id)}
@@ -673,7 +675,9 @@ export function AppSidebar({
                           const groupTitle =
                             (splitGroup.ids.includes(activeSessionId)
                               ? sessionById.get(activeSessionId)?.title
-                              : undefined) ?? splitGroup.sessions[0].title
+                              : undefined) ||
+                            splitGroup.sessions[0].title ||
+                            t("chat.newChat")
                           const groupRunning = splitGroup.sessions.some(
                             (member) => isSessionRunning(member.id),
                           )
@@ -766,7 +770,7 @@ export function AppSidebar({
                             <SidebarMenuButton
                               asChild
                               isActive={session.id === activeSessionId}
-                              tooltip={session.title}
+                              tooltip={session.title || t("chat.newChat")}
                               className="text-muted-foreground hover:text-foreground h-9 rounded-lg px-3"
                             >
                               {renderSessionLink(session)}

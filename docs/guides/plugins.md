@@ -1,3 +1,6 @@
+---
+description: "PicoClaw supports Agent Plugins 1.0.0, including skills, stdio MCP, Streamable HTTP MCP and legacy HTTP+SSE MCP. The 1.1.0 draft is not enabled."
+---
 # Agent Plugin Installation and Reference
 
 PicoClaw supports **Agent Plugins 1.0.0**, including skills, stdio MCP,
@@ -111,6 +114,9 @@ plugin in `config.json`, using the `name` from its `plugin.json` as the entry ID
 
 Restart PicoClaw or reload its configuration to activate the plugin. Review
 packages before enabling them; local plugin servers run as subprocesses.
+Skills published by an enabled plugin also appear on the Web UI **Skills**
+page with the `Plugin` origin; the dashboard discovers them from the package
+on disk, so it does not need to start the plugin to list them.
 
 The same steps from the command line: `picoclaw plugin add <name> --enable` writes
 the entry, `picoclaw plugin list` shows what is configured and what sits on disk, and
@@ -690,7 +696,7 @@ protocol: `hook.hello`, `hook.runtime_event`, and the requested interception
 methods. `entries.<id>.config` is delivered as `config` in the hello payload.
 Only declared stages and allowed agents are forwarded.
 
-See [the hook protocol](../architecture/hooks/README.md). Hook failures use the
+See [the hook protocol](../architecture/hooks/). Hook failures use the
 existing hook manager's timeout and error policies. In particular, approval
 errors can deny a tool call; they do not crash the runtime. Trusted interception
 hooks can alter or short-circuit execution, so `allow_hooks` is a separate grant.

@@ -98,6 +98,23 @@
         }
       ]
     },
+    "icon": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Brand icon shown on the catalog card. Falls back to the category icon.",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Simple Icons slug, for example 'github'."
+        },
+        "domain": {
+          "type": "string",
+          "description": "Domain used to resolve a favicon when no Simple Icons logo is available."
+        }
+      }
+    },
     "field": {
       "type": "object",
       "additionalProperties": false,
@@ -157,6 +174,9 @@
         "docsUrl": {
           "type": "string",
           "format": "uri"
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
         },
         "requires": {
           "type": "string",

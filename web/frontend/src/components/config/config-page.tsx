@@ -321,17 +321,14 @@ export function ConfigPage() {
           execConfigPatch.custom_allow_patterns = parseMultilineList(
             form.customAllowPatternsText,
           )
+          execConfigPatch.custom_deny_patterns = parseMultilineList(
+            form.customDenyPatternsText,
+          )
           execConfigPatch.timeout_seconds = parseIntField(
             form.execTimeoutSeconds,
             "Exec timeout",
             { min: 0 },
           )
-
-          if (form.enableDenyPatterns) {
-            execConfigPatch.custom_deny_patterns = parseMultilineList(
-              form.customDenyPatternsText,
-            )
-          }
         }
 
         await patchAppConfig({

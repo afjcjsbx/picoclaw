@@ -1,3 +1,7 @@
+---
+title: "MQTT Channel"
+description: "Use any MQTT client as a PicoClaw chat channel: broker settings, topic layout, request and response payloads, and authentication."
+---
 # 📡 MQTT Channel
 
 PicoClaw supports any MQTT client as a chat channel. Devices or services publish requests to a broker; PicoClaw subscribes, processes them, and publishes responses back.

@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "Run PicoClaw as a Delta Chat bot: account setup, the jsonrpc server that handles encryption, and the channel configuration fields."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Delta Chat Channel
 

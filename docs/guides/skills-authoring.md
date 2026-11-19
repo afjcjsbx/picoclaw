@@ -1,3 +1,6 @@
+---
+description: "Skills are modular capabilities you add to your agent by dropping a SKILL.md folder into a skills directory."
+---
 # Skills Authoring Guide
 
 Skills are modular capabilities you add to your agent by dropping a `SKILL.md` folder into a skills directory. This guide covers writing a skill from scratch. To install existing skills or Agent Plugin packages, see [Plugin Installation](plugins.md) and the [`picoclaw skills` commands](../reference/cli.md#skills).
@@ -14,6 +17,8 @@ Skills are discovered one level deep: each direct subdirectory of a skills root 
 | 2 | `~/.picoclaw/workspace/skills` (or your configured workspace) | `workspace` |
 | 3 | `~/.picoclaw/skills` | `global` |
 | 4 | Builtin skills embedded at build time (`picoclaw skills list-builtin`) | `builtin` |
+
+Plugin-provided skills appear on the Web UI **Skills** page with the `Plugin` origin once both `plugins.enabled` and the plugin entry's `enabled` are true. They are read-only there because they live inside the plugin package; change the plugin entry or its `skill_names` filter to control them.
 
 Copy builtin skills into your workspace to customize them:
 
@@ -45,7 +50,7 @@ description: What it does and when to use it — this is the trigger.
 | Field | Required | Rules |
 | --- | --- | --- |
 | `name` | Yes | Non-empty; ≤ 64 characters; letters, digits, and hyphens only (`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`) — no underscores or spaces |
-| `description` | Yes | Non-empty; ≤ 1024 bytes |
+| `description` | Yes | Non-empty; only the first 60 characters are shown in the prompt skill catalog |
 
 The `description` is the most important line you will write: it is the only text the agent sees **before** deciding to use the skill, so state both what the skill does and when to use it (include trigger words a user would say). Unknown fields such as `license` or `metadata` are tolerated but ignored by the loader.
 

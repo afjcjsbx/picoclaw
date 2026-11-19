@@ -124,6 +124,20 @@ func addTestCronJob(t *testing.T, tool *CronTool, name, channel, chatID, command
 	return job
 }
 
+func waitCronOutboundMessage(t *testing.T, tool *CronTool) bus.OutboundMessage {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	select {
+	case msg := <-tool.msgBus.OutboundChan():
+		return msg
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for outbound message")
+		return bus.OutboundMessage{}
+	}
+}
+
 // TestCronTool_CommandBlockedFromRemoteChannel verifies command scheduling is restricted by default.
 func TestCronTool_CommandBlockedFromRemoteChannel(t *testing.T) {
 	tool := newTestCronTool(t)
@@ -1407,6 +1421,101 @@ func TestCronTool_ExecuteJobRunsCommand(t *testing.T) {
 	}
 	if !strings.Contains(msg.Content, "cron-test-ok") {
 		t.Fatalf("expected command output containing 'cron-test-ok', got: %s", msg.Content)
+	}
+	if strings.Contains(msg.Content, execRunMetaPrefix) {
+		t.Fatalf("cron published the model-facing exec header: %s", msg.Content)
+	}
+}
+
+// TestCronTool_ExecuteJobRunsAllowlistedRemoteCommandWithoutAllowRemote pins
+// that the cron allowlist, not tools.exec.allow_remote, authorizes scheduled
+// command jobs.
+func TestCronTool_ExecuteJobRunsAllowlistedRemoteCommandWithoutAllowRemote(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram"}
+	cfg.Tools.Exec.AllowRemote = false
+
+	tool := newTestCronToolWithConfig(t, cfg)
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+	addResult := tool.Execute(ctx, map[string]any{
+		"action":     "add",
+		"message":    "remote command",
+		"command":    "echo remote-cron-ok",
+		"at_seconds": float64(60),
+	})
+	if addResult.IsError {
+		t.Fatalf("scheduling allowlisted remote command failed: %s", addResult.ForLLM)
+	}
+
+	jobs := tool.cronService.ListJobs(false)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 scheduled job, got %d", len(jobs))
+	}
+	job := jobs[0]
+
+	mustExecuteJobOK(t, tool, &job)
+
+	msg := waitCronOutboundMessage(t, tool)
+	if !strings.Contains(msg.Content, "remote-cron-ok") {
+		t.Fatalf("expected command output in job message, got: %s", msg.Content)
+	}
+}
+
+func TestCronTool_ExecuteJobRechecksRemoteCommandAllowlist(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram"}
+	cfg.Tools.Exec.AllowRemote = false
+
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "remote", "telegram", "chat-1", "echo must-not-run")
+
+	// Simulate revoking the channel after the job was scheduled.
+	tool.commandAllowedRemotes = nil
+
+	got, err := tool.ExecuteJob(context.Background(), job)
+	if err == nil {
+		t.Fatalf("ExecuteJob() = %q, want error after allowlist revocation", got)
+	}
+	if !strings.Contains(err.Error(), "not allowed to run scheduled commands") {
+		t.Fatalf("ExecuteJob() error = %v, want allowlist rejection", err)
+	}
+
+	msg := waitCronOutboundMessage(t, tool)
+	if strings.Contains(msg.Content, "must-not-run") {
+		t.Fatalf("revoked command ran and produced output: %s", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "not allowed to run scheduled commands") {
+		t.Fatalf("expected published revocation detail, got: %s", msg.Content)
+	}
+}
+
+func TestCronTool_ExecuteJobReportsExecGuardDetail(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Cron.CommandAllowedRemotes = []string{"telegram"}
+	cfg.Tools.Exec.AllowRemote = false
+	cfg.Tools.Exec.CustomDenyPatterns = []string{`^echo scheduled-blocked$`}
+
+	tool := newTestCronToolWithConfig(t, cfg)
+	job := addTestCronJob(t, tool, "remote", "telegram", "chat-1", "echo scheduled-blocked")
+
+	got, err := tool.ExecuteJob(context.Background(), job)
+	if err == nil {
+		t.Fatalf("ExecuteJob() = %q, want guard rejection", got)
+	}
+	if !strings.Contains(err.Error(), "scheduled command failed:") {
+		t.Fatalf("ExecuteJob() error = %v, want scheduled command failure", err)
+	}
+	detail := strings.TrimSpace(strings.TrimPrefix(err.Error(), "scheduled command failed:"))
+	if detail == "" {
+		t.Fatalf("ExecuteJob() error has empty detail: %v", err)
+	}
+	if !strings.Contains(detail, "safety guard") {
+		t.Fatalf("ExecuteJob() detail = %q, want guard message", detail)
+	}
+
+	msg := waitCronOutboundMessage(t, tool)
+	if !strings.Contains(msg.Content, detail) {
+		t.Fatalf("published message %q does not contain detail %q", msg.Content, detail)
 	}
 }
 

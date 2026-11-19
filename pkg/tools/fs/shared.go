@@ -110,8 +110,10 @@ func SilentResult(forLLM string) *ToolResult {
 	return toolshared.SilentResult(forLLM)
 }
 
+// DiffResult renders an edit diff and scrubs credentials from the context
+// lines the model sees. The user preview keeps the raw diff.
 func DiffResult(path string, before, after []byte) *ToolResult {
-	return toolshared.DiffResult(path, before, after)
+	return toolshared.DiffResultWithContextRedactor(path, before, after, redactSecrets)
 }
 
 func MediaResult(forLLM string, mediaRefs []string) *ToolResult {

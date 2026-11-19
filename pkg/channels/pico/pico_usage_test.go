@@ -7,10 +7,16 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
-func TestSetTurnUsagePayload(t *testing.T) {
-	t.Run("populates usage block when counts present", func(t *testing.T) {
+func TestSetTokenUsagePayloadTurnCounters(t *testing.T) {
+	t.Run("populates turn usage block when counts present", func(t *testing.T) {
 		payload := map[string]any{PayloadKeyContent: "hi"}
-		setTurnUsagePayload(payload, 1234, 567)
+		setTokenUsagePayload(payload, &bus.TokenUsage{
+			InputTokens:   1234,
+			OutputTokens:  567,
+			TotalTokens:   1801,
+			Requests:      4,
+			ContextTokens: 320,
+		})
 
 		raw, ok := payload[PayloadKeyUsage]
 		if !ok {
@@ -29,11 +35,17 @@ func TestSetTurnUsagePayload(t *testing.T) {
 		if usage["total_tokens"] != 1801 {
 			t.Errorf("total_tokens = %v, want 1801", usage["total_tokens"])
 		}
+		if usage["requests"] != 4 {
+			t.Errorf("requests = %v, want 4", usage["requests"])
+		}
+		if usage["context_tokens"] != 320 {
+			t.Errorf("context_tokens = %v, want 320", usage["context_tokens"])
+		}
 	})
 
 	t.Run("omits usage block when both counts zero", func(t *testing.T) {
 		payload := map[string]any{PayloadKeyContent: "hi"}
-		setTurnUsagePayload(payload, 0, 0)
+		setTokenUsagePayload(payload, &bus.TokenUsage{})
 		if _, ok := payload[PayloadKeyUsage]; ok {
 			t.Errorf("expected no %q key when counts are zero", PayloadKeyUsage)
 		}
@@ -91,7 +103,13 @@ func newCaptureStreamer() (*picoStreamer, *map[string]any) {
 
 func TestStreamerEmitsUsageOnFinalize(t *testing.T) {
 	s, last := newCaptureStreamer()
-	s.SetTurnUsage(100, 40)
+	s.SetTurnUsage(bus.TokenUsage{
+		InputTokens:   100,
+		OutputTokens:  40,
+		TotalTokens:   140,
+		Requests:      2,
+		ContextTokens: 60,
+	})
 
 	// sendLocked with empty messageID takes the create branch, which attaches
 	// usage from the streamer's stored counts.
@@ -101,7 +119,11 @@ func TestStreamerEmitsUsageOnFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sendLocked: %v", err)
 	}
-	if _, ok := (*last)[PayloadKeyUsage]; !ok {
-		t.Fatalf("expected usage in payload, got %+v", *last)
+	usage, ok := (*last)[PayloadKeyUsage].(map[string]any)
+	if !ok {
+		t.Fatalf("expected usage map in payload, got %+v", *last)
+	}
+	if usage["requests"] != 2 || usage["context_tokens"] != 60 {
+		t.Fatalf("usage turn counters = %+v, want requests=2 context_tokens=60", usage)
 	}
 }

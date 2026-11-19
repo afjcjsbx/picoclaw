@@ -86,6 +86,8 @@ export function parseTokenUsage(
 
   const cacheRead = toTokenCount(usage.cache_read_tokens)
   const cacheCreation = toTokenCount(usage.cache_creation_tokens)
+  const requests = toTokenCount(usage.requests)
+  const contextTokens = toTokenCount(usage.context_tokens)
 
   return {
     ...(input !== undefined ? { input_tokens: input } : {}),
@@ -93,6 +95,8 @@ export function parseTokenUsage(
     total_tokens: total,
     ...(cacheRead ? { cache_read_tokens: cacheRead } : {}),
     ...(cacheCreation ? { cache_creation_tokens: cacheCreation } : {}),
+    ...(requests ? { requests } : {}),
+    ...(contextTokens ? { context_tokens: contextTokens } : {}),
     ...(cost !== undefined ? { cost_usd: cost } : {}),
   }
 }
