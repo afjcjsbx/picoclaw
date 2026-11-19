@@ -24,6 +24,11 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
 const (
 	MaxNameLength        = 64
 	MaxDescriptionLength = 1024
+
+	// MaxCatalogDescription is the max characters of a skill description in the prompt catalog.
+	MaxCatalogDescription = 60
+	// MaxCatalogSkills is the max number of skills listed in the prompt catalog.
+	MaxCatalogSkills = 100
 )
 
 type SkillMetadata struct {
@@ -83,7 +88,10 @@ func (s SkillInfo) CatalogLines() []string {
 	lines := []string{
 		"  <skill>",
 		fmt.Sprintf("    <name>%s</name>", escapeXML(s.Name)),
-		fmt.Sprintf("    <description>%s</description>", escapeXML(s.Description)),
+		fmt.Sprintf(
+			"    <description>%s</description>",
+			escapeXML(truncateRunes(s.Description, MaxCatalogDescription)),
+		),
 	}
 	if s.IsPluginSkill() {
 		if location := s.pluginLocation(); location != "" {
@@ -270,19 +278,45 @@ func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
 }
 
 func (sl *SkillsLoader) BuildSkillsSummary() string {
-	allSkills := sl.ListSkills()
-	if len(allSkills) == 0 {
+	return BuildCatalog(sl.ListSkills())
+}
+
+// BuildCatalog renders skills as the <skills> prompt block. Only the first
+// MaxCatalogSkills (priority order: workspace > global > builtin > plugin) are
+// listed; the rest are dropped with a warning.
+func BuildCatalog(skills []SkillInfo) string {
+	if len(skills) == 0 {
 		return ""
 	}
+	if len(skills) > MaxCatalogSkills {
+		logger.WarnCF("skills", "Too many skills, extra skills are not listed in the prompt",
+			map[string]any{"total": len(skills), "limit": MaxCatalogSkills})
+		skills = skills[:MaxCatalogSkills]
+	}
 
-	var lines []string
-	lines = append(lines, "<skills>")
-	for _, s := range allSkills {
+	lines := []string{"<skills>"}
+	for _, s := range skills {
 		lines = append(lines, s.CatalogLines()...)
 	}
 	lines = append(lines, "</skills>")
 
 	return strings.Join(lines, "\n")
+}
+
+// truncateRunes cuts s to at most limit characters, ending in "..." when cut.
+// It scans in place (no []rune copy) and never splits a UTF-8 sequence.
+func truncateRunes(s string, limit int) string {
+	n, cut := 0, 0
+	for i := range s {
+		if n == limit-3 {
+			cut = i
+		}
+		if n == limit {
+			return s[:cut] + "..."
+		}
+		n++
+	}
+	return s
 }
 
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {

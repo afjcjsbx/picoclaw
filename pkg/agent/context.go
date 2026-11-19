@@ -640,19 +640,13 @@ func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
 		return ""
 	}
 
-	var lines []string
-	lines = append(lines, "<skills>")
+	var infos []skills.SkillInfo
 	for _, s := range cb.skillsLoader.ListSkills() {
-		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(s.Name))]; !ok {
-			continue
+		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(s.Name))]; ok {
+			infos = append(infos, s)
 		}
-		lines = append(lines, s.CatalogLines()...)
 	}
-	if len(lines) == 1 {
-		return ""
-	}
-	lines = append(lines, "</skills>")
-	return strings.Join(lines, "\n")
+	return skills.BuildCatalog(infos)
 }
 
 // EstimateSystemTokens estimates the token count of the full system message

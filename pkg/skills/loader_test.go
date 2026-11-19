@@ -1,8 +1,10 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -416,4 +418,28 @@ func TestGetSkillMetadata_IgnoresHTMLCommentBlocks(t *testing.T) {
 	require.NotNil(t, meta)
 	assert.Equal(t, "biomed-skill", meta.Name)
 	assert.Equal(t, "Summarize biomedical papers.", meta.Description)
+}
+
+func TestTruncateRunes(t *testing.T) {
+	long := strings.Repeat("è", 61) // multi-byte: byte slicing would split a rune
+	if got := truncateRunes(long, 60); got != strings.Repeat("è", 57)+"..." {
+		t.Fatalf("long: got %q", got)
+	}
+	exact := strings.Repeat("a", 60)
+	if got := truncateRunes(exact, 60); got != exact {
+		t.Fatalf("exact: got %q", got)
+	}
+}
+
+func TestBuildCatalogCapsSkills(t *testing.T) {
+	infos := make([]SkillInfo, MaxCatalogSkills+5)
+	for i := range infos {
+		infos[i] = SkillInfo{Name: fmt.Sprintf("s%d", i), Path: "/p", Source: "workspace"}
+	}
+	if got := strings.Count(BuildCatalog(infos), "<skill>"); got != MaxCatalogSkills {
+		t.Fatalf("listed %d skills, want %d", got, MaxCatalogSkills)
+	}
+	if BuildCatalog(nil) != "" {
+		t.Fatal("empty catalog must be empty string")
+	}
 }
