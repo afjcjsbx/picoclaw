@@ -159,7 +159,13 @@ Default mounts include the instance root plus the minimum runtime system paths s
 
 At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed.
 
-Absolute path arguments are exposed **read-only**: a directory passed on the command line does not become a writable hole in the sandbox. Writable locations come from `expose_paths`, the effective working directory, or the parent of a non-existent path argument (so output files can still be created).
+Absolute path arguments are auto-exposed with the following rules:
+
+- An argument is treated as a path only when it is a plain absolute token with no whitespace, control characters, or shell metacharacters (`;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`, backtick, quotes, `\`, `*`, `?`, `[`, `]`, `{`, `}`). Shell command strings passed to `sh -c` are therefore never treated as paths.
+- Existing paths are exposed **read-only**. Directories passed on the command line do not become writable holes in the sandbox; writable locations come from `expose_paths` or the effective working directory.
+- Non-existent paths expose their parent directory **read-write** so the command can create output files. This supports tools such as the Weixin SILK voice decoder that write to a not-yet-existing output path.
+- Broad paths are **refused** automatically: `/`, any path directly under `/` (e.g. `/home`, `/etc`, `/tmp`, `/proc`), the invoking user's home directory, and every ancestor of the home directory. A single warning is logged per distinct refused path. Use `isolation.expose_paths` in `config.json` to grant access to these paths explicitly when needed.
+- If the mount plan already has a rule that covers the path (an exact match or an ancestor), no additional rule is added, preventing conflicting mode stacking.
 
 There is no automatic fallback when `bwrap` is missing.
 

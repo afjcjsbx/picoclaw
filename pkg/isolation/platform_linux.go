@@ -4,7 +4,6 @@ package isolation
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -267,43 +266,24 @@ func appendLinuxArgumentMounts(plan []MountRule, args []string) []MountRule {
 		if !ok {
 			continue
 		}
-		clean := filepath.Clean(path)
-		if _, err := os.Stat(clean); err == nil {
-			// Absolute path arguments are exposed read-only: a directory passed
-			// on the command line must not become a writable hole in the
-			// sandbox. Writable locations come from expose_paths or the cwd.
-			plan = ensureLinuxMountRule(plan, clean, clean, "ro")
-			if resolved, resolveErr := filepath.EvalSymlinks(clean); resolveErr == nil && resolved != clean {
-				plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
-			}
-			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		parent := filepath.Dir(clean)
-		if parent == clean {
-			continue
-		}
-		if _, err := os.Stat(parent); err == nil {
-			plan = ensureLinuxMountRule(plan, parent, parent, "rw")
-		}
+		plan = appendLinuxArgumentMountsFor(plan, path)
 	}
 	return plan
 }
 
 func linuxArgumentPath(arg string) (string, bool) {
-	if filepath.IsAbs(arg) {
-		return arg, true
+	// Plain absolute path token: must contain no shell metacharacters so that
+	// command strings like "cat /home/bob/x; rm -rf /" are never treated as
+	// paths. See isLinuxArgPathCandidate in arg_mounts_linux.go.
+	if path, ok := isLinuxArgPathCandidate(arg); ok {
+		return path, true
 	}
+	// --flag=value form: extract the value and apply the same candidate check.
 	idx := strings.IndexRune(arg, '=')
 	if idx <= 0 || idx == len(arg)-1 {
 		return "", false
 	}
-	value := arg[idx+1:]
-	if !filepath.IsAbs(value) {
-		return "", false
-	}
-	return value, true
+	return isLinuxArgPathCandidate(arg[idx+1:])
 }
 
 func isRelativeCommandPath(path string) bool {
