@@ -28,7 +28,7 @@ Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXE
 
 When the built-in guard is enabled (`enable_deny_patterns: true`, the default), PicoClaw parses every Unix command with `mvdan.cc/sh/v3/syntax` before execution and classifies each simple command in the AST. Pipelines, `&&`/`||`/`;` lists, loops, functions and command substitutions are all walked. This catches indirection that regex deny lists cannot resolve, for example `x=rm; $x -rf /` or `"r"'m' -rf /`.
 
-On Unix the AST classifier is the **single source of truth for command danger**. The regex default deny set only covers shell constructs that hide a command from the AST: command substitution, pipe-to-shell and shell heredocs. Command names such as `sudo`, `chmod`, `git push` or `rm -rf` follow `risk_threshold`.
+On Unix the AST classifier is the **single source of truth for command danger**. The default deny set only covers shell constructs that hide a command from the AST: command substitution, pipe-to-shell and shell heredocs. Command names such as `sudo`, `chmod`, `git push` or `rm -rf` follow `risk_threshold`.
 
 The built-in table assigns a base level to known commands and a small set of argument modifiers raises destructive verbs. Commands that are not listed are **unknown**: the caller decides whether to allow, review or block them.
 
@@ -227,7 +227,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 ## Functionality
 
 - **`enable_deny_patterns`**: Set to `false` to disable the optional built-in guard set (the shell-construct deny patterns and the AST risk classifier). The hardline floor and `custom_deny_patterns` still apply.
-- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow or unlock patterns cannot exempt them.
+- **`custom_deny_patterns`**: Add custom deny regex patterns. These are always enforced, even when `enable_deny_patterns` is `false`, and custom allow patterns cannot exempt them.
 
 ## Hardline Always-On Patterns
 
@@ -252,7 +252,7 @@ When `agents.defaults.restrict_to_workspace` is `true` (the default), exec on Un
 - Relative operands are resolved against every directory the command entered, not only the workspace root. A second `cd` or a symlink under a subdirectory cannot be used to reach outside: `cd sub; cd link; cat secret.txt` and `cd sub; cat link/secret.txt` are rejected when `sub/link` points outside the workspace.
 - Assignments or unsets of `HOME`, `PWD`, `OLDPWD` and `CDPATH` are rejected under workspace restriction, so `$HOME`/`$PWD` always resolve against the policy values instead of a value the static pass did not see.
 - Dynamic redirection targets (`> "$OUT"`) and dynamic nested scripts.
-- Commands nested in `sh -c`/`bash -c`, shell heredoc scripts, `exec`, `find -exec`, and common wrappers (`command`, `builtin`, `env`, `timeout`, `xargs`, and similar). `eval` and `trap` are rejected because their command string cannot be followed reliably.
+- Commands nested in `sh -c`/`bash -c`, shell heredoc scripts, `exec`, `find -exec`, common wrappers (`command`, `builtin`, `env`, `timeout`, `xargs`, and similar) and the command strings of `flock -c`, `runuser -c` and `capsh --`. Backslash escapes are resolved first, so `cat \/etc/passwd` is checked as `/etc/passwd`. `eval` and `trap` are rejected because their command string cannot be followed reliably.
 
 Expansion uses the child shell's `HOME`. Quoted literals such as `echo '$HOME'` and `echo '~'` are not treated as paths, and web URLs are exempt from local path checks. `file:` URIs are rejected fail-closed because they name local files that the static pass cannot validate.
 
@@ -260,11 +260,13 @@ This is a static best-effort layer, not an OS sandbox: child processes, scripts 
 
 ## Default Blocked Shell Constructs
 
-On Unix the AST risk classifier is the source of truth for command danger. The regex default deny set only covers constructs it cannot inspect; these patterns are enabled by default and can be disabled with `enable_deny_patterns: false`:
+On Unix the AST risk classifier is the source of truth for command danger. The default deny set only covers constructs it cannot inspect; it is enabled by default and can be disabled with `enable_deny_patterns: false`. The constructs are read from the parse of the command, including the scripts it runs through `sh -c`, `eval` and wrappers, so quoted text is not a hit:
 
-- Command substitution: `$()`, backticks
-- Pipe to shell: `| sh`, `| bash` (and the other POSIX shells)
-- Shell heredoc: `sh <<EOF`, `bash <<'EOF'`
+- Command substitution: `$()` and backticks. `echo '$(date)'` and arithmetic expansion `$((1+2))` are not substitutions.
+- Pipe to shell: a pipe into a shell that executes its stdin, such as `| sh`, `| bash -s`, `| /bin/sh` or `| env bash`. A shell with its own `-c` script is classified by that script instead.
+- Shell heredoc: a heredoc or here-string feeding a shell that executes stdin, such as `sh <<EOF` or `bash <<< 'cmd'`.
+
+A command that does not parse, and every Windows command, falls back to equivalent text patterns. `custom_allow_patterns` exempts this set as before.
 
 Command-level dangers such as `sudo`, `chmod`, `chown`, `kill`, `git push`, `eval` and `source` are classified by the risk table. Use `risk_threshold` to tune them.
 
