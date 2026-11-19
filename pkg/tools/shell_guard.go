@@ -1,13 +1,10 @@
 package tools
 
 import (
-	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 
-	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
@@ -110,39 +107,6 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	return nil
 }
 
-// denyFormsOf lists the text forms the deny patterns match. Quoted heredoc
-// bodies are literal text: a backtick there cannot run a command, so deny
-// patterns must not inspect it.
-func denyFormsOf(cmd string, analysis shellguard.Analysis) []string {
-	// The caller parsed the untrimmed command, so trim the stripped view.
-	stripped := strings.TrimSpace(analysis.StrippedHeredoc)
-	if runtime.GOOS == "windows" {
-		return []string{strings.ToLower(stripped)}
-	}
-
-	// POSIX shells can hide a command behind fixed obfuscation such as $IFS,
-	// ANSI-C quoting or a backslash-newline. Resolve those forms and let the AST
-	// expose quote-spliced argv words. This runs even when the optional risk
-	// classifier is nil, so the hardline floor stays independent of
-	// enable_deny_patterns.
-	canonicalForms := analysis.Canonical
-	if !analysis.CanonicalExact {
-		// Fixed rewrites such as $IFS change word boundaries, so the
-		// written-form AST is not authoritative; re-parse the normalized text
-		// only for those rare commands.
-		canonicalForms = shellguard.CanonicalCommands(cmd)
-	}
-	forms := make([]string, 0, 1+len(canonicalForms))
-	forms = append(forms, strings.ToLower(shellguard.NormalizeForDeny(stripped)))
-	// Canonicalize every command, not just ones with quoting: wrappers such as
-	// env and command expose the nested argv without any special shell syntax,
-	// and custom deny patterns must see it.
-	for _, form := range canonicalForms {
-		forms = append(forms, strings.ToLower(form))
-	}
-	return forms
-}
-
 func (t *ExecTool) guardHardline(in *guardInput) error {
 	if patternsMatchAny(t.hardlineDenyPatterns, in.denyForms) {
 		return blockedBySafetyGuard("dangerous pattern detected")
@@ -193,28 +157,7 @@ func (t *ExecTool) guardWorkspace(in *guardInput) error {
 		cwdPath = resolved
 	}
 
-	if runtime.GOOS == "windows" {
-		// PowerShell does not parse as POSIX shell, so the AST pass is
-		// unavailable and the Windows path scanner remains the only workspace
-		// layer.
-		if blocked := t.guardWindowsWorkspacePaths(in.command, cwdPath); blocked != "" {
-			return guardBlockedError(blocked)
-		}
-		return nil
-	}
-
-	policy := shellguard.WorkspacePolicy{
-		Cwd:    cwdPath,
-		Home:   t.execHomeDir(),
-		CDPath: t.baseEnv["CDPATH"] != "",
-		AllowPath: func(p string) bool {
-			return t.workspacePathAllowed(p, cwdPath)
-		},
-	}
-	if err := shellguard.CheckWorkspaceFile(in.command, in.analysis.File, policy); err != nil {
-		return blockedBySafetyGuard(err.Error())
-	}
-	return nil
+	return t.checkWorkspacePaths(in, cwdPath)
 }
 
 // guardRisk is the last built-in layer: it sees commands that the byte-level
@@ -240,41 +183,8 @@ func (t *ExecTool) matchesDefaultDeny(analysis shellguard.Analysis, forms []stri
 	if !t.blockOpaque {
 		return false
 	}
-	if runtime.GOOS == "windows" || analysis.File == nil {
+	if !posixShell || analysis.File == nil {
 		return patternsMatchAny(opaqueFallbackPatterns, forms)
 	}
 	return len(analysis.OpaqueConstructs) > 0
-}
-
-// workspacePathAllowed reports whether p stays inside cwdPath or is covered by
-// the operator allowlist. Symlinks are resolved against the nearest existing
-// ancestor so a new file behind a symlinked directory is still checked.
-func (t *ExecTool) workspacePathAllowed(p, cwdPath string) bool {
-	if resolved, err := fstools.ResolvePathAgainstExistingAncestor(p); err == nil {
-		p = resolved
-	}
-	if safePaths[p] {
-		return true
-	}
-	if fstools.IsAllowedPath(p, t.allowedPathPatterns) {
-		return true
-	}
-	return fstools.IsWithinWorkspace(p, cwdPath)
-}
-
-// execHomeDir returns the home directory the child shell will see. A HOME
-// present in the cached base environment (config env_set or inherited) wins,
-// even when it is not absolute; tilde expansion is then unresolvable and
-// blocked. os.UserHomeDir is only a fallback when the key is absent.
-func (t *ExecTool) execHomeDir() string {
-	if home, ok := t.baseEnv["HOME"]; ok {
-		if filepath.IsAbs(home) {
-			return home
-		}
-		return ""
-	}
-	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
-		return home
-	}
-	return ""
 }

@@ -1,8 +1,6 @@
 package tools
 
 import (
-	"runtime"
-
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
@@ -15,7 +13,7 @@ import (
 // runs PowerShell there and the classifier's command table describes POSIX
 // tools.
 func newRiskGuard(threshold string, enabled bool) (*shellguard.Guard, error) {
-	if !enabled || runtime.GOOS == "windows" {
+	if !enabled || !posixShell {
 		return nil, nil
 	}
 

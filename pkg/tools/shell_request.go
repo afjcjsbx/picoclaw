@@ -170,7 +170,7 @@ func (t *ExecTool) planRun(req runRequest, analysis shellguard.Analysis) (runPla
 		return runPlan{}, ErrorResult(reason)
 	}
 
-	if req.pty && runtime.GOOS == "windows" {
+	if req.pty && !ptySupported {
 		return runPlan{}, ErrorResult("PTY is not supported on Windows. Use background=true without pty.")
 	}
 

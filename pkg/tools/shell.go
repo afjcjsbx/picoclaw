@@ -284,18 +284,7 @@ func selfProtectionHardlinePatterns() []*regexp.Regexp {
 		if path == string(filepath.Separator) || filepath.Dir(path) == path {
 			continue
 		}
-		path = strings.TrimRight(path, string(filepath.Separator))
-		if runtime.GOOS == "windows" {
-			path = strings.TrimRight(path, "/")
-		}
-		if path == "" {
-			continue
-		}
-		variants := []string{path}
-		if runtime.GOOS == "windows" {
-			variants = append(variants, filepath.ToSlash(path))
-		}
-		for _, variant := range variants {
+		for _, variant := range protectedPathForms(path) {
 			key := strings.ToLower(variant)
 			if _, ok := seen[key]; ok {
 				continue
@@ -387,8 +376,8 @@ func NewExecToolWithConfig(
 	}
 
 	var denyPatterns []*regexp.Regexp
-	if enableDefaultGuard && runtime.GOOS == "windows" {
-		denyPatterns = windowsDenyPatterns
+	if enableDefaultGuard {
+		denyPatterns = platformDenyPatterns()
 	}
 
 	riskGuard, err := newRiskGuard(execConfig.RiskThreshold, enableDefaultGuard)

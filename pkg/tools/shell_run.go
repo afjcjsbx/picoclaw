@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -62,18 +61,6 @@ func findShellExecutable() (string, error) {
 	return absolute, nil
 }
 
-// shellCommand returns the OS shell and its arguments for one exec run.
-func shellCommand(command string) (string, []string, error) {
-	if runtime.GOOS == "windows" {
-		return "powershell", []string{"-NoProfile", "-NonInteractive", "-Command", command}, nil
-	}
-	shellPath, err := findShellExecutable()
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to locate shell: %w", err)
-	}
-	return shellPath, []string{"-c", command}, nil
-}
-
 // cwdProbeFile receives the final working directory from a wrapped foreground
 // command. A temp file keeps the probe out of stdout, so output truncation,
 // exit-status parsing and artifact tests see exactly the command's output.
@@ -88,28 +75,6 @@ func newCwdProbeFile() (string, error) {
 		return "", err
 	}
 	return path, nil
-}
-
-// shellQuote single-quotes a path for the POSIX shell.
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
-}
-
-// wrapCommandForCwd appends a probe that writes `pwd -P` after the command and
-// preserves its exit status. The wrapper runs in the same shell, so `cd` inside
-// the command is observed. Commands that cannot safely take a suffix (Windows
-// PowerShell and a trailing backslash continuation) are left unchanged.
-func wrapCommandForCwd(command, probePath string) (string, bool) {
-	if runtime.GOOS == "windows" || probePath == "" {
-		return command, false
-	}
-	if strings.HasSuffix(strings.TrimRight(command, " \t\r\n"), "\\") {
-		return command, false
-	}
-	wrapped := command + "\n__picoclaw_exec_status=$?\n" +
-		"command pwd -P > " + shellQuote(probePath) + " 2>/dev/null\n" +
-		"exit $__picoclaw_exec_status"
-	return wrapped, true
 }
 
 // readObservedCwd reads the probe file written by the wrapper. A missing or
