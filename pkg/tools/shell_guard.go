@@ -77,15 +77,6 @@ var guardLayers = []func(*ExecTool, *guardInput) error{
 	(*ExecTool).guardRisk,
 }
 
-// guardCommandContext parses the command and runs the guard layers. It returns
-// "" to allow it, or the block message.
-func (t *ExecTool) guardCommandContext(command, cwd string) string {
-	if err := t.guardCommandWithAnalysis(command, cwd, shellguard.Analyze(strings.TrimSpace(command))); err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
 // guardCommandWithAnalysis runs the guard layers with a parse the caller
 // already owns, so a run does not parse the same command twice.
 func (t *ExecTool) guardCommandWithAnalysis(

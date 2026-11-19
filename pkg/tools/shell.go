@@ -240,3 +240,10 @@ func (t *ExecTool) completionResult(session *ProcessSession) *ToolResult {
 func (t *ExecTool) SetTimeout(timeout time.Duration) {
 	t.timeout = timeout
 }
+
+// DisableBackgroundPromotion makes foreground runs keep their configured
+// timeout instead of being promoted to a tracked background session past the
+// foreground cap. Callers that consume the output in the same call need it.
+func (t *ExecTool) DisableBackgroundPromotion() {
+	t.foregroundCap = 0
+}

@@ -9,13 +9,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/isolation"
-	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
@@ -266,16 +264,9 @@ func startForeground(cmd *exec.Cmd, collector *boundedOutput) (*foregroundRun, e
 		_ = outputReader.Close()
 	}()
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ErrorCF("shell", "cmd.Wait goroutine panic recovered",
-					map[string]any{
-						"panic": fmt.Sprintf("%v", r),
-						"stack": string(debug.Stack()),
-					})
-				run.done <- fmt.Errorf("panic in cmd.Wait: %v", r)
-			}
-		}()
+		defer recoverGoroutine("cmd.Wait", func(recovered any) {
+			run.done <- fmt.Errorf("panic in cmd.Wait: %v", recovered)
+		})
 		run.done <- cmd.Wait()
 	}()
 	return run, nil

@@ -70,13 +70,7 @@ func denyFormsOf(cmd string, analysis shellguard.Analysis) []string {
 	// expose quote-spliced argv words. This runs even when the optional risk
 	// classifier is nil, so the hardline floor stays independent of
 	// enable_deny_patterns.
-	canonicalForms := analysis.Canonical
-	if !analysis.CanonicalExact {
-		// Fixed rewrites such as $IFS change word boundaries, so the
-		// written-form AST is not authoritative; re-parse the normalized text
-		// only for those rare commands.
-		canonicalForms = shellguard.CanonicalCommands(cmd)
-	}
+	canonicalForms := analysis.Forms(cmd)
 	forms := make([]string, 0, 1+len(canonicalForms))
 	forms = append(forms, strings.ToLower(shellguard.NormalizeForDeny(stripped)))
 	// Canonicalize every command, not just ones with quoting: wrappers such as

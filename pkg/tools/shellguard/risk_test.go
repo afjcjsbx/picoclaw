@@ -84,10 +84,10 @@ func TestClassifyCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, known := ClassifyCommand(tt.args)
+			got, known := classifyCommand(tt.args)
 			if got != tt.want || known != tt.known {
 				t.Fatalf(
-					"ClassifyCommand(%v) = (%v, %v), want (%v, %v)",
+					"classifyCommand(%v) = (%v, %v), want (%v, %v)",
 					tt.args, got, known, tt.want, tt.known,
 				)
 			}
@@ -145,12 +145,12 @@ func TestClassifyModifiers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, known := ClassifyCommand(tt.args)
+			got, known := classifyCommand(tt.args)
 			if !known {
-				t.Fatalf("ClassifyCommand(%v) = unknown, want a known command", tt.args)
+				t.Fatalf("classifyCommand(%v) = unknown, want a known command", tt.args)
 			}
 			if got != tt.want {
-				t.Fatalf("ClassifyCommand(%v) = %v, want %v", tt.args, got, tt.want)
+				t.Fatalf("classifyCommand(%v) = %v, want %v", tt.args, got, tt.want)
 			}
 		})
 	}
@@ -179,7 +179,7 @@ func TestDestructiveOperandCommandsAreClassified(t *testing.T) {
 	t.Parallel()
 
 	for name := range destructiveOperandCommands {
-		if _, known := ClassifyCommand([]string{name}); !known {
+		if _, known := classifyCommand([]string{name}); !known {
 			t.Errorf("%s is in destructiveOperandCommands but not in the risk table", name)
 		}
 	}

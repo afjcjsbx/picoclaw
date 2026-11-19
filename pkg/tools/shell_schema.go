@@ -160,3 +160,20 @@ func numberArg(args map[string]any, key string, minimum float64) (value float64,
 	}
 	return value, true, true
 }
+
+// foregroundPromotionNote explains why a requested foreground timeout was
+// turned into a tracked background session.
+func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Duration) string {
+	capSeconds := int64(t.foregroundCap / time.Second)
+	reason := fmt.Sprintf(
+		"Requested timeout of %ds exceeds the %ds foreground cap",
+		int64(timeout/time.Second), capSeconds,
+	)
+	if timeoutDisabled {
+		reason = fmt.Sprintf(
+			"timeout=0 disables the timeout, which exceeds the %ds foreground cap",
+			capSeconds,
+		)
+	}
+	return reason + "; started as a tracked background session."
+}

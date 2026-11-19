@@ -17,7 +17,6 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // withNote appends one model-facing note to another without leaving a double
@@ -27,23 +26,6 @@ func withNote(base, add string) string {
 		return add
 	}
 	return base + " " + add
-}
-
-// foregroundPromotionNote explains why a requested foreground timeout was
-// turned into a tracked background session.
-func (t *ExecTool) foregroundPromotionNote(timeoutDisabled bool, timeout time.Duration) string {
-	capSeconds := int64(t.foregroundCap / time.Second)
-	reason := fmt.Sprintf(
-		"Requested timeout of %ds exceeds the %ds foreground cap",
-		int64(timeout/time.Second), capSeconds,
-	)
-	if timeoutDisabled {
-		reason = fmt.Sprintf(
-			"timeout=0 disables the timeout, which exceeds the %ds foreground cap",
-			capSeconds,
-		)
-	}
-	return reason + "; started as a tracked background session."
 }
 
 // findShellExecutable resolves sh through PATH the same way the shell would.
@@ -67,70 +49,6 @@ func (t *ExecTool) prepareExecCommand(cmd *exec.Cmd, cwd string, env []string) {
 	}
 	cmd.Env = env
 	prepareCommandForTermination(cmd)
-}
-
-// exitCodeNotes explains non-zero statuses that are commonly normal. The map
-// is deliberately small: an unknown exit code must stay a real error hint.
-var exitCodeNotes = map[string]map[int]string{
-	"grep":  {1: "grep exit 1 means no matches (not an error)"},
-	"egrep": {1: "grep exit 1 means no matches (not an error)"},
-	"fgrep": {1: "grep exit 1 means no matches (not an error)"},
-	"rg":    {1: "ripgrep exit 1 means no matches (not an error)"},
-	"ag":    {1: "exit 1 means no matches (not an error)"},
-	"ack":   {1: "exit 1 means no matches (not an error)"},
-	"diff":  {1: "diff exit 1 means files differ (not an error)"},
-	"colordiff": {
-		1: "diff exit 1 means files differ (not an error)",
-	},
-	"test": {1: "test exit 1 means the condition is false (not an error)"},
-	"[":    {1: "test exit 1 means the condition is false (not an error)"},
-	"git":  {1: "git exit 1 is often normal, for example git diff with changes"},
-}
-
-// signalExitNotes explains the shell's 128+signal statuses that models most
-// often misread. The table is curated, not exhaustive: an unknown code stays a
-// real error hint. 130 (SIGINT) is omitted because an interactive interrupt is
-// usually expected.
-var signalExitNotes = map[int]string{
-	129: "SIGHUP (terminal closed or hangup)",
-	132: "SIGILL (illegal instruction)",
-	134: "SIGABRT (abort)",
-	135: "SIGBUS (bus error)",
-	136: "SIGFPE (arithmetic error)",
-	137: "SIGKILL (often the OOM killer or kill -9)",
-	139: "SIGSEGV (segmentation fault)",
-	141: "SIGPIPE (wrote to a closed pipe)",
-	143: "SIGTERM (terminated by kill or shutdown)",
-}
-
-// informativeExitNote returns a model-facing note for a non-zero status that
-// has a well-known non-error meaning. The last canonical simple command is the
-// one that supplies the shell's exit status.
-func informativeExitNote(command string, analysis shellguard.Analysis, code int) string {
-	if code <= 0 {
-		return ""
-	}
-	if signal, ok := signalExitNotes[code]; ok {
-		return fmt.Sprintf(
-			"exit code %d usually means the command was terminated by %s", code, signal,
-		)
-	}
-	forms := analysis.Canonical
-	if !analysis.CanonicalExact {
-		forms = shellguard.CanonicalCommands(command)
-	}
-	if len(forms) == 0 {
-		return ""
-	}
-	fields := strings.Fields(forms[len(forms)-1])
-	if len(fields) == 0 {
-		return ""
-	}
-	name := fields[0]
-	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
-		name = name[slash+1:]
-	}
-	return exitCodeNotes[name][code]
 }
 
 // pumpOutput drains one session stream into its rolling log until the reader
@@ -160,8 +78,9 @@ func pumpOutput(label string, reader io.Reader, session *ProcessSession, onChunk
 }
 
 // recoverGoroutine is deferred at the top of a session goroutine so a panic is
-// logged instead of crashing the process. onPanic runs after the log line.
-func recoverGoroutine(label string, onPanic ...func()) {
+// logged instead of crashing the process. onPanic runs after the log line with
+// the recovered value.
+func recoverGoroutine(label string, onPanic ...func(recovered any)) {
 	r := recover()
 	if r == nil {
 		return
@@ -172,7 +91,7 @@ func recoverGoroutine(label string, onPanic ...func()) {
 			"stack": string(debug.Stack()),
 		})
 	for _, f := range onPanic {
-		f()
+		f(r)
 	}
 }
 
@@ -365,7 +284,7 @@ func watchSession(cmd *exec.Cmd, session *ProcessSession, stdio *sessionStdio) {
 	// so we need cmd.Wait() in a separate goroutine to detect process exit.
 	if session.PTY && session.ptyMaster != nil {
 		go func() {
-			defer recoverGoroutine("PTY cmd.Wait", func() { session.finish(-1) })
+			defer recoverGoroutine("PTY cmd.Wait", func(any) { session.finish(-1) })
 			cmd.Wait() // Wait for process to exit
 			session.finish(processExitCode(cmd.ProcessState))
 		}()

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
 )
 
 // newTestExecTool builds an exec tool with remote access enabled so tests that
@@ -28,10 +29,15 @@ func newTestExecTool(workingDir string, restrict bool) (*ExecTool, error) {
 	return NewExecToolWithConfig(workingDir, restrict, cfg)
 }
 
-// guardCommand runs the command guard with a background context, so tests that
-// only assert the decision do not need to build one.
+// guardCommand parses the command and runs the guard layers, returning "" when
+// the command may run and the block message otherwise. Tests that only assert
+// the decision use it instead of building a run.
 func (t *ExecTool) guardCommand(command, cwd string) string {
-	return t.guardCommandContext(command, cwd)
+	err := t.guardCommandWithAnalysis(command, cwd, shellguard.Analyze(strings.TrimSpace(command)))
+	if err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 func parseExecRunMeta(t *testing.T, forLLM string) map[string]any {

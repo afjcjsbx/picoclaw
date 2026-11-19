@@ -66,9 +66,9 @@ func ParseRiskLevel(s string) (RiskLevel, error) {
 	}
 }
 
-// ArgModifier elevates a command's risk level when all its tokens are present.
+// argModifier elevates a command's risk level when all its tokens are present.
 // Matching is order-independent and uses argv after normalizeFlags.
-type ArgModifier struct {
+type argModifier struct {
 	Args  []string
 	Level RiskLevel
 }
@@ -182,7 +182,7 @@ var commandRiskTable = map[string]RiskLevel{
 // Matching is order-independent and highest-match-wins. The base table keeps
 // multi-verb tools at medium so read-only verbs remain usable; these modifiers
 // raise the destructive verbs.
-var argumentModifiers = map[string][]ArgModifier{
+var argumentModifiers = map[string][]argModifier{
 	"rm": {
 		{Args: []string{"-r", "-f"}, Level: RiskCritical},
 		{Args: []string{"-R", "-f"}, Level: RiskCritical},
@@ -437,7 +437,7 @@ func rmRiskLevel(args []string) RiskLevel {
 	}
 }
 
-// ClassifyCommand returns the risk level of a resolved command and whether the
+// classifyCommand returns the risk level of a resolved command and whether the
 // command is present in the table. args[0] is the command name and args[1:] are
 // its arguments.
 //
@@ -445,7 +445,7 @@ func rmRiskLevel(args []string) RiskLevel {
 // allow, review or block them. Argument modifiers can only elevate a known base
 // level, and the rm and aws floors cover flag clusters and delete verbs that a
 // simple token match would miss.
-func ClassifyCommand(args []string) (RiskLevel, bool) {
+func classifyCommand(args []string) (RiskLevel, bool) {
 	if len(args) == 0 {
 		return RiskMedium, false
 	}
@@ -538,8 +538,8 @@ func (e *BlockedError) Error() string {
 	)
 }
 
-// FormatCommand renders at most the first five argv tokens for an error.
-func FormatCommand(args []string) string {
+// formatCommand renders at most the first five argv tokens for an error.
+func formatCommand(args []string) string {
 	if len(args) == 0 {
 		return ""
 	}

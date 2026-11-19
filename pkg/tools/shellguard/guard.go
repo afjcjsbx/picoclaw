@@ -218,13 +218,13 @@ func (g *Guard) classify(words []word) Assessment {
 		return assessment
 	}
 	args := wordTexts(words)
-	level, known := ClassifyCommand(args)
+	level, known := classifyCommand(args)
 	if !known {
 		return unknownAssessment(args, "command is not in the risk table")
 	}
 	return Assessment{
 		Level:   level,
-		Command: FormatCommand(args),
+		Command: formatCommand(args),
 	}
 }
 
@@ -239,7 +239,7 @@ func dynamicDestructiveOperand(words []word) (Assessment, bool) {
 		if arg.dynamic {
 			return Assessment{
 				Level:   RiskCritical,
-				Command: FormatCommand(wordTexts(words)),
+				Command: formatCommand(wordTexts(words)),
 				Reason:  "dynamic operand for destructive command cannot be validated",
 				Verdict: VerdictReject,
 			}, true
@@ -256,7 +256,7 @@ func unknownFor(words []word, reason string) Assessment {
 func unknownAssessment(args []string, reason string) Assessment {
 	return Assessment{
 		Level:   RiskCritical,
-		Command: FormatCommand(args),
+		Command: formatCommand(args),
 		Reason:  reason,
 		Verdict: VerdictUnknown,
 	}

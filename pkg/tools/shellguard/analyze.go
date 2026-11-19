@@ -35,6 +35,16 @@ type Analysis struct {
 	CanonicalExact bool
 }
 
+// Forms returns the canonical forms of command: the ones Analyze computed or,
+// when a fixed rewrite changed word boundaries, the forms of the normalized
+// text.
+func (a Analysis) Forms(command string) []string {
+	if a.CanonicalExact {
+		return a.Canonical
+	}
+	return CanonicalCommands(command)
+}
+
 // Analyze parses command once and derives the forms the guard layers need.
 // A parse error leaves File and RiskFile nil; the workspace pass rejects
 // unparseable input, while the risk pass marks it unknown (allowed by default).
