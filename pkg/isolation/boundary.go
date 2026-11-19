@@ -53,6 +53,9 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 	case "linux":
 		boundary.PathBoundary = true
 		boundary.Scratch = filepath.Join(boundary.Root, "runtime-user-env", "tmp")
+		// Network is true by default; block_network downgrades it so the system
+		// prompt ("Network access is unavailable.") stays truthful.
+		boundary.Network = !cfg.BlockNetwork
 
 		customTargets := customExposeTargets(cfg.ExposePaths)
 		merged := MergeExposePaths(DefaultExposePaths(boundary.Root), cfg.ExposePaths)

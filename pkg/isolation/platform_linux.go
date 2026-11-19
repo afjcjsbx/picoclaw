@@ -82,6 +82,9 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	if err != nil {
 		return err
 	}
+	if isolation.BlockNetwork {
+		bwrapArgs = insertLinuxUnshareNet(bwrapArgs)
+	}
 
 	cmd.Path = bwrapPath
 	cmd.Args = bwrapArgs

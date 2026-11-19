@@ -44,7 +44,8 @@ Isolation lives under:
 {
   "isolation": {
     "enabled": false,
-    "expose_paths": []
+    "expose_paths": [],
+    "block_network": false
   }
 }
 ```
@@ -53,6 +54,7 @@ Field meanings:
 
 - `enabled`: enables or disables subprocess isolation. Default: `false`.
 - `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. Linux supports path remapping; macOS supports same-path access only.
+- `block_network`: drops child processes into an isolated network namespace so they cannot reach loopback services, cloud-metadata endpoints (e.g. `169.254.169.254`), sidecar daemons, or other host-local services. Default: `false` (host network shared). **Linux only**; preflight returns an error on macOS and Windows.
 
 Example:
 
@@ -75,6 +77,29 @@ Example:
   }
 }
 ```
+
+### `block_network` security note
+
+By default (`block_network: false`) child processes share the host network namespace. This means loopback
+services on the host, cloud-instance metadata endpoints such as `http://169.254.169.254/`, sidecar
+daemons, and local databases are reachable from inside the sandbox. A sandboxed process can exfiltrate
+data with any network-capable runtime (`curl`, `python`, `node`, etc.); the exec tool's command-level
+guards are not a sufficient network boundary.
+
+Enabling `block_network: true` passes `--unshare-net` to bubblewrap, placing child processes in a fresh
+network namespace that contains only a loopback interface (`lo`). Connections to host services or the
+internet fail with "connection refused" / "network unreachable".
+
+**What breaks when `block_network: true`:**
+
+- `curl`, `wget`, or any HTTP client inside the sandbox.
+- `git fetch`/`git clone`/`git push` over the network.
+- Package managers (`pip`, `npm`, `apt`, etc.) that download packages.
+- MCP servers that themselves need internet access.
+- Any agent tool that relies on outbound network calls from child processes.
+
+**Alternative:** if agents need a filtered outbound internet but must not reach host-local services,
+consider running an egress proxy and routing traffic through it rather than using `block_network`.
 
 Rules for `expose_paths`:
 
@@ -154,6 +179,7 @@ Capabilities:
 - `ipc` namespace isolation
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
+- optional network namespace isolation (`block_network: true`)
 
 Default mounts include the instance root plus the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf`.
 
