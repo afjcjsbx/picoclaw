@@ -1,6 +1,8 @@
 package shellguard
 
 import (
+	"slices"
+
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -22,6 +24,11 @@ type Analysis struct {
 	// Canonical contains one space-joined form per simple command, including
 	// nested shell scripts and wrapper commands.
 	Canonical []string
+	// OpaqueConstructs lists the constructs the guard cannot look inside
+	// (command substitution, pipe to shell, shell heredoc) found in the parsed
+	// command or in the scripts it runs. It is empty when the command does not
+	// parse; callers then fall back to text patterns.
+	OpaqueConstructs []string
 	// CanonicalExact is false when the command contains fixed rewrites such as
 	// $IFS or a backslash-newline continuation. Callers then fall back to
 	// CanonicalCommands, which parses the normalized text.
@@ -46,11 +53,22 @@ func Analyze(command string) Analysis {
 			riskFile = normalizedFile
 		}
 	}
+	constructs := opaqueConstructs(file, 0)
+	if riskFile != file {
+		// A fixed rewrite such as $IFS can turn a word into a command boundary,
+		// so the normalized parse may expose a construct the written one hides.
+		for _, construct := range opaqueConstructs(riskFile, 0) {
+			if !slices.Contains(constructs, construct) {
+				constructs = append(constructs, construct)
+			}
+		}
+	}
 	return Analysis{
-		File:            file,
-		RiskFile:        riskFile,
-		StrippedHeredoc: stripQuotedHeredocBodiesFile(command, file),
-		Canonical:       canonicalForms(file, 0),
-		CanonicalExact:  normalized == command,
+		File:             file,
+		RiskFile:         riskFile,
+		StrippedHeredoc:  stripQuotedHeredocBodiesFile(command, file),
+		Canonical:        canonicalForms(file, 0),
+		OpaqueConstructs: constructs,
+		CanonicalExact:   normalized == command,
 	}
 }

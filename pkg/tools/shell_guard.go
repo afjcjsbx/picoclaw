@@ -104,16 +104,11 @@ func (t *ExecTool) guardCommandWithAnalysis(
 		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
-	// Default deny patterns can be exempted by custom allow patterns, so
+	// The default deny set can be exempted by custom allow patterns, so
 	// operators can selectively permit normally-blocked commands. A hit is
 	// final.
-	if !t.commandMatchesCustomAllowPattern(lower) {
-		// Use the same canonical forms as the hardline/custom layers. This
-		// catches shell-equivalent spellings such as g\it, which the raw
-		// lowerForDeny form does not expose.
-		if patternsMatchAny(t.denyPatterns, denyForms) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
-		}
+	if !t.commandMatchesCustomAllowPattern(lower) && t.matchesDefaultDeny(analysis, denyForms) {
+		return "Command blocked by safety guard (dangerous pattern detected)"
 	}
 
 	// The workspace and risk passes share the same parse unless fixed rewrites
@@ -173,6 +168,24 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	}
 
 	return ""
+}
+
+// matchesDefaultDeny reports whether the command hits the optional default
+// deny set. The shell constructs the AST cannot inspect come from the parse,
+// so quoted text such as echo '$(date)' is not a hit; the text patterns stand
+// in for commands that do not parse and for Windows, where the POSIX parse
+// does not apply.
+func (t *ExecTool) matchesDefaultDeny(analysis shellguard.Analysis, forms []string) bool {
+	if patternsMatchAny(t.denyPatterns, forms) {
+		return true
+	}
+	if !t.blockOpaque {
+		return false
+	}
+	if runtime.GOOS == "windows" || analysis.File == nil {
+		return patternsMatchAny(opaqueFallbackPatterns, forms)
+	}
+	return len(analysis.OpaqueConstructs) > 0
 }
 
 // workspacePathAllowed reports whether p stays inside cwdPath or is covered by

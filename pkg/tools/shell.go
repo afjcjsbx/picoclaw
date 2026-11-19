@@ -41,10 +41,15 @@ func getSessionManager() *SessionManager {
 }
 
 type ExecTool struct {
-	workingDir           string
-	timeout              time.Duration
-	foregroundCap        time.Duration
-	denyPatterns         []*regexp.Regexp
+	workingDir    string
+	timeout       time.Duration
+	foregroundCap time.Duration
+	// denyPatterns are the optional text patterns of the default guard. Only
+	// Windows has any: the Unix constructs are checked on the parsed command.
+	denyPatterns []*regexp.Regexp
+	// blockOpaque enables the default guard for constructs the AST cannot
+	// inspect (see opaqueFallbackPatterns).
+	blockOpaque          bool
 	hardlineDenyPatterns []*regexp.Regexp
 	customDenyPatterns   []*regexp.Regexp
 	customAllowPatterns  []*regexp.Regexp
@@ -70,12 +75,14 @@ type ExecTool struct {
 var _ AsyncExecutor = (*ExecTool)(nil)
 
 var (
-	// defaultDenyPatterns is the optional Unix deny set. The AST risk
-	// classifier is the source of truth for command danger; this set only
-	// covers shell constructs that hide a command from the AST: command
-	// substitution, backticks, pipe-to-shell and shell heredocs. Command names
-	// such as sudo, chmod, git push or docker run are classified by risk.go.
-	defaultDenyPatterns = []*regexp.Regexp{
+	// opaqueFallbackPatterns are text versions of the shell constructs that
+	// hide a command from the AST: command substitution, backticks,
+	// pipe-to-shell and shell heredocs. shellguard.Analysis reports these
+	// precisely from the parse, so the patterns only run when the command does
+	// not parse, and on Windows where the POSIX parse does not apply. Command
+	// names such as sudo, chmod, git push or docker run are classified by
+	// risk.go.
+	opaqueFallbackPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`\$\([^)]+\)`),
 		regexp.MustCompile("`[^`]+`"),
 		regexp.MustCompile(`\|&?\s*(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)\b`),
@@ -355,12 +362,7 @@ func NewExecToolWithConfig(
 		execConfig := cfg.Tools.Exec
 		enableDefaultGuard = execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
-		if enableDefaultGuard {
-			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
-			if runtime.GOOS == "windows" {
-				denyPatterns = append(denyPatterns, windowsDenyPatterns...)
-			}
-		} else {
+		if !enableDefaultGuard {
 			// Only the optional built-in default set is disabled here. The
 			// hardline floor and operator-defined custom deny rules still apply.
 			logger.WarnCF(
@@ -384,11 +386,9 @@ func NewExecToolWithConfig(
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
-		if runtime.GOOS == "windows" {
-			denyPatterns = append(denyPatterns, windowsDenyPatterns...)
-		}
+	}
+	if enableDefaultGuard && runtime.GOOS == "windows" {
+		denyPatterns = append(denyPatterns, windowsDenyPatterns...)
 	}
 
 	var timeout time.Duration
@@ -424,6 +424,7 @@ func NewExecToolWithConfig(
 		timeout:              timeout,
 		foregroundCap:        maxForegroundTimeout,
 		denyPatterns:         denyPatterns,
+		blockOpaque:          enableDefaultGuard,
 		hardlineDenyPatterns: hardlinePatterns,
 		customDenyPatterns:   customDenyPatterns,
 		customAllowPatterns:  customAllowPatterns,
