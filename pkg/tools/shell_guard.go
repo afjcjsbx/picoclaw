@@ -168,14 +168,8 @@ func (t *ExecTool) guardCommandWithAnalysis(
 	// byte-level patterns cannot resolve, such as `x=rm; $x -rf /`.
 	// custom_allow_patterns does not bypass it. Known commands above the
 	// threshold are rejected, while unknown commands are allowed by default.
-	if t.riskGuard != nil {
-		assessment := t.riskGuard.AssessFile(cmd, riskFile)
-		if assessment.Reject {
-			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
-		}
-		if !assessment.Unknown && !shellguard.IsAllowed(assessment.Level, t.riskGuard.Threshold()) {
-			return assessment.BlockedError(t.riskGuard.Threshold()).Error()
-		}
+	if blocked := t.riskGuard.Check(cmd, riskFile); blocked != nil {
+		return blocked.Error()
 	}
 
 	return ""

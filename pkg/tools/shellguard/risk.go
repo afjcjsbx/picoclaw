@@ -123,7 +123,8 @@ var commandRiskTable = map[string]RiskLevel{
 	// both read-only and destructive verbs. Argument modifiers raise the
 	// destructive verbs.
 	"cp": RiskMedium, "mv": RiskMedium, "mkdir": RiskMedium, "touch": RiskMedium,
-	"ln": RiskMedium, "tar": RiskMedium, "zip": RiskMedium, "unzip": RiskMedium,
+	"install": RiskMedium,
+	"ln":      RiskMedium, "tar": RiskMedium, "zip": RiskMedium, "unzip": RiskMedium,
 	"gzip": RiskMedium, "gunzip": RiskMedium, "bzip2": RiskMedium, "xz": RiskMedium,
 	"curl": RiskMedium, "wget": RiskMedium, "git": RiskMedium, "make": RiskMedium,
 	"go": RiskMedium, "python": RiskMedium, "python3": RiskMedium, "node": RiskMedium,
@@ -158,7 +159,7 @@ var commandRiskTable = map[string]RiskLevel{
 	// Critical: privilege escalation, always dangerous.
 	"sudo": RiskCritical, "su": RiskCritical, "doas": RiskCritical,
 	"pkexec": RiskCritical, "runuser": RiskCritical, "dd": RiskCritical,
-	"mkfs": RiskCritical, "fdisk": RiskCritical,
+	"mkfs": RiskCritical, "mkswap": RiskCritical, "fdisk": RiskCritical,
 	"parted": RiskCritical, "mount": RiskCritical, "umount": RiskCritical,
 	"shutdown": RiskCritical, "reboot": RiskCritical, "poweroff": RiskCritical,
 	"halt": RiskCritical, "init": RiskCritical, "insmod": RiskCritical,
@@ -452,7 +453,7 @@ func ClassifyCommand(args []string) (RiskLevel, bool) {
 	cmdName := baseCommand(args[0])
 	level, known := commandRiskTable[cmdName]
 	if !known {
-		if cmdName == "mkfs" || strings.HasPrefix(cmdName, "mkfs.") {
+		if isMkfs(cmdName) {
 			return RiskCritical, true
 		}
 		return RiskMedium, false
@@ -460,20 +461,23 @@ func ClassifyCommand(args []string) (RiskLevel, bool) {
 
 	normalizedArgs := normalizeFlags(args[1:])
 	level = applyModifiers(normalizedArgs, cmdName, level)
-	if cmdName == "aws" {
-		if risk := awsRiskLevel(args[1:]); risk > level {
-			level = risk
-		}
-	}
-
-	// Grouped flags such as rm -rfvv are deliberately not expanded by
-	// normalizeFlags, so rm gets an explicit floor.
-	if cmdName == "rm" {
-		if risk := rmRiskLevel(args[1:]); risk > level {
-			level = risk
-		}
+	if floor, ok := commandFloors[cmdName]; ok {
+		level = max(level, floor(args[1:]))
 	}
 	return level, true
+}
+
+// commandFloors raise a command's level from its arguments where matching
+// tokens is not enough: rm flag clusters such as -rfvv are deliberately not
+// expanded by normalizeFlags, and aws delete verbs span every service.
+var commandFloors = map[string]func(args []string) RiskLevel{
+	"rm":  rmRiskLevel,
+	"aws": awsRiskLevel,
+}
+
+// isMkfs reports whether name is mkfs or one of its mkfs.<type> variants.
+func isMkfs(name string) bool {
+	return name == "mkfs" || strings.HasPrefix(name, "mkfs.")
 }
 
 func applyModifiers(
@@ -662,4 +666,37 @@ func flagMatchesArg(token, arg string) bool {
 		return false
 	}
 	return arg[len(token)] != '-'
+}
+
+// destructiveOperandCommands can delete, overwrite or change the permissions
+// of a path named by an operand. A dynamic operand for one of these commands
+// cannot be resolved statically: the shell may expand it to any path outside
+// the workspace, so the command is rejected.
+var destructiveOperandCommands = map[string]bool{
+	"rm":         true,
+	"rmdir":      true,
+	"mv":         true,
+	"cp":         true,
+	"truncate":   true,
+	"shred":      true,
+	"dd":         true,
+	"chmod":      true,
+	"chown":      true,
+	"chgrp":      true,
+	"ln":         true,
+	"install":    true,
+	"tee":        true,
+	"touch":      true,
+	"wipefs":     true,
+	"blkdiscard": true,
+	"fdisk":      true,
+	"parted":     true,
+	"mkswap":     true,
+}
+
+func isDestructiveOperandCommand(name string) bool {
+	if destructiveOperandCommands[name] {
+		return true
+	}
+	return isMkfs(name)
 }

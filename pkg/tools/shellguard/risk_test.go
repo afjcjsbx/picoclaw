@@ -171,3 +171,16 @@ func TestBaseCommand(t *testing.T) {
 		}
 	}
 }
+
+// TestDestructiveOperandCommandsAreClassified keeps the two command lists in
+// step: a command whose dynamic operand is rejected must also have a risk
+// level of its own.
+func TestDestructiveOperandCommandsAreClassified(t *testing.T) {
+	t.Parallel()
+
+	for name := range destructiveOperandCommands {
+		if _, known := ClassifyCommand([]string{name}); !known {
+			t.Errorf("%s is in destructiveOperandCommands but not in the risk table", name)
+		}
+	}
+}

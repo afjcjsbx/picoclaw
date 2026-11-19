@@ -28,19 +28,30 @@ func NewGuard(threshold string) (*Guard, error) {
 	return &Guard{threshold: level}, nil
 }
 
-// Assessment is the static risk evaluation of a command. Unknown marks a
-// command that cannot be classified statically (dynamic command names, opaque
-// shells, or parse errors); the default policy allows them.
+// Verdict says how far an Assessment can be trusted.
+type Verdict int
+
+const (
+	// VerdictKnown means every command was classified and Level is the highest
+	// risk among them.
+	VerdictKnown Verdict = iota
+	// VerdictUnknown marks a command that cannot be classified statically
+	// (dynamic command names, opaque shells, or parse errors). Level is then
+	// only a conservative placeholder; the default policy allows it.
+	VerdictUnknown
+	// VerdictReject marks a command that must be blocked even when the risk
+	// level would otherwise be allowed. It is used for constructs the static
+	// guards cannot validate, such as a dynamic operand to a destructive
+	// command. Unlike VerdictUnknown, it is never allowed by the default policy.
+	VerdictReject
+)
+
+// Assessment is the static risk evaluation of a command.
 type Assessment struct {
 	Level   RiskLevel
 	Command string
 	Reason  string
-	Unknown bool
-	// Reject marks a command that must be blocked even when the risk level
-	// would otherwise be allowed. It is used for constructs the static guards
-	// cannot validate, such as a dynamic operand to a destructive command.
-	// Unlike Unknown, Reject is never allowed by the default policy.
-	Reject bool
+	Verdict Verdict
 }
 
 // BlockedError converts an assessment into the structured error returned by
@@ -55,8 +66,28 @@ func (a Assessment) BlockedError(threshold RiskLevel) *BlockedError {
 		Level:     a.Level,
 		Threshold: threshold,
 		Reason:    reason,
-		Unknown:   a.Unknown,
+		Unknown:   a.Verdict == VerdictUnknown,
 	}
+}
+
+// Check applies the default policy to a parsed command and returns nil when it
+// may run. A rejected construct always blocks, a known command blocks above
+// the threshold, and a command that cannot be classified is allowed: the
+// caller's other layers still apply to it.
+func (g *Guard) Check(command string, file *syntax.File) *BlockedError {
+	if g == nil {
+		return nil
+	}
+	assessment := g.AssessFile(command, file)
+	switch assessment.Verdict {
+	case VerdictUnknown:
+		return nil
+	case VerdictKnown:
+		if IsAllowed(assessment.Level, g.threshold) {
+			return nil
+		}
+	}
+	return assessment.BlockedError(g.threshold)
 }
 
 // Threshold returns the highest risk level the guard allows.
@@ -204,39 +235,6 @@ func (g *Guard) classify(words []word) Assessment {
 	}
 }
 
-// destructiveOperandCommands can delete, overwrite or change the permissions
-// of a path named by an operand. A dynamic operand for one of these commands
-// cannot be resolved statically: the shell may expand it to any path outside
-// the workspace, so the command is rejected.
-var destructiveOperandCommands = map[string]bool{
-	"rm":         true,
-	"rmdir":      true,
-	"mv":         true,
-	"cp":         true,
-	"truncate":   true,
-	"shred":      true,
-	"dd":         true,
-	"chmod":      true,
-	"chown":      true,
-	"chgrp":      true,
-	"ln":         true,
-	"install":    true,
-	"tee":        true,
-	"touch":      true,
-	"wipefs":     true,
-	"blkdiscard": true,
-	"fdisk":      true,
-	"parted":     true,
-	"mkswap":     true,
-}
-
-func isDestructiveOperandCommand(name string) bool {
-	if destructiveOperandCommands[name] {
-		return true
-	}
-	return name == "mkfs" || strings.HasPrefix(name, "mkfs.")
-}
-
 func dynamicDestructiveOperand(words []word) (Assessment, bool) {
 	if len(words) == 0 || words[0].dynamic {
 		return Assessment{}, false
@@ -250,7 +248,7 @@ func dynamicDestructiveOperand(words []word) (Assessment, bool) {
 				Level:   RiskCritical,
 				Command: FormatCommand(wordTexts(words)),
 				Reason:  "dynamic operand for destructive command cannot be validated",
-				Reject:  true,
+				Verdict: VerdictReject,
 			}, true
 		}
 	}
@@ -262,21 +260,20 @@ func unknownAssessment(args []string, reason string) Assessment {
 		Level:   RiskCritical,
 		Command: FormatCommand(args),
 		Reason:  reason,
-		Unknown: true,
+		Verdict: VerdictUnknown,
 	}
 }
 
-// preferAssessment keeps the highest known risk, but always lets an unknown
-// command win: its risk is unresolved, so the numeric level must not mask it.
+// preferAssessment keeps the more serious of two assessments: a rejection
+// beats an unknown command, which beats any known level, because an unresolved
+// risk must not be masked by a numeric one. Between equals the higher level
+// wins.
 func preferAssessment(current, candidate Assessment) Assessment {
 	switch {
-	case candidate.Reject && !current.Reject:
-		return candidate
-	case current.Reject && !candidate.Reject:
-		return current
-	case candidate.Unknown && !current.Unknown:
-		return candidate
-	case current.Unknown && !candidate.Unknown:
+	case candidate.Verdict != current.Verdict:
+		if candidate.Verdict > current.Verdict {
+			return candidate
+		}
 		return current
 	case candidate.Level > current.Level:
 		return candidate
