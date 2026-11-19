@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -85,23 +85,7 @@ func loadEnvFile(path string) (map[string]string, error) {
 }
 
 func allowedMCPParentEnv(key string) bool {
-	// Keep the process usable without passing PicoClaw's unrelated credentials.
-	switch key {
-	case "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR":
-		return true
-	}
-	if strings.HasPrefix(key, "XDG_") {
-		return true
-	}
-	if runtime.GOOS == "windows" {
-		switch strings.ToUpper(key) {
-		case "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR",
-			"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
-			"USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "HOMEDRIVE", "HOMEPATH":
-			return true
-		}
-	}
-	return false
+	return isolation.IsParentEnvAllowed(key)
 }
 
 func inheritedMCPEnv(environ []string, inheritAll bool) map[string]string {

@@ -133,6 +133,27 @@ Windows 注入变量：
 
 这些路径都会指向实例根下的 `runtime-user-env`。
 
+## 环境变量继承
+
+隔离**开启**时，子进程只会从父进程继承一组范围较小的环境变量。父 shell 中设置的其他所有变量（包括各类 API 密钥和机密）均会被排除。
+
+基础允许集涵盖运行时必需项：`PATH`、`HOME`、`USER`、`LANG`、`LC_ALL`、`TERM`、`SHELL`、`TMPDIR`，以及所有以 `XDG_` 开头的变量。Windows 上还会额外包含 Windows 专属变量。
+
+各启动位置可声明子进程所需的额外变量或厂商命名空间前缀，例如：
+
+- **claude-cli provider**：`ANTHROPIC_*`、`CLAUDE_*`、代理变量（`HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 及其小写形式）、`SSL_CERT_FILE`、`NODE_EXTRA_CA_CERTS`。
+- **codex-cli provider**：`OPENAI_*`、`CODEX_*`，以及相同的代理与 TLS 变量。
+- **MCP stdio 服务端**：仅基础集，除非服务端配置中设置了 `inherit_env: true`（此时传入完整父环境）。
+- **进程钩子**：基础集加上钩子配置中显式声明的变量（`Env` 字段）。
+- **Delta Chat RPC 服务端**：基础集加上 `DC_ACCOUNTS_PATH`。
+- **Weixin 语音解码器**（ffmpeg / silk）：仅基础集。
+
+隔离**关闭**时，所有子进程均完整继承父进程环境（与现有行为一致）。
+
+所有启动位置使用的工具函数为 `isolation.InheritedEnv(extra ...string)`，模式末尾加 `*` 表示前缀匹配。
+
+CLI provider 没有自己的环境变量配置项：启用隔离时，上述列表之外的变量（例如使用 Bedrock 的 `claude` CLI 所需的 `AWS_*`）不会被传递。
+
 ## 平台行为
 
 ### Linux
