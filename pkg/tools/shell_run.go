@@ -681,7 +681,7 @@ func (t *ExecTool) newBackgroundSession(ctx context.Context, command string, pty
 		// manager: readers (session_read/list_sessions) must never observe a
 		// session whose buffer is still nil.
 		outputBuffer: &bytes.Buffer{},
-		spillDir:     t.outputSpillDir(),
+		spill:        spillFile{dir: t.outputSpillDir(), pattern: "exec_bg_*.log"},
 	}
 }
 

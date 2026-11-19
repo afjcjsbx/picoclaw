@@ -53,16 +53,10 @@ type ProcessSession struct {
 	totalOutput  int64
 	ptyMaster    *os.File
 
-	// spillDir receives the full session stream once the in-memory window
-	// overflows. spillPath is the artifact returned to the model; the file is
+	// spill receives the full session stream once the in-memory window
+	// overflows. Its path is the artifact returned to the model; the file is
 	// capped at maxOutputSpillBytes like a foreground artifact.
-	spillDir    string
-	spill       *os.File
-	spillPath   string
-	spillSize   int64
-	spillCapped bool
-	spillFailed bool
-	spillClosed bool
+	spill spillFile
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -190,7 +184,7 @@ func (s *ProcessSession) finishLocked(exitCode int) {
 	// be closed now. PTY readers can deliver a final tail after Wait returns;
 	// their descriptor is released by the session cleanup instead.
 	if !s.PTY {
-		s.closeSpillLocked()
+		_ = s.spill.close()
 	}
 }
 
@@ -314,20 +308,14 @@ func (s *ProcessSession) appendOutput(p []byte) {
 		return
 	}
 
-	freshSpill := false
-	if s.spill == nil && !s.spillFailed && !s.spillClosed {
-		s.openSpillLocked()
-		freshSpill = s.spill != nil
-	}
 	// The opening snapshot already contains the bytes appended so far (the
 	// buffer includes p). Every later chunk is written immediately, so the
 	// artifact is always the complete stream and trimming the buffer no longer
 	// needs to copy dropped bytes.
-	if !freshSpill && s.spill != nil && !s.spillClosed {
-		if err := s.writeSpillLocked(p); err != nil {
-			s.spillFailed = true
-			s.closeSpillLocked()
-		}
+	if s.spill.active() {
+		s.spill.write(p)
+	} else {
+		s.spill.start(s.outputBuffer.Bytes())
 	}
 
 	drop := s.outputBuffer.Len() - maxOutputBufferSize
@@ -335,71 +323,18 @@ func (s *ProcessSession) appendOutput(p []byte) {
 	s.outputBase += int64(drop)
 }
 
-func (s *ProcessSession) openSpillLocked() {
-	dir := s.spillDir
-	if dir == "" {
-		dir = tempArtifactDir()
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		s.spillFailed = true
-		return
-	}
-	file, err := os.CreateTemp(dir, "exec_bg_*.log")
-	if err != nil {
-		s.spillFailed = true
-		return
-	}
-	s.spill = file
-	s.spillPath = file.Name()
-	s.spillSize = 0
-	if err := s.writeSpillLocked(s.outputBuffer.Bytes()); err != nil {
-		_ = file.Close()
-		_ = os.Remove(s.spillPath)
-		s.spill = nil
-		s.spillPath = ""
-		s.spillFailed = true
-	}
-}
-
-func (s *ProcessSession) writeSpillLocked(p []byte) error {
-	if s.spill == nil || s.spillCapped || len(p) == 0 {
-		return nil
-	}
-	remaining := int64(maxOutputSpillBytes) - s.spillSize
-	if remaining <= 0 {
-		s.spillCapped = true
-		return nil
-	}
-	if int64(len(p)) > remaining {
-		p = p[:remaining]
-		s.spillCapped = true
-	}
-	n, err := s.spill.Write(p)
-	s.spillSize += int64(n)
-	return err
-}
-
 // SpillInfo returns the session artifact path and whether it reached the size
 // cap. Both values are set only after the in-memory window overflows.
 func (s *ProcessSession) SpillInfo() (path string, capped bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.spillPath, s.spillCapped
-}
-
-func (s *ProcessSession) closeSpillLocked() {
-	if s.spill == nil || s.spillClosed {
-		return
-	}
-	s.spillClosed = true
-	_ = s.spill.Close()
-	s.spill = nil
+	return s.spill.path, s.spill.capped
 }
 
 func (s *ProcessSession) closeSpill() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closeSpillLocked()
+	_ = s.spill.close()
 }
 
 // Read returns the retained output without consuming it. The idle counter is
@@ -493,7 +428,7 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 		StartedAt:    s.StartTime,
 		ExitCode:     s.ExitCode,
 		ExitedAt:     s.ExitTime,
-		ArtifactPath: s.spillPath,
+		ArtifactPath: s.spill.path,
 	}
 }
 

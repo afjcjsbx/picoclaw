@@ -192,7 +192,7 @@ func TestBoundedOutputTruncatesOnRuneBoundary(t *testing.T) {
 
 func TestBoundedOutputCapsSpillFile(t *testing.T) {
 	out := newBoundedOutput(20, t.TempDir())
-	out.spillCap = 50
+	out.spill.limit = 50
 
 	_, err := out.Write([]byte(strings.Repeat("x", 200)))
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestBoundedOutputCapsSpillFile(t *testing.T) {
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	require.LessOrEqual(t, info.Size(), out.spillCap+100)
+	require.LessOrEqual(t, info.Size(), out.spill.limit+100)
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
