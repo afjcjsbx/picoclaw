@@ -1,5 +1,7 @@
 # `pkg/isolation`
 
+> User-facing documentation: [Subprocess Isolation](../../docs/security/isolation.md). This file is the package-level implementation reference.
+
 `pkg/isolation` provides process-level isolation for child processes started by `picoclaw`.
 
 It does not sandbox the main `picoclaw` process itself.

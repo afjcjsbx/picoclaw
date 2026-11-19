@@ -37,6 +37,7 @@ zh_to_en:
   "/reference/tools_configuration.zh.html": "/reference/tools_configuration.html"
   "/security/ANTIGRAVITY_AUTH.zh.html": "/security/ANTIGRAVITY_AUTH.html"
   "/security/credential_encryption.zh.html": "/security/credential_encryption.html"
+  "/security/isolation.zh.html": "/security/isolation.html"
   "/security/sensitive_data_filtering.zh.html": "/security/sensitive_data_filtering.html"
 en_to_zh:
   "/architecture/agent-refactor/agent-rename-plan.html": "/architecture/agent-refactor/agent-rename-plan.zh.html"
@@ -74,4 +75,5 @@ en_to_zh:
   "/reference/tools_configuration.html": "/reference/tools_configuration.zh.html"
   "/security/ANTIGRAVITY_AUTH.html": "/security/ANTIGRAVITY_AUTH.zh.html"
   "/security/credential_encryption.html": "/security/credential_encryption.zh.html"
+  "/security/isolation.html": "/security/isolation.zh.html"
   "/security/sensitive_data_filtering.html": "/security/sensitive_data_filtering.zh.html"

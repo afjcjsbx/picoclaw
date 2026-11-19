@@ -32,7 +32,7 @@ There is no formal support window. Use the latest release, and include the affec
 
 - Enable only the tools you need. Review third-party skills, MCP servers, hooks, and scheduled jobs before enabling them; they can extend what the agent can access or execute.
 - PicoClaw's `exec` command checks blocklisted patterns, but this is not a complete sandbox: it cannot inspect commands later started by an allowed script or build tool. Use a container, VM, or approval flow for untrusted code. See [Tools Configuration](docs/reference/tools_configuration.md).
-- `restrict_to_workspace` limits PicoClaw's file tools; it does not isolate the main PicoClaw process. Optional process isolation is disabled by default, applies to child processes, and has platform-specific limits. See [Process Isolation](pkg/isolation/README.md).
+- `restrict_to_workspace` limits PicoClaw's file tools; it does not isolate the main PicoClaw process. Optional process isolation is disabled by default, applies to child processes, and has platform-specific limits. See [Subprocess Isolation](docs/security/isolation.md).
 - Run PicoClaw as a dedicated, unprivileged user and avoid giving its workspace access to sensitive host files.
 
 ### Consider data sent to external services

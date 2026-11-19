@@ -450,6 +450,32 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 
 > The workspace restriction is a static path policy, not an OS sandbox. It validates command paths, home expansion and directory changes, but child processes and script contents remain outside its reach. Use containers, VMs, or a dedicated user for untrusted workloads.
 
+#### Process Isolation
+
+The workspace restriction only controls paths. To confine child processes at the OS level, enable the optional top-level `isolation` block:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "expose_paths": [
+      { "source": "/opt/toolchains/go", "target": "/opt/toolchains/go", "mode": "ro" }
+    ],
+    "block_network": false
+  }
+}
+```
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `isolation.enabled` | bool | `false` | Sandbox child processes: `exec`, CLI providers, process hooks, MCP `stdio` servers and plugins |
+| `isolation.expose_paths` | array | `[]` | Host paths exposed inside the sandbox as `{source, target, mode}`, where `mode` is `ro` or `rw` |
+| `isolation.block_network` | bool | `false` | Isolate child processes from the host network namespace; Linux only |
+
+Linux requires `bwrap` (bubblewrap); macOS uses Seatbelt through `sandbox-exec`; Windows applies process-level restrictions. When isolation is enabled, `HOME`, `TMPDIR` and the XDG directories are redirected to the instance root, and only an allowlist of environment variables is inherited. The workspace restriction and process isolation complement each other and do not replace each other.
+
+For platform support, `expose_paths` rules, bubblewrap requirements, network isolation and troubleshooting, see [Subprocess Isolation](../security/isolation.md).
+
 #### Additional Exec Protection
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):

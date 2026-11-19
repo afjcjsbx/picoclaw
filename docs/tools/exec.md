@@ -113,7 +113,7 @@ The CLI (`picoclaw agent`, both one-shot and interactive) does not run the gatew
 Limits worth knowing:
 
 - The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and follows `unknown_command_policy`. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
-- External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
+- External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer. See [Subprocess Isolation](../security/isolation.md) for the optional OS-level child-process boundary.
 - Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps generic command patterns (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
 
 ## Tool arguments
@@ -280,7 +280,7 @@ When `agents.defaults.restrict_to_workspace` is `true` (the default), exec on Un
 
 Expansion uses the child shell's `HOME`. Quoted literals such as `echo '$HOME'` and `echo '~'` are not treated as paths, and web URLs are exempt from local path checks. `file:` URIs are rejected fail-closed because they name local files that the static pass cannot validate.
 
-This is a static best-effort layer, not an OS sandbox: child processes, scripts loaded after startup, file contents, dynamic operands and globs that expand to outside-pointing symlinks are outside its reach. Symlinks are resolved against the filesystem at validation time, so a symlink created or retargeted later in the same command is not visible to the static pass. Use containers, VMs, or a dedicated user for untrusted workloads. The AST pass runs only when workspace restriction is enabled, only for the command being executed, and keeps no persistent state, goroutines or polling timers. When the risk classifier is also enabled, both passes share one parse of the command; commands containing ANSI-C quoting or line continuations are re-parsed after normalization because those rewrites can change word boundaries.
+This is a static best-effort layer, not an OS sandbox: child processes, scripts loaded after startup, file contents, dynamic operands and globs that expand to outside-pointing symlinks are outside its reach. Symlinks are resolved against the filesystem at validation time, so a symlink created or retargeted later in the same command is not visible to the static pass. Use [subprocess isolation](../security/isolation.md), containers, VMs, or a dedicated user for untrusted workloads. The AST pass runs only when workspace restriction is enabled, only for the command being executed, and keeps no persistent state, goroutines or polling timers. When the risk classifier is also enabled, both passes share one parse of the command; commands containing ANSI-C quoting or line continuations are re-parsed after normalization because those rewrites can change word boundaries.
 
 ## Default Blocked Shell Constructs
 
@@ -315,8 +315,9 @@ Examples of workflows that can bypass the direct command guard once the initial 
 - `npm run build`
 
 This means the guard is useful for blocking obviously dangerous direct commands, but it is **not** a full sandbox for
-unreviewed build pipelines. If your threat model includes untrusted code in the workspace, use stronger isolation such
-as containers, VMs, or an approval flow around build-and-run commands.
+unreviewed build pipelines. If your threat model includes untrusted code in the workspace, use
+[subprocess isolation](../security/isolation.md) or stronger isolation such as containers, VMs, or an approval flow
+around build-and-run commands.
 
 ## Configuration Example
 

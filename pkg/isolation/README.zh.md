@@ -1,5 +1,7 @@
 # `pkg/isolation`
 
+> 面向用户的文档：[子进程隔离](../../docs/security/isolation.zh.md)。本文件是包级实现参考。
+
 `pkg/isolation` 为 `picoclaw` 启动的子进程提供进程级隔离能力。
 
 它当前不会把 `picoclaw` 主进程自身放进沙箱中运行。
