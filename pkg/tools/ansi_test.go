@@ -93,10 +93,10 @@ func TestANSIReaderFeedsCleanStreamToBoundedOutput(t *testing.T) {
 	_, err := io.Copy(out, r)
 	require.NoError(t, err)
 
-	text, truncated := out.Render()
-	require.True(t, truncated)
-	require.NotContains(t, text, "\x1b")
-	require.Contains(t, text, "red")
+	view := out.Render()
+	require.True(t, view.Truncated)
+	require.NotContains(t, view.Text, "\x1b")
+	require.Contains(t, view.Text, "red")
 
 	spillPath := out.SpillPath()
 	require.NotEmpty(t, spillPath)

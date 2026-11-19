@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -417,6 +418,127 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 	}
 	if !strings.Contains(execResult.ForLLM, "attachment content") {
 		t.Fatalf("exec output missing media content: %s", execResult.ForLLM)
+	}
+}
+
+func TestNewAgentInstance_ExecUsesWriteAllowPathsOnly(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	readable := filepath.Join(outside, "readable.txt")
+	if err := os.WriteFile(readable, []byte("READ_CANARY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deleteMe := filepath.Join(outside, "delete-me.txt")
+	if err := os.WriteFile(deleteMe, []byte("DELETE_CANARY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pattern := `^` + regexp.QuoteMeta(outside) + `(?:/|$)`
+	newAgent := func(allowRead, allowWrite []string) *AgentInstance {
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{
+				Defaults: config.AgentDefaults{
+					Workspace:           workspace,
+					ModelName:           "test-model",
+					RestrictToWorkspace: true,
+				},
+			},
+			Tools: config.ToolsConfig{
+				ReadFile:        config.ReadFileToolConfig{Enabled: true},
+				WriteFile:       config.ToolConfig{Enabled: true},
+				AllowReadPaths:  allowRead,
+				AllowWritePaths: allowWrite,
+				Exec: config.ExecConfig{
+					ToolConfig:         config.ToolConfig{Enabled: true},
+					EnableDenyPatterns: true,
+					AllowRemote:        true,
+				},
+			},
+		}
+		return NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	}
+
+	readOnlyAgent := newAgent([]string{pattern}, nil)
+	ctx := tools.WithToolContext(context.Background(), "cli", "sec04")
+
+	execTool, ok := readOnlyAgent.Tools.Get("exec")
+	if !ok {
+		t.Fatal("exec tool not registered")
+	}
+	writePath := filepath.Join(outside, "exec-write-via-read-allow.txt")
+	result := execTool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "echo PWNED > " + writePath,
+	})
+	if !result.IsError {
+		t.Fatalf("exec must not write through allow_read_paths, got: %s", result.ForLLM)
+	}
+	if _, err := os.Stat(writePath); !os.IsNotExist(err) {
+		t.Fatalf("exec created %s through allow_read_paths", writePath)
+	}
+
+	deleteResult := execTool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "rm -f " + deleteMe,
+	})
+	if !deleteResult.IsError {
+		t.Fatalf("exec must not delete through allow_read_paths, got: %s", deleteResult.ForLLM)
+	}
+	if _, err := os.Stat(deleteMe); err != nil {
+		t.Fatalf("exec deleted %s through allow_read_paths: %v", deleteMe, err)
+	}
+
+	readExecResult := execTool.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "cat " + readable,
+	})
+	if !readExecResult.IsError {
+		t.Fatalf("exec must not read through allow_read_paths, got: %s", readExecResult.ForLLM)
+	}
+
+	readTool, ok := readOnlyAgent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read_file tool not registered")
+	}
+	if got := readTool.Execute(ctx, map[string]any{"path": readable}); got.IsError {
+		t.Fatalf("read_file should use allow_read_paths, got: %s", got.ForLLM)
+	}
+
+	writeTool, ok := readOnlyAgent.Tools.Get("write_file")
+	if !ok {
+		t.Fatal("write_file tool not registered")
+	}
+	nativePath := filepath.Join(outside, "native-write-via-read-allow.txt")
+	if got := writeTool.Execute(ctx, map[string]any{"path": nativePath, "content": "PWNED\n"}); !got.IsError {
+		t.Fatalf("write_file must not use allow_read_paths, got: %s", got.ForLLM)
+	}
+	if _, err := os.Stat(nativePath); !os.IsNotExist(err) {
+		t.Fatalf("write_file created %s through allow_read_paths", nativePath)
+	}
+
+	writeAgent := newAgent(nil, []string{pattern})
+	writeExec, ok := writeAgent.Tools.Get("exec")
+	if !ok {
+		t.Fatal("write exec tool not registered")
+	}
+	allowedPath := filepath.Join(outside, "exec-write-via-write-allow.txt")
+	allowedResult := writeExec.Execute(ctx, map[string]any{
+		"action":  "run",
+		"command": "echo PWNED > " + allowedPath,
+	})
+	if allowedResult.IsError {
+		t.Fatalf("exec should write through allow_write_paths, got: %s", allowedResult.ForLLM)
+	}
+	if _, err := os.Stat(allowedPath); err != nil {
+		t.Fatalf("exec did not create %s through allow_write_paths: %v", allowedPath, err)
 	}
 }
 

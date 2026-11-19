@@ -172,8 +172,11 @@ Exec 工具用于执行 shell 命令。
 | 配置项                 | 类型  | 默认值 | 描述                           |
 |------------------------|-------|--------|--------------------------------|
 | `enabled`              | bool  | true   | 启用 exec 工具                 |
-| `enable_deny_patterns` | bool  | true   | 启用内置危险命令拦截         |
+| `enable_deny_patterns` | bool  | true   | 启用内置 shell 结构拦截（命令替换、管道到 shell、shell heredoc）和 AST 风险分类器 |
+| `unknown_command_policy` | string | "ask" | 分类器无法解析命令时的处理方式：`ask`（默认）请求用户批准，`allow` 直接运行，`block` 直接拒绝 |
+| `approval_timeout_seconds` | int | 300 | 未知命令批准请求等待用户回复的秒数，超时后命令被拒绝 |
 | `custom_deny_patterns` | array | []     | 自定义拒绝模式（正则表达式），始终生效 |
+| `custom_allow_patterns` | array | []     | 整条命令匹配，仅豁免默认拒绝规则；自动锚定 |
 
 ### 禁用 Exec 工具
 
@@ -199,8 +202,10 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 
 ### 功能说明
 
-- **`enable_deny_patterns`**：设为 `false` 可禁用内置的默认危险命令拦截模式；硬性底线规则和 `custom_deny_patterns` 仍然生效
+- **`enable_deny_patterns`**：设为 `false` 可禁用可选的 shell 结构拦截和 AST 风险分类器；硬性底线规则和 `custom_deny_patterns` 仍然生效
+- **`unknown_command_policy`**：`ask`（默认）会向发起命令的用户发送带令牌的批准请求；超时、渠道不可用或自动化发送者（cron、heartbeat）都会拒绝。`allow` 恢复无审批运行，`block` 直接拒绝未知命令
 - **`custom_deny_patterns`**：添加自定义拒绝正则模式；即使关闭内置拦截也始终生效，且不会被自定义允许规则豁免
+- **`custom_allow_patterns`**：整条命令匹配，仅豁免默认 shell 结构拦截规则；不会豁免风险分类器
 
 ### 始终生效的硬性底线规则
 
@@ -211,23 +216,20 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 - 原始磁盘访问：`dd if=`、写入 `/dev/sd*` 等块设备
 - 递归删除根目录：`rm -rf /`、`rm -rf /*`
 - 电源状态变更：`shutdown`、`reboot`、`poweroff`
+- 自我保护：终止 PicoClaw 进程或服务、删除状态目录（`~/.picoclaw`、`$HOME/.picoclaw`、`$PICOCLAW_HOME` 或 `PICOCLAW_HOME`），或删除正在运行的可执行文件
+- 硬性底线和自定义拒绝规则匹配前会解析 `$IFS`、ANSI-C `$'...'` 字符串、反斜杠换行续行和 AST 引号拼接
 
-### 默认拦截的命令模式
+### 默认拦截的 Shell 结构
 
-这些模式默认启用，可通过 `enable_deny_patterns: false` 关闭：
+在 Unix 上，AST 风险分类器是命令危险性的唯一来源。正则默认拒绝集只覆盖分类器无法检查的结构；这些模式默认启用，可通过 `enable_deny_patterns: false` 关闭：
 
-- 删除命令：`rm -rf`、`del /f/q`、`rmdir /s`
-- 磁盘操作：`format`、`mkfs`、`diskpart`、`dd if=`、写入 `/dev/sd*`
-- 系统操作：`shutdown`、`reboot`、`poweroff`
-- 命令替换：`$()`、`${}`、反引号
-- 管道到 shell：`| sh`、`| bash`
-- 权限提升：`sudo`、`chmod`、`chown`
-- 进程控制：`pkill`、`killall`、`kill -9`
-- 远程操作：`curl | sh`、`wget | sh`、`ssh`
-- 包管理：`apt`、`yum`、`dnf`、`npm install -g`、`pip install --user`
-- 容器：`docker run`、`docker exec`
-- Git：`git push`、`git force`
-- 其他：`eval`、`source *.sh`
+- 命令替换：`$()`、反引号
+- 管道到 shell：`| sh`、`| bash`（以及其他 POSIX shell）
+- Shell heredoc：`sh <<EOF`、`bash <<'EOF'`
+
+`sudo`、`chmod`、`chown`、`kill`、`git push`、`docker run`、`eval`、`source` 等命令由风险表分类；使用 `risk_threshold` 调整。
+
+Windows 没有 AST 分类器，因此其正则底线保留等价的通用命令模式以及 PowerShell 专用检查：递归 `Remove-Item`（含 `rm`/`ri`/`del` 别名）、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex` 等下载后执行管道、`taskkill /F`、`Stop-Process -Force`。
 
 ### 已知架构限制
 

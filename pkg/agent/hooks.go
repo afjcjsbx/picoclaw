@@ -804,15 +804,27 @@ func (hm *HookManager) callAfterTool(
 	)
 }
 
+// approvalTimeoutOverrider lets an approver that waits for a human choose its
+// own deadline instead of hooks.defaults.approval_timeout_ms.
+type approvalTimeoutOverrider interface {
+	ApprovalTimeout() time.Duration
+}
+
 func (hm *HookManager) callApproveTool(
 	parent context.Context,
 	name string,
 	approver ToolApprover,
 	req *ToolApprovalRequest,
 ) (ApprovalDecision, bool) {
+	timeout := hm.approvalTimeout
+	if o, ok := approver.(approvalTimeoutOverrider); ok {
+		if d := o.ApprovalTimeout(); d > 0 {
+			timeout = d
+		}
+	}
 	return runApprovalHook(
 		parent,
-		hm.approvalTimeout,
+		timeout,
 		name,
 		"approve_tool",
 		func(ctx context.Context) (ApprovalDecision, error) {

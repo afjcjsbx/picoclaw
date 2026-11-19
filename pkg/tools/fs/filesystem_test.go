@@ -1957,6 +1957,35 @@ func TestReadFileLinesTool_ExactByteBudgetBoundaryIncludesPrefix(t *testing.T) {
 	}
 }
 
+func TestIsWithinWorkspace(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	inside := []string{
+		workspace,
+		filepath.Join(workspace, "file"),
+		filepath.Join(workspace, "sub", "file"),
+		filepath.Join(workspace, "..foo"),
+	}
+	for _, path := range inside {
+		if !IsWithinWorkspace(path, workspace) {
+			t.Errorf("IsWithinWorkspace(%q, %q) = false, want true", path, workspace)
+		}
+	}
+
+	outside := []string{
+		filepath.Dir(workspace),
+		filepath.Join(workspace, "..", "sibling"),
+	}
+	for _, path := range outside {
+		if IsWithinWorkspace(path, workspace) {
+			t.Errorf("IsWithinWorkspace(%q, %q) = true, want false", path, workspace)
+		}
+	}
+}
+
 func TestReadFileEmptyFileMessageIsExplicit(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "empty.txt")

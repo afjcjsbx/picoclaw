@@ -15,10 +15,16 @@ import (
 	"time"
 )
 
-const execSetsidHelperTestName = "TestExecSetsidHelperProcess"
+const (
+	execSetsidHelperTestName = "TestExecSetsidHelperProcess"
+	// These names must not use the PICOCLAW_ prefix: exec sanitizes child
+	// environments and reserves PICOCLAW_* for the agent.
+	execSetsidHelperEnv  = "EXEC_SETSID_HELPER"
+	execSetsidPIDFileEnv = "EXEC_SETSID_PIDFILE"
+)
 
 func TestExecSetsidHelperProcess(t *testing.T) {
-	if os.Getenv("PICOCLAW_EXEC_SETSID_HELPER") != "1" {
+	if os.Getenv(execSetsidHelperEnv) != "1" {
 		t.Skip("helper process only")
 	}
 
@@ -27,7 +33,7 @@ func TestExecSetsidHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 
-	pidPath := os.Getenv("PICOCLAW_EXEC_SETSID_PIDFILE")
+	pidPath := os.Getenv(execSetsidPIDFileEnv)
 	if pidPath == "" {
 		os.Exit(3)
 	}
@@ -48,10 +54,14 @@ func setsidHelperCommand(t *testing.T) (command, pidFile string) {
 		t.Fatalf("resolve test executable: %v", err)
 	}
 	pidFile = filepath.Join(t.TempDir(), "setsid.pid")
-	t.Setenv("PICOCLAW_EXEC_SETSID_HELPER", "1")
-	t.Setenv("PICOCLAW_EXEC_SETSID_PIDFILE", pidFile)
-
-	command = fmt.Sprintf("%q -test.run=^%s$ & wait", executable, execSetsidHelperTestName)
+	// exec starts children from a sanitized environment, so the helper
+	// configuration travels as an inline assignment on the command.
+	command = fmt.Sprintf(
+		"%s=%q %s=%q %q -test.run=^%s$; :",
+		execSetsidHelperEnv, "1",
+		execSetsidPIDFileEnv, pidFile,
+		executable, execSetsidHelperTestName,
+	)
 	return command, pidFile
 }
 
@@ -97,7 +107,7 @@ func waitForSetsidProcessExit(t *testing.T, pid int) {
 }
 
 func TestShellTool_TimeoutKillsSetsidChild(t *testing.T) {
-	tool, err := NewExecTool(t.TempDir(), false)
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, nil)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %v", err)
 	}
@@ -121,7 +131,7 @@ func TestShellTool_TimeoutKillsSetsidChild(t *testing.T) {
 }
 
 func TestShellTool_BackgroundKillKillsSetsidChild(t *testing.T) {
-	tool, err := NewExecTool(t.TempDir(), false)
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, nil)
 	if err != nil {
 		t.Fatalf("unable to configure exec tool: %v", err)
 	}
@@ -140,7 +150,6 @@ func TestShellTool_BackgroundKillKillsSetsidChild(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("background run failed: %s", result.ForLLM)
 	}
-
 	var response ExecResponse
 	if err := json.Unmarshal([]byte(result.ForLLM), &response); err != nil {
 		t.Fatalf("decode background response: %v", err)

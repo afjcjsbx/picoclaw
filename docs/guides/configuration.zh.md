@@ -319,19 +319,22 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 
 默认情况下，`exec` 工具会阻止以下危险命令（其中硬性底线规则在 `enable_deny_patterns` 为 `false` 时仍会生效）：
 
-* `rm -rf`、`del /f`、`rmdir /s` — 批量删除
+* `del /f`、`rmdir /s` — 批量删除（Unix `rm` 由风险分类器处理：基础 `medium`，`rm -r` 为 `high`，`rm -rf` 为 `critical`）
 * `format`、`mkfs`、`diskpart` — 磁盘格式化（磁盘格式化始终生效）
 * `dd if=` — 磁盘镜像（始终生效）
 * 写入 `/dev/sd[a-z]` — 直接磁盘写入（始终生效）
 * `shutdown`、`reboot`、`poweroff` — 系统关机（始终生效）
+* 自我保护：终止 PicoClaw 进程或服务、删除状态目录（`~/.picoclaw`、`$HOME/.picoclaw`、`$PICOCLAW_HOME` 或 `PICOCLAW_HOME`），或删除正在运行的可执行文件 — 始终生效
+* 硬性底线和自定义拒绝规则匹配前会解析 `$IFS`、ANSI-C `$'...'` 字符串、反斜杠换行续行和 AST 引号拼接 — 始终生效
+* Windows PowerShell：递归 `Remove-Item`、`Clear-Disk`、`Format-Volume`、`vssadmin delete shadows`、`bcdedit /set`、`reg delete`、`icacls /grant Everyone`、`iwr ... | iex`、`taskkill /F`、`Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — 始终生效
 
 ### 文件访问控制
 
 | 配置键 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `tools.allow_read_paths` | string[] | `[]` | 允许在工作区外读取的额外路径 |
-| `tools.allow_write_paths` | string[] | `[]` | 允许在工作区外写入的额外路径 |
+| `tools.allow_read_paths` | string[] | `[]` | 仅允许只读文件系统工具在工作区外读取的额外路径；`exec` 不会继承 |
+| `tools.allow_write_paths` | string[] | `[]` | 允许在工作区外写入的额外路径，包括 `exec` |
 
 ### Exec 安全配置
 
@@ -339,8 +342,12 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 |--------|------|--------|------|
 | `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道直接执行 exec 工具；定时任务命令由 `tools.cron.command_allowed_remotes` 独立授权 |
 | `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
+| `tools.exec.unknown_command_policy` | string | `"ask"` | `ask`（默认）对分类器无法解析的命令请求用户批准，`allow` 直接运行，`block` 直接拒绝 |
+| `tools.exec.approval_timeout_seconds` | int | `300` | 未知命令批准请求等待用户回复的秒数，超时后命令被拒绝 |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
-| `tools.exec.custom_allow_patterns` | string[] | `[]` | 自定义允许的正则表达式模式 |
+| `tools.exec.custom_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，仅豁免默认拒绝规则；会自动添加首尾锚点 |
+
+AST 风险分类器（`risk_threshold`）、未知命令审批（`unknown_command_policy`）和子进程环境（`env_set`、`env_allowlist`）的说明见 [exec 工具](../tools/exec.md)文档，参见[风险分类](../tools/exec.md#risk-classification)。
 
 > **安全提示：** Symlink 保护默认启用——所有文件路径在允许列表匹配前都会通过 `filepath.EvalSymlinks` 解析，防止符号链接逃逸攻击。
 

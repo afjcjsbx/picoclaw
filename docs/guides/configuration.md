@@ -448,23 +448,29 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `append_file` | Append to files  | Only files within workspace            |
 | `exec`        | Execute commands | Command paths must be within workspace |
 
+> The workspace restriction is a static path policy, not an OS sandbox. It validates command paths, home expansion and directory changes, but child processes and script contents remain outside its reach. Use containers, VMs, or a dedicated user for untrusted workloads.
+
 #### Additional Exec Protection
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
 
-* `rm -rf`, `del /f`, `rmdir /s` — Bulk deletion
+* `del /f`, `rmdir /s` — Bulk deletion (Unix `rm` is risk-classified: plain `rm` is `medium`, `rm -r` is `high`, `rm -rf` is `critical`)
 * `format`, `mkfs`, `diskpart` — Disk formatting (always-on for disk formats)
 * `dd if=` — Disk imaging (always-on)
 * Writing to `/dev/sd[a-z]` — Direct disk writes (always-on)
 * `shutdown`, `reboot`, `poweroff` — System shutdown (always-on)
+* Self-protection: killing the PicoClaw process or service, deleting its state directory (`~/.picoclaw`, `$HOME/.picoclaw`, `$PICOCLAW_HOME` or `PICOCLAW_HOME`), or deleting the running executable — Always-on
+* Hardline and custom deny matching resolves `$IFS`, ANSI-C `$'...'` strings, backslash-newline continuations and AST quote splicing before applying the patterns — Always-on
+* Exec (Unix) workspace boundary: when `restrict_to_workspace` is enabled, `~`/`$HOME` path expansion, bare `..` in `cd`/`pushd`/`-C` targets, `cd`/`pushd` changes, dynamic redirection targets and nested `sh -c`/`exec`/`find -exec` scripts are validated against the workspace, including symlink escapes; `env -C`, `eval`, `trap`, `file:` URIs and `HOME`/`PWD`/`OLDPWD`/`CDPATH` assignments are rejected — Static best effort; use OS isolation for untrusted workloads
+* Windows PowerShell: recursive `Remove-Item`, `Clear-Disk`, `Format-Volume`, `vssadmin delete shadows`, `bcdedit /set`, `reg delete`, `icacls /grant Everyone`, `iwr ... | iex`, `taskkill /F`, `Stop-Process -Force`
 * Fork bomb `:(){ :|:& };:` — Always-on
 
 ### File Access Control
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
-| `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for reading outside workspace |
-| `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace |
+| `tools.allow_read_paths` | string[] | `[]` | Additional paths allowed for read-only filesystem tools outside workspace; `exec` does not inherit them |
+| `tools.allow_write_paths` | string[] | `[]` | Additional paths allowed for writing outside workspace, including `exec` |
 | `tools.search_files.enabled` | bool | `true` | Enables regex content search and glob/substring filename search |
 | `tools.message.media_enabled` | bool | `false` | Allows the `message` tool to attach local media files by path. This is separate from `tools.send_file.enabled`; enable it only when unified text/media/caption delivery is intended. |
 
@@ -548,8 +554,12 @@ Use `mode = lines` when:
 |------------|------|---------|-------------|
 | `tools.exec.allow_remote` | bool | `false` | Allow exec tool from remote channels (Telegram/Discord etc.) |
 | `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
+| `tools.exec.unknown_command_policy` | string | `"ask"` | `ask` (default) requests user approval for commands the risk classifier cannot resolve, `allow` runs them, `block` rejects them |
+| `tools.exec.approval_timeout_seconds` | int | `300` | Seconds an unknown-command approval prompt waits before the command is denied |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
-| `tools.exec.custom_allow_patterns` | string[] | `[]` | Custom regex patterns to allow |
+| `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
+
+The AST risk classifier (`risk_threshold`), unknown-command approval (`unknown_command_policy`) and the child-process environment (`env_set`, `env_allowlist`) are documented in the [exec tool](../tools/exec.md) reference; see [risk classification](../tools/exec.md#risk-classification).
 
 > **Security Note:** Symlink protection is enabled by default — all file paths are resolved through `filepath.EvalSymlinks` before whitelist matching, preventing symlink escape attacks.
 

@@ -41,6 +41,11 @@ const (
 	// EnvGatewayHost overrides the host address for the gateway server.
 	// Default: "localhost"
 	EnvGatewayHost = "PICOCLAW_GATEWAY_HOST"
+
+	// EnvServiceName identifies this PicoClaw instance to commands run by the
+	// exec tool.
+	// Default: "picoclaw"
+	EnvServiceName = "PICOCLAW_SERVICE_NAME"
 )
 
 func GetHome() string {

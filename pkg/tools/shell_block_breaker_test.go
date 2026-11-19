@@ -6,13 +6,19 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 func newBlockBreakerTestTool(t *testing.T) *ExecTool {
 	t.Helper()
-	tool, err := newTestExecTool(t.TempDir(), false)
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.AllowRemote = true
+	cfg.Tools.Exec.CustomDenyPatterns = []string{`^echo blocked$`, `^echo also-blocked$`}
+
+	tool, err := NewExecToolWithConfig(t.TempDir(), false, cfg)
 	require.NoError(t, err)
-	require.NoError(t, tool.SetAllowPatterns([]string{`^echo allowed$`}))
 	return tool
 }
 
@@ -33,13 +39,13 @@ func TestExecBlockBreakerHardStopsAfterIdenticalBlocks(t *testing.T) {
 	for i := 1; i < execBlockHardStopThreshold; i++ {
 		result := runBlockedCommand(t, tool, ctx, blocked)
 		require.True(t, result.IsError)
-		require.Contains(t, result.ForLLM, "not in allowlist")
+		require.Contains(t, result.ForLLM, "dangerous pattern detected")
 		require.NotContains(t, result.ForLLM, "HARD STOP", "block %d must not trip the breaker", i)
 	}
 
 	tripped := runBlockedCommand(t, tool, ctx, blocked)
 	require.True(t, tripped.IsError)
-	require.Contains(t, tripped.ForLLM, "not in allowlist")
+	require.Contains(t, tripped.ForLLM, "dangerous pattern detected")
 	require.Contains(t, tripped.ForLLM, "HARD STOP")
 	require.Contains(
 		t, tripped.ForLLM,
@@ -139,12 +145,12 @@ func TestExecBlockBreakerKeepsStateBounded(t *testing.T) {
 	tool := newBlockBreakerTestTool(t)
 	const blocked = "echo blocked"
 
-	for i := 0; i < maxExecBlockSessions+8; i++ {
+	for i := 0; i < maxExecStateEntries+8; i++ {
 		runBlockedCommand(t, tool, blockBreakerContext(fmt.Sprintf("session-%d", i)), blocked)
 	}
 
-	tool.blockBreaker.mu.Lock()
-	size := len(tool.blockBreaker.states)
-	tool.blockBreaker.mu.Unlock()
-	require.LessOrEqual(t, size, maxExecBlockSessions)
+	tool.state.mu.Lock()
+	size := len(tool.state.entries)
+	tool.state.mu.Unlock()
+	require.LessOrEqual(t, size, maxExecStateEntries)
 }
