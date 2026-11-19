@@ -174,6 +174,27 @@ Windows variables:
 
 These paths point into `runtime-user-env` under the instance root.
 
+## Environment Inheritance
+
+When isolation is **enabled**, child processes inherit only a narrow base set of environment variables from the parent. All other variables — including API keys and other secrets that happened to be set in the parent shell — are excluded.
+
+The base allowed set covers runtime necessities: `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TERM`, `SHELL`, `TMPDIR`, and variables with the `XDG_` prefix. On Windows a broader set of Windows-specific variables is also included.
+
+Each spawn site may declare additional variables or vendor-namespace prefixes that the child needs. For example:
+
+- **claude-cli provider**: `ANTHROPIC_*`, `CLAUDE_*`, proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, lower-case variants), `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`.
+- **codex-cli provider**: `OPENAI_*`, `CODEX_*`, same proxy and TLS variables.
+- **MCP stdio servers**: base set only, unless `inherit_env: true` is set in the server config (which passes the full parent environment).
+- **Process hooks**: base set plus any explicit variables declared in the hook configuration (`Env` field).
+- **Delta Chat RPC server**: base set plus `DC_ACCOUNTS_PATH`.
+- **Weixin voice decoder** (ffmpeg / silk): base set only.
+
+When isolation is **disabled**, every child process inherits the full parent environment unchanged (existing behavior).
+
+The helper used by all call sites is `isolation.InheritedEnv(extra ...string)`. A trailing `*` in an extra pattern enables prefix matching.
+
+The CLI providers have no environment setting of their own: a variable outside the lists above (for example `AWS_*` for a Bedrock-backed `claude` CLI) is not forwarded while isolation is enabled.
+
 ## Platform Behavior
 
 ### Linux

@@ -488,6 +488,8 @@ func tryTranscodeSilkToWAV(ctx context.Context, silk []byte) ([]byte, error) {
 			var combined bytes.Buffer
 			cmd.Stdout = &combined
 			cmd.Stderr = &combined
+			// Media decoders need only the base runtime variables.
+			cmd.Env = isolation.InheritedEnv()
 			runErr := isolation.Run(cmd)
 			cancel()
 			out := combined.Bytes()
