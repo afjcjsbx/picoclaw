@@ -427,12 +427,13 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				EnableDenyPatterns:   true,
-				RiskThreshold:        "medium",
-				UnknownCommandPolicy: ExecUnknownCommandAsk,
-				AllowRemote:          false,
-				TimeoutSeconds:       DefaultExecTimeoutSeconds,
-				MaxOutputChars:       DefaultExecMaxOutputChars,
+				EnableDenyPatterns:     true,
+				RiskThreshold:          "medium",
+				UnknownCommandPolicy:   ExecUnknownCommandAsk,
+				AllowRemote:            false,
+				TimeoutSeconds:         DefaultExecTimeoutSeconds,
+				MaxOutputChars:         DefaultExecMaxOutputChars,
+				ApprovalTimeoutSeconds: DefaultExecApprovalTimeoutSeconds,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{

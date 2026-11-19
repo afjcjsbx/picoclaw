@@ -13,6 +13,7 @@ The exec tool is used to execute shell commands.
 | `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in shell-construct deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
 | `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false`. Empty means `medium` |
 | `unknown_command_policy` | string | `"ask"` | What to do with a command the AST classifier cannot resolve: `ask` (default) requests approval from the originating user, `allow` runs it without approval, `block` rejects it. With `ask`, a missing interactive user denies the command. Inactive when `enable_deny_patterns` is `false` or on Windows |
+| `approval_timeout_seconds` | int | `300` | How long an unknown-command approval prompt waits for the user before the command is denied. `0` means the default (300s). It overrides `hooks.defaults.approval_timeout_ms` for this prompt |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `180` | Command timeout in seconds. `0` means the default (180s). Foreground runs are capped at `600`s; a larger configured timeout promotes commands to a tracked background session |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
@@ -80,7 +81,8 @@ Custom threshold:
   "tools": {
     "exec": {
       "risk_threshold": "medium",
-      "unknown_command_policy": "ask"
+      "unknown_command_policy": "ask",
+      "approval_timeout_seconds": 300
     }
   }
 }
@@ -100,7 +102,7 @@ Command: "./deploy.sh --target staging"
 
 The command runs only after the requesting user replies `approve`; `deny` cancels it and returns a denial to the model. The bare reply answers the single live request addressed to that user, so it needs no token on a phone keyboard. When several requests are pending the bare reply is refused and the user must send `approve <token>` or `deny <token>` with the token from the request; the tokenized form always works. A request is bound to the requesting channel, account, chat, topic, space and sender, so another user in the same group cannot answer it. Approval replies are consumed by the agent loop and never enter the conversation or the LLM context.
 
-The prompt uses `hooks.defaults.approval_timeout_ms` (default `60000`). A timeout, a missing or stopped channel, an automated sender (`cron`, `heartbeat`) or a missing origin denies the command. An unknown command longer than 12,000 characters is denied too: it cannot be reviewed safely in chat. This is deliberate fail-closed behavior: an unclassified command is never approved silently.
+The prompt waits `tools.exec.approval_timeout_seconds` (default `300`), not `hooks.defaults.approval_timeout_ms`; the setting applies to the next request after a config reload. A timeout, a missing or stopped channel, an automated sender (`cron`, `heartbeat`) or a missing origin denies the command. An unknown command longer than 12,000 characters is denied too: it cannot be reviewed safely in chat. This is deliberate fail-closed behavior: an unclassified command is never approved silently.
 
 Only unknown commands use this gate. Commands above `risk_threshold` stay blocked and approval does not raise the threshold. Set `unknown_command_policy` to `allow` to restore the previous behavior, or `block` to reject unknown commands without prompting.
 
@@ -323,6 +325,7 @@ as containers, VMs, or an approval flow around build-and-run commands.
       "enable_deny_patterns": true,
       "risk_threshold": "medium",
       "unknown_command_policy": "ask",
+      "approval_timeout_seconds": 300,
       "custom_deny_patterns": [
         "\\brm\\s+-r\\b",
         "\\bkillall\\s+python"

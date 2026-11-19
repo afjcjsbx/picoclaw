@@ -59,3 +59,22 @@ func TestParseExecUnknownCommandPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestExecApprovalTimeoutDefaultsAndJSON(t *testing.T) {
+	t.Parallel()
+
+	if got := DefaultConfig().Tools.Exec.GetApprovalTimeoutSeconds(); got != 300 {
+		t.Fatalf("default approval timeout = %d, want 300", got)
+	}
+	if got := (ExecConfig{}).GetApprovalTimeoutSeconds(); got != DefaultExecApprovalTimeoutSeconds {
+		t.Fatalf("zero approval timeout = %d, want the default", got)
+	}
+
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"tools":{"exec":{"approval_timeout_seconds":45}}}`), &cfg); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if got := cfg.Tools.Exec.GetApprovalTimeoutSeconds(); got != 45 {
+		t.Fatalf("approval timeout = %d, want 45", got)
+	}
+}

@@ -1467,6 +1467,10 @@ type ExecConfig struct {
 	// "allow" runs them without approval, and "block" rejects them. The
 	// classifier must be active (enable_deny_patterns=true, non-Windows).
 	UnknownCommandPolicy string `json:"unknown_command_policy,omitempty" env:"PICOCLAW_TOOLS_EXEC_UNKNOWN_COMMAND_POLICY"`
+	// ApprovalTimeoutSeconds is how long an unknown-command approval prompt
+	// waits for the user before the command is denied. It overrides
+	// hooks.defaults.approval_timeout_ms for this prompt. 0 means 300s.
+	ApprovalTimeoutSeconds int `json:"approval_timeout_seconds,omitempty" env:"PICOCLAW_TOOLS_EXEC_APPROVAL_TIMEOUT_SECONDS"`
 	// EnvSet lists variables always injected into exec child processes. Values
 	// are trusted configuration and override inherited variables, including
 	// PATH. It is not exposed as a tool argument; JSON only.
@@ -1480,6 +1484,10 @@ type ExecConfig struct {
 // DefaultExecTimeoutSeconds is the foreground command timeout used when
 // tools.exec.timeout_seconds is unset or zero.
 const DefaultExecTimeoutSeconds = 180
+
+// DefaultExecApprovalTimeoutSeconds is how long an unknown-command approval
+// prompt waits when tools.exec.approval_timeout_seconds is unset or zero.
+const DefaultExecApprovalTimeoutSeconds = 300
 
 // MaxExecForegroundTimeoutSeconds caps a single foreground exec invocation.
 // Requests above the cap are promoted to a tracked background session.
@@ -1533,6 +1541,13 @@ func (c ExecConfig) GetTimeoutSeconds() int {
 		return c.TimeoutSeconds
 	}
 	return DefaultExecTimeoutSeconds
+}
+
+func (c ExecConfig) GetApprovalTimeoutSeconds() int {
+	if c.ApprovalTimeoutSeconds > 0 {
+		return c.ApprovalTimeoutSeconds
+	}
+	return DefaultExecApprovalTimeoutSeconds
 }
 
 func (c ExecConfig) GetMaxOutputChars() int {

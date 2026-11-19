@@ -319,6 +319,47 @@ func TestExecUnknownApprovalShortReply(t *testing.T) {
 	}
 }
 
+func TestExecUnknownApprovalUsesExecTimeout(t *testing.T) {
+	t.Parallel()
+	requireUnixRiskClassifier(t)
+
+	al, mgr, origin, cleanup := newExecApprovalTestLoop(t)
+	defer cleanup()
+	// The generic hook deadline is far shorter than the exec approval wait.
+	al.hooks.ConfigureTimeouts(0, 0, 50*time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	done := make(chan ApprovalDecision, 1)
+	go func() { done <- al.hooks.ApproveTool(ctx, execApprovalRequest(origin, "docker ps")) }()
+
+	prompt := waitExecApprovalPrompt(t, mgr)
+	if !strings.Contains(prompt, "expires in 5m0s") {
+		t.Fatalf("prompt does not show the default 300s wait: %q", prompt)
+	}
+	select {
+	case decision := <-done:
+		t.Fatalf("request ended before the exec approval timeout: %+v", decision)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if !al.tryHandleExecApproval(ctx, bus.InboundMessage{Context: origin, Content: "approve"}) {
+		t.Fatal("reply was not intercepted")
+	}
+	if decision := <-done; !decision.Approved {
+		t.Fatalf("approved command was denied: %s", decision.Reason)
+	}
+
+	al.cfg.Tools.Exec.ApprovalTimeoutSeconds = 1
+	go func() { done <- al.hooks.ApproveTool(ctx, execApprovalRequest(origin, "docker ps")) }()
+	if prompt := waitExecApprovalPrompt(t, mgr); !strings.Contains(prompt, "expires in 1s") {
+		t.Fatalf("prompt ignores approval_timeout_seconds: %q", prompt)
+	}
+	if decision := <-done; decision.Approved {
+		t.Fatal("unanswered request was approved")
+	}
+}
+
 func TestExecUnknownApprovalFailsClosedWithoutUser(t *testing.T) {
 	t.Parallel()
 	requireUnixRiskClassifier(t)

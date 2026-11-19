@@ -39,6 +39,20 @@ type pendingExecApproval struct {
 	expires  time.Time
 }
 
+// ApprovalTimeout implements approvalTimeoutOverrider: a person needs longer
+// than the generic hook deadline to read a prompt and reply. It follows the
+// current config, so a hot reload applies to the next request.
+func (h *execUnknownCommandApprovalHook) ApprovalTimeout() time.Duration {
+	if h == nil || h.agent == nil {
+		return 0
+	}
+	cfg := h.agent.GetConfig()
+	if cfg == nil {
+		return 0
+	}
+	return time.Duration(cfg.Tools.Exec.GetApprovalTimeoutSeconds()) * time.Second
+}
+
 // ApproveTool implements ToolApprover. Known commands and non-run actions pass
 // through untouched; only an unknown exec run reaches the interactive gate.
 func (h *execUnknownCommandApprovalHook) ApproveTool(

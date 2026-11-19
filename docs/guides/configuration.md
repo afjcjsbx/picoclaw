@@ -555,6 +555,7 @@ Use `mode = lines` when:
 | `tools.exec.allow_remote` | bool | `false` | Allow exec tool from remote channels (Telegram/Discord etc.) |
 | `tools.exec.enable_deny_patterns` | bool | `true` | Enable built-in dangerous command interception (hardline and custom deny rules still apply when off) |
 | `tools.exec.unknown_command_policy` | string | `"ask"` | `ask` (default) requests user approval for commands the risk classifier cannot resolve, `allow` runs them, `block` rejects them |
+| `tools.exec.approval_timeout_seconds` | int | `300` | Seconds an unknown-command approval prompt waits before the command is denied |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | Custom regex patterns to block; always enforced |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | Full-command regex patterns that exempt only the default deny set; anchored automatically |
 

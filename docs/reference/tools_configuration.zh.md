@@ -174,6 +174,7 @@ Exec 工具用于执行 shell 命令。
 | `enabled`              | bool  | true   | 启用 exec 工具                 |
 | `enable_deny_patterns` | bool  | true   | 启用内置 shell 结构拦截（命令替换、管道到 shell、shell heredoc）和 AST 风险分类器 |
 | `unknown_command_policy` | string | "ask" | 分类器无法解析命令时的处理方式：`ask`（默认）请求用户批准，`allow` 直接运行，`block` 直接拒绝 |
+| `approval_timeout_seconds` | int | 300 | 未知命令批准请求等待用户回复的秒数，超时后命令被拒绝 |
 | `custom_deny_patterns` | array | []     | 自定义拒绝模式（正则表达式），始终生效 |
 | `custom_allow_patterns` | array | []     | 整条命令匹配，仅豁免默认拒绝规则；自动锚定 |
 
