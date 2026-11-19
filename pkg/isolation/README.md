@@ -155,11 +155,48 @@ Capabilities:
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
 
-Default mounts include the instance root plus the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf`.
+Default mounts inside the instance root are intentionally narrow:
+
+| Path | Mode | Purpose |
+|------|------|---------|
+| `<root>/workspace` | rw | agent working area |
+| `<root>/runtime-user-env` | rw | redirected `HOME`, `TMPDIR`, XDG dirs |
+| `<root>/skills` | ro | skill scripts the sandbox may execute |
+
+`config.json` (API keys), `.security.yml`, `logs`, `cache`, `state`, and all other instance-root files are **not mounted**. A sandboxed command cannot read or modify the host configuration.
+
+Minimum runtime system paths (`/usr`, `/bin`, `/lib`, `/lib64`, `/etc/resolv.conf`, etc.) are mounted read-only.
 
 At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed.
 
 Absolute path arguments are exposed **read-only**: a directory passed on the command line does not become a writable hole in the sandbox. Writable locations come from `expose_paths`, the effective working directory, or the parent of a non-existent path argument (so output files can still be created).
+
+**Re-exposing the instance root.** An operator who needs the full root visible can add an `expose_paths` rule whose target is the instance root:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "expose_paths": [
+      { "source": "/home/alice/.picoclaw", "target": "/home/alice/.picoclaw", "mode": "rw" }
+    ]
+  }
+}
+```
+
+That rule merges in after the defaults and restores the full root view. The sandbox boundary notice in the agent system prompt will reflect the change (`PicoClaw instance root: … writable`).
+
+**`PICOCLAW_CONFIG` environment variable.** When isolation is enabled on Linux, `PICOCLAW_CONFIG` is not passed to `exec` child processes because `config.json` is not mounted and the path would point to a non-existent file. `PICOCLAW_HOME` is still set.
+
+**Spawn sites that need extra expose_paths on Linux.** Some channels and hooks store data under the instance root and require an explicit `expose_paths` rule when isolation is enabled:
+
+| Spawn site | Path needed | Suggested rule |
+|-----------|-------------|----------------|
+| Delta Chat RPC server | `~/.picoclaw/deltachat/<channel>` (rw) | `expose_paths: [{source: "...", target: "...", mode: "rw"}]` |
+| Process hooks with script under instance root | hook script directory (ro or rw as needed) | add the hook directory to `expose_paths` |
+| Plugin MCP stdio servers with working directory under instance root | the plugin directory (ro) | add to `expose_paths` |
+
+Weixin SILK voice decoder uses the OS temp dir (`/tmp`), not the instance root; no extra rule is needed.
 
 There is no automatic fallback when `bwrap` is missing.
 

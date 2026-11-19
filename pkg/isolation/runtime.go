@@ -219,16 +219,23 @@ func NormalizeExposePath(item config.ExposePath) config.ExposePath {
 
 // DefaultExposePaths returns the minimum built-in host paths required for the
 // current platform to run isolated child processes.
+//
+// On Linux, only narrow instance-root subdirectories are mounted by default
+// (workspace rw, runtime-user-env rw, skills ro) so config.json and other
+// internal files are not reachable from the sandbox. An operator can still
+// re-expose the full instance root by adding an expose_paths rule whose target
+// equals the root path; that rule is merged in by MergeExposePaths and
+// overrides the default narrow view.
 func DefaultExposePaths(root string) []config.ExposePath {
-	items := []config.ExposePath{{
+	if runtime.GOOS == "linux" {
+		items := defaultLinuxInstanceExposePaths(root)
+		return append(items, defaultLinuxSystemExposePaths()...)
+	}
+	return []config.ExposePath{{
 		Source: root,
 		Target: root,
 		Mode:   "rw",
 	}}
-	if runtime.GOOS == "linux" {
-		items = append(items, defaultLinuxSystemExposePaths()...)
-	}
-	return items
 }
 
 func defaultLinuxSystemExposePaths() []config.ExposePath {
@@ -290,8 +297,15 @@ func MergeExposePaths(defaults []config.ExposePath, overrides []config.ExposePat
 
 // BuildLinuxMountPlan converts the merged expose-path configuration into the
 // mount rules consumed by the Linux bubblewrap backend.
+//
+// The default Linux instance-root paths (workspace, runtime-user-env, skills)
+// are filtered to only those that exist on disk: PrepareInstanceRoot creates
+// them during Preflight, so they will be present by the time a child is
+// launched. User-supplied overrides are passed through unchanged; bwrap will
+// surface a stat error for any override whose source does not exist.
 func BuildLinuxMountPlan(root string, overrides []config.ExposePath) []MountRule {
-	merged := MergeExposePaths(DefaultExposePaths(root), overrides)
+	defaults := existingExposePaths(DefaultExposePaths(root))
+	merged := MergeExposePaths(defaults, overrides)
 	plan := make([]MountRule, 0, len(merged))
 	for _, item := range merged {
 		plan = append(plan, MountRule{Source: item.Source, Target: item.Target, Mode: item.Mode})

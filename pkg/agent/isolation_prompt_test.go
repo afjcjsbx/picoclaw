@@ -15,6 +15,7 @@ func TestBuildIsolationPromptPathBoundary(t *testing.T) {
 	cb.isolationBoundary = &isolation.Boundary{
 		Backend:         "Linux bubblewrap",
 		Root:            "/tmp/picoclaw",
+		RootVisible:     true,
 		RootWritable:    true,
 		Workspace:       "/tmp/workspace",
 		Scratch:         "/tmp/picoclaw/runtime-user-env/tmp",
@@ -39,6 +40,38 @@ func TestBuildIsolationPromptPathBoundary(t *testing.T) {
 		"allow_read_outside_workspace=false",
 		"sandbox boundary, not a broken host",
 		"isolation.expose_paths",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("isolation prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildIsolationPromptRootNotVisible(t *testing.T) {
+	cb := NewContextBuilder("/tmp/workspace")
+	cb.restrictToWorkspace = true
+	cb.allowReadOutsideWorkspace = false
+	// Linux default: narrow mounts only; root is not in the filesystem view.
+	cb.isolationBoundary = &isolation.Boundary{
+		Backend:         "Linux bubblewrap",
+		Root:            "/tmp/picoclaw",
+		RootVisible:     false,
+		RootWritable:    false,
+		Workspace:       "/tmp/workspace",
+		Scratch:         "/tmp/picoclaw/runtime-user-env/tmp",
+		ScratchWritable: true,
+		Network:         true,
+		PathBoundary:    true,
+	}
+
+	prompt := cb.buildIsolationPrompt()
+	if strings.Contains(prompt, "PicoClaw instance root") {
+		t.Fatalf("isolation prompt must not mention instance root when RootVisible=false:\n%s", prompt)
+	}
+	for _, want := range []string{
+		"## Sandbox Boundaries",
+		"Linux bubblewrap",
+		"Workspace: `/tmp/workspace`",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("isolation prompt missing %q:\n%s", want, prompt)
