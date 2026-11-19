@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -241,6 +242,46 @@ func TestShellTool_UnlistedCommandsUseUnknownPolicy(t *testing.T) {
 		if got := tool.guardCommand(command, cwd); got != "" {
 			t.Errorf("unlisted command should be allowed by the unknown policy: %s\n  got: %s", command, got)
 		}
+	}
+}
+
+func TestAssessExecCommandUnknownAndReject(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the exec risk classifier is Unix-only")
+	}
+
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.RiskThreshold = "medium"
+
+	known, active := AssessExecCommand("ls -la", cfg)
+	if !active {
+		t.Fatal("classifier should be active")
+	}
+	if known.Unknown || known.Reject {
+		t.Fatalf("ls should be known and accepted, got %+v", known)
+	}
+
+	unknown, active := AssessExecCommand("docker ps", cfg)
+	if !active {
+		t.Fatal("classifier should be active")
+	}
+	if !unknown.Unknown {
+		t.Fatalf("docker ps should be unknown, got %+v", unknown)
+	}
+
+	reject, active := AssessExecCommand(`rm "$TARGET"`, cfg)
+	if !active {
+		t.Fatal("classifier should be active")
+	}
+	if !reject.Reject {
+		t.Fatalf("dynamic rm operand should be rejected, got %+v", reject)
+	}
+
+	cfg.Tools.Exec.EnableDenyPatterns = false
+	if _, active := AssessExecCommand("docker ps", cfg); active {
+		t.Fatal("classifier should be inactive when enable_deny_patterns is false")
 	}
 }
 

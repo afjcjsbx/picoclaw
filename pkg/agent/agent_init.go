@@ -115,6 +115,18 @@ func NewAgentLoop(
 	al.providerFactory = providers.CreateProviderFromConfig
 	al.hooks = NewHookManager(al.runtimeEvents.Channel())
 	configureHookManagerFromConfig(al.hooks, cfg)
+	execApprovalHook := NamedHook(
+		"exec-unknown-command-approval",
+		&execUnknownCommandApprovalHook{agent: al},
+	)
+	// Run after operator-configured approval hooks: a plugin can still deny a
+	// command without prompting the user.
+	execApprovalHook.Priority = 100
+	if err := al.MountHook(execApprovalHook); err != nil {
+		logger.WarnCF("agent", "Failed to mount exec approval hook", map[string]any{
+			"error": err.Error(),
+		})
+	}
 	al.contextManager = al.resolveContextManager()
 
 	// Register shared tools to all agents (now that al is created)

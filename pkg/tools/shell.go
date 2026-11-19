@@ -413,6 +413,11 @@ func NewExecToolWithConfig(
 	if err != nil {
 		return nil, err
 	}
+	if cfg != nil {
+		if _, err := config.ParseExecUnknownCommandPolicy(cfg.Tools.Exec.UnknownCommandPolicy); err != nil {
+			return nil, err
+		}
+	}
 
 	hardlinePatterns := make([]*regexp.Regexp, 0, len(hardlineDenyPatterns)+8)
 	hardlinePatterns = append(hardlinePatterns, hardlineDenyPatterns...)

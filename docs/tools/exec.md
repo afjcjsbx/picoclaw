@@ -12,6 +12,7 @@ The exec tool is used to execute shell commands.
 | `custom_deny_patterns` | string[] | `[]` | Additional deny patterns (regular expressions); always enforced and they take priority over allow rules |
 | `custom_allow_patterns` | string[] | `[]` | Full-command allow patterns (regular expressions, anchored automatically). They exempt only the built-in shell-construct deny set. They do not exempt the AST risk classifier; hardline and custom deny patterns still win |
 | `risk_threshold` | string | `"medium"` | Highest risk level the AST classifier allows: `low`, `medium`, `high` or `critical`. Part of the built-in guard set, so it is inactive when `enable_deny_patterns` is `false`. Empty means `medium` |
+| `unknown_command_policy` | string | `"ask"` | What to do with a command the AST classifier cannot resolve: `ask` (default) requests approval from the originating user, `allow` runs it without approval, `block` rejects it. With `ask`, a missing interactive user denies the command. Inactive when `enable_deny_patterns` is `false` or on Windows |
 | `allow_remote` | bool | `false` | When `false`, exec only accepts commands that originate from internal channels (`cli`, `system`, `subagent`). Remote channels are then blocked (fail-closed): an empty channel is also rejected. Set it to `true` only when remote command execution is explicitly intended |
 | `timeout_seconds` | int | `180` | Command timeout in seconds. `0` means the default (180s). Foreground runs are capped at `600`s; a larger configured timeout promotes commands to a tracked background session |
 | `max_output_chars` | int | `50000` | Foreground output cap. Longer output keeps the first 40% and the last 60% around a `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, while the full stream is spilled to a workspace artifact (up to 5,000,000 bytes). The inline view is also bounded by `tools.max_inline_result_chars`; the artifact preserves the full stream. `0` means the default (50000) |
@@ -22,7 +23,7 @@ The exec tool is used to execute shell commands.
 authorized by `tools.cron.command_allowed_remotes` instead and are not blocked by
 `allow_remote`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because its value is structured.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_UNKNOWN_COMMAND_POLICY`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because its value is structured.
 
 ### Risk classification
 
@@ -45,7 +46,7 @@ Commands above `risk_threshold` are rejected before any process starts, with a s
 Command blocked by risk classifier: command="chmod +x script.sh" risk_level=high threshold=medium reason=command risk exceeds configured threshold
 ```
 
-A command that is not in the table, a dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. They are allowed by default. Set `enable_deny_patterns: false` to disable the built-in guard set.
+A command that is not in the table, a dynamic command name, a shell that reads commands from stdin or a script file, and an unparseable command are classified as unknown. `tools.exec.unknown_command_policy` decides what happens next: `ask` (default) requests approval from the user, `allow` runs the command, and `block` rejects it. Set `enable_deny_patterns: false` to disable the built-in guard set.
 
 The classifier also:
 
@@ -78,17 +79,38 @@ Custom threshold:
 {
   "tools": {
     "exec": {
-      "risk_threshold": "medium"
+      "risk_threshold": "medium",
+      "unknown_command_policy": "ask"
     }
   }
 }
 ```
 
+### Unknown-command approval
+
+When the classifier returns unknown and `unknown_command_policy` is `ask` (the default), PicoClaw sends a prompt to the conversation that requested the command:
+
+```text
+Approval required for an unknown exec command.
+Reply "approve <token>" to run it or "deny <token>" to cancel. This request expires in 1m0s.
+
+Reason: command is not in the risk table
+Command: "./deploy.sh --target staging"
+```
+
+The command runs only after the requesting user replies `approve <token>`; `deny <token>` cancels it and returns a denial to the model. The token is bound to the requesting channel, account, chat, topic, space and sender, so another user in the same group cannot approve it. Approval replies are consumed by the agent loop and never enter the conversation or the LLM context.
+
+The prompt uses `hooks.defaults.approval_timeout_ms` (default `60000`). A timeout, a missing or stopped channel, an automated sender (`cron`, `heartbeat`) or a missing origin denies the command. An unknown command longer than 12,000 characters is denied too: it cannot be reviewed safely in chat. This is deliberate fail-closed behavior: an unclassified command is never approved silently.
+
+Only unknown commands use this gate. Commands above `risk_threshold` stay blocked and approval does not raise the threshold. Set `unknown_command_policy` to `allow` to restore the previous behavior, or `block` to reject unknown commands without prompting.
+
+The CLI (`picoclaw agent`, both one-shot and interactive) does not run the gateway inbound loop, so it has no channel to answer the prompt and denies unknown commands. Use `allow` there, or run the gateway and approve from a chat channel.
+
 `custom_allow_patterns` is anchored to the whole command (`^(?:...)$`). A bare `git` pattern matches only the command `git`, not `git push --force`. It exempts the default regex deny set only and does not affect the AST risk classifier. To allow a high-risk or unclassifiable command, raise `risk_threshold` globally. Hardline and custom deny patterns always win.
 
 Limits worth knowing:
 
-- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and allowed. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
+- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and follows `unknown_command_policy`. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
 - External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer.
 - Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps generic command patterns (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
 
@@ -299,6 +321,8 @@ as containers, VMs, or an approval flow around build-and-run commands.
   "tools": {
     "exec": {
       "enable_deny_patterns": true,
+      "risk_threshold": "medium",
+      "unknown_command_policy": "ask",
       "custom_deny_patterns": [
         "\\brm\\s+-r\\b",
         "\\bkillall\\s+python"
