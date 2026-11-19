@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -83,6 +84,20 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 		return err
 	}
 
+	// Install the seccomp filter. The read end of the pipe is tracked in
+	// linuxPendingSeccompFds and closed by postStartPlatformIsolation or
+	// cleanupPendingPlatformResources after the child inherits the fd.
+	fdNum, err := prepareSeccompFd(cmd)
+	if err != nil {
+		return err
+	}
+	if fdNum >= 0 {
+		// Insert --seccomp N immediately after "bwrap" so it appears first in
+		// process listings and is easy to spot during debugging.
+		bwrapArgs = append(bwrapArgs[:1:1],
+			append([]string{"--seccomp", strconv.Itoa(fdNum)}, bwrapArgs[1:]...)...)
+	}
+
 	cmd.Path = bwrapPath
 	cmd.Args = bwrapArgs
 	cmd.Dir = ""
@@ -107,10 +122,15 @@ func formatLinuxMountPlan(plan []MountRule) []map[string]string {
 }
 
 func postStartPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, root string) error {
+	// The seccomp pipe read end must be closed in the parent once the child has
+	// inherited it; leaving it open would prevent bwrap from detecting EOF.
+	closeSeccompReadEnd(cmd)
 	return nil
 }
 
 func cleanupPendingPlatformResources(cmd *exec.Cmd) {
+	// Called when cmd.Start() fails; the child never ran, so close the fd now.
+	closeSeccompReadEnd(cmd)
 }
 
 // Unsupported optional namespaces are omitted so mount and filesystem isolation
@@ -214,6 +234,9 @@ func buildLinuxBwrapArgs(
 		}
 		bwrapArgs = append(bwrapArgs, flag, rule.Source, rule.Target)
 	}
+	// UTS namespace: the child gets its own hostname/domainname view so it
+	// cannot change the host's hostname even with the right capability.
+	bwrapArgs = append(bwrapArgs, "--unshare-uts")
 	if execDir != "" {
 		bwrapArgs = append(bwrapArgs, "--chdir", execDir)
 	}

@@ -142,7 +142,9 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 能力：
 
 - 最小文件系统视图
-- `ipc namespace`
+- `ipc namespace` 隔离
+- `uts namespace` 隔离（沙箱内有独立的 hostname/domainname 视图）
+- seccomp BPF 拒绝名单（amd64 和 arm64 上启用；其他架构会打印警告并跳过）
 - 子进程用户环境重定向
 - `source -> target` 只读或读写挂载
 
@@ -220,10 +222,23 @@ macOS 调试日志名：`macOS Seatbelt profile prepared`。
 
 两者互补，不互相替代。
 
+## Seccomp 拒绝名单（Linux）
+
+在 amd64 和 arm64 上，bwrap 在 exec 目标命令之前会通过 seccomp 安装一个 classic-BPF 过滤器。过滤器对普通 agent 工作负载不需要的系统调用返回 `EPERM`，包括：内核加载（`kexec_load`、`kexec_file_load`）、内核模块管理（`init_module`、`finit_module`、`delete_module`）、`bpf`、`perf_event_open`、`userfaultfd`、密钥环相关调用、跨进程内存访问、所有挂载调用（传统及新 mount API）、`setns`、时钟设置、`reboot`、swap、会计、I/O 端口权限（仅 amd64）、quota 管理，以及 `io_uring_*`。在 amd64 上，任何设置了 x32 ABI 位（bit 30）的系统调用号也会被拒绝。
+
+`ptrace`、`clone`、`unshare` 刻意**不**拒绝：调试器需要 `ptrace`，浏览器和类似工具需要 `clone`/`unshare` 来创建嵌套 user namespace 实现自己的渲染进程沙箱。这些调用已通过 Yama 和 PID namespace（启用时）加以约束。
+
+在其他 Linux 架构（riscv64、loong64、s390x、arm、mipsle）上，过滤器不会安装；bwrap 会打印一条警告后继续运行，文件系统和 namespace 隔离仍然有效。
+
+## 已知残留：未设置 `--disable-userns`
+
+bwrap ≥ 0.9.0 支持 `--disable-userns` 选项，可以阻止沙箱内进程创建新的 user namespace。该选项**刻意未添加**，因为 Chromium、Electron 和 Playwright 等浏览器框架会在渲染进程中创建嵌套 user namespace 来实现自己的沙箱；禁用后这类工作负载会无法运行。需要更严格约束、且确认工作负载不依赖嵌套 user namespace 的运营者，可以在 PicoClaw 外部自行包装 bwrap 并添加 `--disable-userns`。
+
 ## 当前限制
 
 - Linux 基于 `bwrap` 实现，而不是纯内建 isolation runtime。
 - Linux 当前没有默认启用独立的 `pid namespace`。
+- seccomp 拒绝名单在 amd64 和 arm64 以外的 Linux 架构上不生效。
 - Windows 还没有对所有允许/拒绝路径做完整 ACL 落地。
 - macOS Seatbelt 不支持 `source -> target` 路径重映射，并依赖 Apple 已弃用的 `sandbox-exec` 命令。
 - 当前隔离的是子进程，不是 `picoclaw` 主进程自身。

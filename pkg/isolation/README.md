@@ -152,6 +152,8 @@ Capabilities:
 
 - minimal filesystem view
 - `ipc` namespace isolation
+- `uts` namespace isolation (sandbox gets its own hostname/domainname view)
+- seccomp BPF denylist (active on amd64 and arm64; logs a warning and skips on other architectures)
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
 
@@ -261,10 +263,23 @@ restrictions without path-level filesystem remapping.
 Config reload rebuilds the agent registry, so a changed isolation configuration
 is reflected in the next system prompt.
 
+## Seccomp Denylist (Linux)
+
+On amd64 and arm64, bwrap installs a classic-BPF seccomp filter before exec'ing the sandboxed command. The filter allows all syscalls except a conservative denylist of calls that normal agent workloads never need: kernel-load calls (`kexec_load`, `kexec_file_load`), module management (`init_module`, `finit_module`, `delete_module`), `bpf`, `perf_event_open`, `userfaultfd`, key-ring calls, cross-process memory access, all mount calls (legacy and new-mount-API), `setns`, clock-setting, `reboot`, swap, accounting, I/O-port privilege (amd64 only), quota management, and `io_uring_*`. On amd64, any syscall with the x32 ABI bit set (bit 30) is also denied.
+
+`ptrace`, `clone`, and `unshare` are intentionally **not** denied: debuggers need `ptrace`, and browsers and similar tools create nested user namespaces with `clone`/`unshare`. Those are already contained by Yama and the PID namespace (when present).
+
+On other Linux architectures (riscv64, loong64, s390x, arm, mipsle) the filter is not installed; bwrap logs a warning and continues without it. The sandbox still runs with filesystem and namespace isolation.
+
+## Known Residual: `--disable-userns` Is Not Set
+
+`--disable-userns` (available in bwrap ≥ 0.9.0) prevents the sandboxed process from creating further user namespaces. It is intentionally **not** added because Chromium, Electron, and Playwright-style browsers create nested user namespaces to implement their own renderer sandbox; disabling that would break those use cases. Operators who run workloads that do not need nested user namespaces can add `--disable-userns` to their own bwrap wrapper outside of PicoClaw if they require it.
+
 ## Current Limits
 
 - Linux isolation is implemented with `bwrap`, not a custom in-process isolation runtime.
 - Linux does not currently enable a dedicated `pid` namespace by default.
+- The seccomp denylist is not active on Linux architectures other than amd64 and arm64.
 - Windows does not yet implement full host ACL enforcement for every allowed or denied path.
 - macOS Seatbelt does not support `source -> target` path remapping and relies on Apple's deprecated `sandbox-exec` command.
 - The current design isolates child processes, not the main `picoclaw` process.
