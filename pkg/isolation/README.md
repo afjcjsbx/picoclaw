@@ -210,6 +210,7 @@ Capabilities:
 - `source -> target` read-only or read-write mounts
 - all Linux capabilities dropped (`--cap-drop ALL`) inside every sandbox
 - new session (`--new-session`): the sandbox runs in a detached session with no controlling terminal, blocking TIOCSTI-based terminal injection (CVE-2017-5226)
+- ephemeral `/tmp` tmpfs per sandbox, for tools that hardcode `/tmp`; the host `/tmp` is not exposed
 - optional network namespace isolation (`block_network: true`)
 
 **Do not run PicoClaw as root.** When the effective uid is 0, bwrap does not
