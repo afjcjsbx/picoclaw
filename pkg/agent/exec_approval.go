@@ -74,9 +74,10 @@ func (h *execUnknownCommandApprovalHook) ApproveTool(
 	if !active || !assessment.Unknown {
 		return ApprovalDecision{Approved: true}, nil
 	}
-	// A rejected assessment is blocked by the exec guard itself, which returns
-	// the precise classifier error. Asking here would only duplicate it.
-	if assessment.Reject {
+	// A rejected or pattern-denied command is blocked by the exec guard itself,
+	// which returns the precise error. Asking here would prompt for a command
+	// that cannot run.
+	if assessment.Reject || assessment.Denied {
 		return ApprovalDecision{Approved: true}, nil
 	}
 	if policy == config.ExecUnknownCommandBlock {

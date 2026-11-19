@@ -226,6 +226,26 @@ func TestExecUnknownApprovalPolicyModes(t *testing.T) {
 	noExecApprovalPrompt(t, mgr)
 }
 
+func TestExecUnknownApprovalSkipsPromptForDeniedCommands(t *testing.T) {
+	t.Parallel()
+	requireUnixRiskClassifier(t)
+
+	al, mgr, origin, cleanup := newExecApprovalTestLoop(t)
+	defer cleanup()
+	al.cfg.Tools.Exec.CustomDenyPatterns = []string{`docker\s+rm`}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, command := range []string{"docker rm web", "docker ps; shutdown now"} {
+		// The exec guard blocks these with a precise error, so the hook must
+		// not ask the user to approve a command that cannot run.
+		if decision := al.hooks.ApproveTool(ctx, execApprovalRequest(origin, command)); !decision.Approved {
+			t.Fatalf("%q was denied by the hook: %s", command, decision.Reason)
+		}
+		noExecApprovalPrompt(t, mgr)
+	}
+}
+
 func TestExecUnknownApprovalFailsClosedWithoutUser(t *testing.T) {
 	t.Parallel()
 	requireUnixRiskClassifier(t)

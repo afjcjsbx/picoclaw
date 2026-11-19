@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"regexp"
 	"runtime"
+	"slices"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/tools/shellguard"
@@ -35,6 +37,9 @@ type ExecRiskAssessment struct {
 	// Reject marks a command the exec tool blocks regardless of threshold, for
 	// example a destructive command with a dynamic operand.
 	Reject bool
+	// Denied marks an unknown command that the hardline, custom deny or default
+	// deny patterns block. It is only evaluated for unknown commands.
+	Denied bool
 	// Reason explains why the classifier returned an unknown verdict.
 	Reason string
 }
@@ -44,9 +49,9 @@ type ExecRiskAssessment struct {
 // (Windows or enable_deny_patterns=false), in which case there is no unknown
 // verdict.
 //
-// This helper exposes only the risk layer. The other exec layers (hardline,
-// deny patterns, workspace boundary) still run before execution and remain
-// authoritative; a command assessed here can still be blocked.
+// This helper exposes the risk layer and, for unknown commands, the regex deny
+// layers. The exec guard runs every layer again before execution and remains
+// authoritative; the workspace boundary is not assessed here.
 func AssessExecCommand(command string, cfg *config.Config) (ExecRiskAssessment, bool) {
 	if cfg == nil || !cfg.Tools.Exec.EnableDenyPatterns || runtime.GOOS == "windows" {
 		return ExecRiskAssessment{}, false
@@ -59,9 +64,38 @@ func AssessExecCommand(command string, cfg *config.Config) (ExecRiskAssessment, 
 
 	analysis := shellguard.Analyze(command)
 	assessment := guard.AssessFile(command, analysis.RiskFile)
-	return ExecRiskAssessment{
+	result := ExecRiskAssessment{
 		Unknown: assessment.Unknown,
 		Reject:  assessment.Reject,
 		Reason:  assessment.Reason,
-	}, true
+	}
+	if result.Unknown && !result.Reject {
+		result.Denied = execDenyPatternsBlock(command, cfg, analysis)
+	}
+	return result, true
+}
+
+// execDenyPatternsBlock reports whether the regex layers of the exec guard
+// (hardline, custom deny, default deny) block command. It reuses the guard
+// itself on a tool that carries only those layers, so the verdict cannot drift
+// from execution. Keep the pattern sets in sync with NewExecToolWithConfig.
+func execDenyPatternsBlock(command string, cfg *config.Config, analysis shellguard.Analysis) bool {
+	execConfig := cfg.Tools.Exec
+	customDeny, err := compilePatterns(execConfig.CustomDenyPatterns, regexp.Compile, "custom deny")
+	if err != nil {
+		return false
+	}
+	customAllow, err := compilePatterns(execConfig.CustomAllowPatterns, compileFullMatchPattern, "custom allow")
+	if err != nil {
+		return false
+	}
+	t := &ExecTool{
+		denyPatterns: defaultDenyPatterns,
+		hardlineDenyPatterns: append(
+			slices.Clone(hardlineDenyPatterns), selfProtectionHardlinePatterns()...,
+		),
+		customDenyPatterns:  customDeny,
+		customAllowPatterns: customAllow,
+	}
+	return t.guardCommandWithAnalysis(command, "", analysis) != ""
 }

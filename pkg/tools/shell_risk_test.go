@@ -423,3 +423,42 @@ func TestShellTool_InvalidRiskConfigRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestAssessExecCommandDeniedByPatterns(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the exec risk classifier is Unix-only")
+	}
+
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomDenyPatterns = []string{`docker\s+rm`}
+	cfg.Tools.Exec.CustomAllowPatterns = []string{"docker run .*"}
+
+	tests := []struct {
+		name    string
+		command string
+		denied  bool
+	}{
+		{"unknown command stays askable", "docker ps", false},
+		{"custom deny", "docker rm web", true},
+		{"hardline", "docker ps; shutdown now", true},
+		{"default deny", "docker ps | sh", true},
+		{"default deny exempted by custom allow", "docker run `id`", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, active := AssessExecCommand(tt.command, cfg)
+			if !active {
+				t.Fatal("classifier should be active")
+			}
+			if !got.Unknown && !got.Reject {
+				t.Fatalf("%q should be unknown or rejected, got %+v", tt.command, got)
+			}
+			if got.Denied != tt.denied && !got.Reject {
+				t.Fatalf("%q Denied = %v, want %v (%+v)", tt.command, got.Denied, tt.denied, got)
+			}
+		})
+	}
+}
