@@ -38,7 +38,8 @@
 {
   "isolation": {
     "enabled": false,
-    "expose_paths": []
+    "expose_paths": [],
+    "block_network": false
   }
 }
 ```
@@ -47,6 +48,7 @@
 
 - `enabled`：是否启用子进程隔离。默认值：`false`。
 - `expose_paths`：显式把宿主路径带入隔离环境。仅在 `enabled=true` 时生效。Linux 支持路径重映射；macOS 仅支持源路径和目标路径相同。
+- `block_network`：将子进程置于独立网络命名空间，使其无法访问宿主机回环服务（loopback）、云实例元数据端点（如 `169.254.169.254`）、旁路服务等。默认值：`false`（共享宿主网络）。**仅支持 Linux**；在 macOS 和 Windows 上设置此项将在预检阶段返回错误。
 
 示例：
 
@@ -69,6 +71,25 @@
   }
 }
 ```
+
+### `block_network` 安全说明
+
+默认情况下（`block_network: false`），子进程共享宿主机网络命名空间，可以访问宿主机的本地回环服务、
+云实例元数据端点（如 `http://169.254.169.254/`）、旁路服务和本地数据库。
+具备网络能力的运行时（`curl`、`python`、`node` 等）均可用于数据外泄；exec 工具的命令级防护不足以充当网络边界。
+
+启用 `block_network: true` 后，bubblewrap 会添加 `--unshare-net` 标志，将子进程放入仅含回环接口（`lo`）的全新网络命名空间。
+对宿主服务或公网的连接将以"连接被拒绝"/"网络不可达"失败。
+
+**启用 `block_network: true` 后会受影响的功能：**
+
+- 沙箱内的 `curl`、`wget` 及其他 HTTP 客户端。
+- `git fetch`/`git clone`/`git push` 等网络操作。
+- 下载包的包管理器（`pip`、`npm`、`apt` 等）。
+- 自身需要访问互联网的 MCP server。
+- 所有依赖子进程出站网络调用的 agent 工具。
+
+**替代方案：** 若 agent 需要经过过滤的互联网出站访问，但不能访问宿主本地服务，可考虑运行出站代理并通过代理路由流量，而非使用 `block_network`。
 
 `expose_paths` 规则：
 
@@ -145,6 +166,7 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 - `ipc namespace`
 - 子进程用户环境重定向
 - `source -> target` 只读或读写挂载
+- 可选网络命名空间隔离（`block_network: true`）
 
 默认映射包括实例根，以及 `/usr`、`/bin`、`/lib`、`/lib64`、`/etc/resolv.conf` 等最小运行时系统路径。
 

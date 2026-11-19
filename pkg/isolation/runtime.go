@@ -445,6 +445,10 @@ func preflight(isolation config.IsolationConfig) error {
 		}
 	}
 	if runtime.GOOS == "windows" {
+		if isolation.BlockNetwork {
+			return fmt.Errorf("isolation.block_network is not supported on windows: " +
+				"the Windows backend does not implement network namespace isolation")
+		}
 		if err := validateWindowsExposePaths(isolation.ExposePaths); err != nil {
 			return err
 		}
@@ -455,6 +459,10 @@ func preflight(isolation config.IsolationConfig) error {
 		}
 	}
 	if runtime.GOOS == "darwin" {
+		if isolation.BlockNetwork {
+			return fmt.Errorf("isolation.block_network is not supported on darwin: " +
+				"macOS Seatbelt does not implement network namespace isolation")
+		}
 		if err := validateDarwinExposePaths(isolation.ExposePaths, root); err != nil {
 			return err
 		}
