@@ -82,6 +82,10 @@
 平台说明：
 
 - Linux 会真实使用 `source -> target` 挂载视图。
+- Linux 会拒绝 `expose_paths` 中 `target` 路径经过位于可写挂载点内的符号链接的规则。
+  这可防止沙箱内的 agent 在工作区植入符号链接并将挂载目标重定向到宿主机的任意路径
+  （bwrap < 0.12.0 的 CVE-2026-87766）。系统级符号链接（如 Debian 的 `/bin -> usr/bin`）
+  位于只读挂载点下，不受此检查影响。如遇拒绝，请删除该符号链接或选择不经过它的目标路径。
 - macOS 要求 `target` 与 `source` 相同；Seatbelt 不支持路径重映射。
 - Windows 当前不支持 `expose_paths`。
 

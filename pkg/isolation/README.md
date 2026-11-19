@@ -89,6 +89,13 @@ Platform note:
 
 - Linux uses a real `source -> target` mount view.
 - Linux probes optional bubblewrap namespace flags once. If the kernel rejects one with `Creating new namespace failed` (EINVAL), that namespace isolation is dropped with a warning while the mount namespace, filesystem view, and user environment remain active. This weakens isolation for that namespace; other probe failures stop startup.
+- Linux rejects any `expose_paths` rule whose `target` passes through a symlink
+  that sits inside an earlier writable mount. This prevents a sandboxed agent
+  from planting a symlink in its workspace and redirecting a mount to an
+  arbitrary host path (CVE-2026-87766 on bwrap < 0.12.0). System-level
+  symlinks such as Debian's `/bin -> usr/bin` are not affected because they lie
+  under read-only mounts. Remove the symlink or choose a target path that does
+  not traverse it.
 - macOS requires `target` to match `source`; Seatbelt does not remap paths.
   Read-only rules under the instance root are rejected because Seatbelt cannot
   revoke the root's write access.
