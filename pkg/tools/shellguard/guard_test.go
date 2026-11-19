@@ -498,3 +498,24 @@ func BenchmarkGuardCheck(b *testing.B) {
 		})
 	}
 }
+
+// TestGuardWrapperTargetsAreUnwrapped checks that a launcher behind a wrapper
+// is inspected like one at the top level, so find -exec cannot hide a critical
+// command behind find's own low risk.
+func TestGuardWrapperTargetsAreUnwrapped(t *testing.T) {
+	t.Parallel()
+
+	guard := mustGuard(t, "high")
+	for _, command := range []string{
+		`find . -exec rm -rf / \;`,
+		`timeout 5 find . -exec rm -rf / \;`,
+		`env nice find . -exec rm -rf / \;`,
+		`nohup exec rm -rf /`,
+		`flock ./lock -c 'rm -rf /'`,
+		`capsh -- -c 'rm -rf /'`,
+	} {
+		if checkGuard(guard, command) == nil {
+			t.Errorf("Check(%q) allowed, want blocked", command)
+		}
+	}
+}

@@ -8,15 +8,10 @@ import (
 
 // maxShellNesting bounds recursive analysis of sh -c scripts and wrapper
 // commands. Real commands nest one or two levels; the limit prevents hostile
-// input from turning the guard into an unbounded parser recursion.
-//
-// Depth N is the deepest level analyzed, and two comparisons enforce that on
-// purpose. A function entered at some depth (assessScript, checkWorkspaceText,
-// checkSimple, canonicalCommands) rejects depth > maxShellNesting. A helper
-// about to recurse at depth+1 (assessShell, assessWrapper, assessTrap,
-// assessFindExec, appendCanonicalCall) stops at depth >= maxShellNesting. Both
-// refuse the same hop from N to N+1, so switching either side to the other
-// operator moves the limit by one level on that path only.
+// input from turning the guard into an unbounded parser recursion. It is the
+// deepest level analyzed: canNest decides whether a launcher at some depth may
+// descend, and every function that parses a nested script rejects a depth
+// beyond it.
 const maxShellNesting = 8
 
 // Guard classifies commands against a configured risk threshold.
@@ -142,139 +137,56 @@ func (g *Guard) assessCall(call *syntax.CallExpr, depth int) Assessment {
 
 // assessArgv classifies one argument vector. It is shared by AST calls and by
 // commands launched from find -exec/-ok, which are argv slices rather than
-// CallExpr nodes.
+// CallExpr nodes. What the command launches comes from resolveLaunch; a
+// launcher is rated by its own risk plus the highest risk of what it runs.
 func (g *Guard) assessArgv(words []word, depth int) Assessment {
 	if len(words) == 0 {
 		return Assessment{}
 	}
 
-	first := words[0]
-	if first.dynamic || first.text == "" {
+	l := resolveLaunch(words)
+	if l.dynamicName {
 		return unknownAssessment(
 			[]string{"<dynamic>"}, "dynamic command name cannot be classified",
 		)
 	}
 
-	name := baseCommand(first.text)
-	if isShellCommand(name) {
-		return g.assessShell(name, words, depth)
+	var result Assessment
+	if !l.transparent {
+		result = g.classify(words)
 	}
-	if name == "trap" {
-		return g.assessTrap(words, depth)
+	if l.opaque != "" {
+		return preferAssessment(result, unknownAssessment(wordTexts(words), l.opaque))
 	}
-	if name == "eval" {
-		// eval concatenates its literal arguments and runs them as shell
-		// input. Inspect that script so a destructive command with a dynamic
-		// operand is rejected instead of merely inheriting eval's critical
-		// base level.
-		if script, ok := joinLiteralWords(words[1:]); ok && script != "" {
-			return preferAssessment(g.classify(words), g.assessScript(script, depth+1))
-		}
-	}
-	if spec, ok := wrapperSpecs[name]; ok {
-		return g.assessWrapper(name, words, spec, depth)
-	}
-	if name == "find" {
-		return preferAssessment(g.classify(words), g.assessFindExec(words[1:], depth))
-	}
-	if name == "exec" {
-		result := g.classify(words)
-		if nested, ok := execCommand(words[1:]); ok {
-			result = preferAssessment(result, g.assessArgv(nested, depth+1))
-		}
-		return result
-	}
-	return g.classify(words)
-}
-
-// assessFindExec classifies commands launched by find -exec/-execdir/-ok/-okdir.
-// find runs them directly, so a nested critical command must not hide behind
-// find's own high-risk base level.
-func (g *Guard) assessFindExec(words []word, depth int) Assessment {
-	if depth >= maxShellNesting {
+	if l.bareShell {
+		// A script file named on the command line stays opaque: its contents
+		// are not read or classified, so the command is treated as unknown.
 		return unknownAssessment(
-			wordTexts(words), "command nesting limit exceeded",
+			wordTexts(words),
+			"shell reads commands from stdin or a script file that cannot be inspected",
 		)
 	}
-	var result Assessment
-	for _, nested := range findExecCommands(words) {
-		result = preferAssessment(result, g.assessArgv(nested, depth+1))
+	if len(l.scripts)+len(l.argvs) > 0 && !canNest(depth) {
+		return unknownAssessment(wordTexts(words), "command nesting limit exceeded")
+	}
+
+	for _, script := range l.scripts {
+		if script.dynamic {
+			return preferAssessment(result, unknownAssessment(
+				wordTexts(words), "script argument of "+l.name+" is dynamic",
+			))
+		}
+		result = preferAssessment(result, g.assessScript(script.text, depth+1))
+	}
+	for _, argv := range l.argvs {
+		if l.name == "xargs" && len(argv) > 0 && isShellCommand(baseCommand(argv[0].text)) {
+			return unknownAssessment(
+				wordTexts(words), "xargs launching a shell cannot be inspected",
+			)
+		}
+		result = preferAssessment(result, g.assessArgv(argv, depth+1))
 	}
 	return result
-}
-
-// findExecCommands returns the argument vectors launched by find -exec,
-// -execdir, -ok and -okdir.
-func findExecCommands(words []word) [][]word {
-	var commands [][]word
-	for i := 0; i < len(words); i++ {
-		switch words[i].text {
-		case "-exec", "-execdir", "-ok", "-okdir":
-			end := i + 1
-			for end < len(words) && words[end].text != ";" && words[end].text != "+" {
-				end++
-			}
-			if end > i+1 {
-				commands = append(commands, words[i+1:end])
-			}
-			i = end
-		}
-	}
-	return commands
-}
-
-// trapAction extracts the literal action from a trap argument vector. found is
-// false for listing and reset forms; dynamic reports that the action or an
-// option could not be resolved.
-func trapAction(args []word) (action word, found, dynamic bool) {
-	for _, w := range args {
-		if w.dynamic {
-			return word{}, false, true
-		}
-		switch w.text {
-		case "-l", "-p":
-			return word{}, false, false
-		case "--":
-			continue
-		case "", "-":
-			return word{}, false, false
-		}
-		if strings.HasPrefix(w.text, "-") {
-			continue
-		}
-		return w, true, false
-	}
-	return word{}, false, false
-}
-
-// execCommand returns the argv that exec replaces the shell with, skipping its
-// own options.
-func execCommand(args []word) ([]word, bool) {
-	i := 0
-	for i < len(args) {
-		text := args[i].text
-		switch {
-		case text == "--":
-			i++
-		case text == "-a":
-			i += 2
-			continue
-		case strings.HasPrefix(text, "-a") && len(text) > 2:
-			i++
-			continue
-		case text == "-c" || text == "-l":
-			i++
-			continue
-		case strings.HasPrefix(text, "-") && text != "-":
-			i++
-			continue
-		}
-		break
-	}
-	if i >= len(args) {
-		return nil, false
-	}
-	return args[i:], true
 }
 
 func (g *Guard) classify(words []word) Assessment {
@@ -343,135 +255,6 @@ func dynamicDestructiveOperand(words []word) (Assessment, bool) {
 		}
 	}
 	return Assessment{}, false
-}
-
-func (g *Guard) assessShell(name string, words []word, depth int) Assessment {
-	if depth >= maxShellNesting {
-		return unknownAssessment(
-			wordTexts(words), "shell nesting limit exceeded",
-		)
-	}
-
-	invocation := parseShellInvocation(words[1:])
-	if invocation.hasScript {
-		if invocation.script.dynamic {
-			return unknownAssessment(
-				wordTexts(words), "shell script argument is dynamic",
-			)
-		}
-		return g.assessScript(invocation.script.text, depth+1)
-	}
-	// A script file named on the command line stays opaque: its contents are
-	// not read or classified, so the command is treated as unknown.
-	return unknownAssessment(
-		wordTexts(words),
-		"shell reads commands from stdin or a script file that cannot be inspected",
-	)
-}
-
-func (g *Guard) assessTrap(words []word, depth int) Assessment {
-	if depth >= maxShellNesting {
-		return unknownAssessment(
-			wordTexts(words), "command nesting limit exceeded",
-		)
-	}
-
-	action, found, dynamic := trapAction(words[1:])
-	if dynamic {
-		return unknownAssessment(
-			wordTexts(words), "trap action is dynamic",
-		)
-	}
-	if !found {
-		return Assessment{}
-	}
-	return g.assessScript(action.text, depth+1)
-}
-
-func (g *Guard) assessWrapper(
-	name string,
-	words []word,
-	spec wrapperSpec,
-	depth int,
-) Assessment {
-	if depth >= maxShellNesting {
-		return unknownAssessment(
-			wordTexts(words), "command nesting limit exceeded",
-		)
-	}
-	if name == "command" && hasCommandLookupFlag(words[1:]) {
-		return Assessment{}
-	}
-	if name == "env" && hasEnvSplitString(words[1:]) {
-		return unknownAssessment(
-			wordTexts(words),
-			"env -S executes a command string that cannot be inspected",
-		)
-	}
-
-	result := g.classify(words)
-
-	// capsh runs /bin/bash for everything after `--`, so its arguments are a
-	// shell invocation rather than an executable name.
-	if spec.shellAfterDoubleDash {
-		if rest, ok := argsAfterDoubleDash(words[1:]); ok {
-			bash := make([]word, 0, len(rest)+1)
-			bash = append(bash, word{text: "bash"})
-			bash = append(bash, rest...)
-			return preferAssessment(result, g.assessShell("bash", bash, depth+1))
-		}
-	}
-
-	// Wrappers such as runuser -c and flock -c take a shell command string.
-	// Inspect it as a script instead of treating its first token as argv[0].
-	if script, found, dynamic := commandFlagValue(words[1:], spec.commandFlags); dynamic {
-		return unknownAssessment(
-			wordTexts(words), "dynamic command string in "+name,
-		)
-	} else if found {
-		if script.dynamic {
-			return unknownAssessment(
-				wordTexts(words), "dynamic command string in "+name,
-			)
-		}
-		return preferAssessment(result, g.assessScript(script.text, depth+1))
-	}
-
-	nested, found, dynamic := wrapperNested(words[1:], spec)
-	if dynamic {
-		return unknownAssessment(
-			wordTexts(words), "dynamic command name in "+name,
-		)
-	}
-	if !found || len(nested) == 0 {
-		return result
-	}
-
-	nestedName := ""
-	if !nested[0].dynamic {
-		nestedName = baseCommand(nested[0].text)
-	}
-	if nestedName == "" {
-		return unknownAssessment(
-			wordTexts(words), "dynamic command name in "+name,
-		)
-	}
-	if isShellCommand(nestedName) {
-		if name == "xargs" {
-			return unknownAssessment(
-				wordTexts(words),
-				"xargs launching a shell cannot be inspected",
-			)
-		}
-		return preferAssessment(result, g.assessShell(nestedName, nested, depth+1))
-	}
-	if nestedName == "trap" {
-		return preferAssessment(result, g.assessTrap(nested, depth+1))
-	}
-	if next, ok := wrapperSpecs[nestedName]; ok {
-		return preferAssessment(result, g.assessWrapper(nestedName, nested, next, depth+1))
-	}
-	return preferAssessment(result, g.classify(nested))
 }
 
 func unknownAssessment(args []string, reason string) Assessment {
@@ -724,55 +507,6 @@ var wrapperSpecs = map[string]wrapperSpec{
 	"taskset": {skipPositional: 1},
 }
 
-func wrapperNested(words []word, spec wrapperSpec) ([]word, bool, bool) {
-	if spec.envArgs {
-		opts := parseEnvArgs(words)
-		return opts.command, len(opts.command) > 0, opts.dynamic
-	}
-
-	positional := spec.skipPositional
-	for i := 0; i < len(words); i++ {
-		w := words[i]
-		if w.dynamic {
-			return nil, false, true
-		}
-
-		text := w.text
-		if text == "--" {
-			// For wrappers that consume positional arguments (timeout, flock,
-			// lxc exec), "--" only ends option parsing: the command still comes
-			// after those positionals. Returning here would treat the next
-			// positional (a duration, lock file or container) as the command.
-			if positional > 0 {
-				continue
-			}
-			if i+1 < len(words) {
-				return words[i+1:], true, false
-			}
-			return nil, false, false
-		}
-		if strings.HasPrefix(text, "-") && text != "-" {
-			if spec.valueFlags[text] {
-				i++
-				continue
-			}
-			if name, _, ok := strings.Cut(text, "="); ok && spec.valueFlags[name] {
-				continue
-			}
-			if len(text) > 2 && text[1] != '-' && spec.valueFlags[text[:2]] {
-				continue
-			}
-			continue
-		}
-		if positional > 0 {
-			positional--
-			continue
-		}
-		return words[i:], true, false
-	}
-	return nil, false, false
-}
-
 func isAssignment(s string) bool {
 	eq := strings.IndexByte(s, '=')
 	if eq <= 0 {
@@ -790,76 +524,6 @@ func isAssignment(s string) bool {
 		}
 	}
 	return true
-}
-
-// argsAfterDoubleDash returns the arguments after the first literal "--".
-func argsAfterDoubleDash(words []word) ([]word, bool) {
-	for i, w := range words {
-		if !w.dynamic && w.text == "--" {
-			return words[i+1:], true
-		}
-	}
-	return nil, false
-}
-
-// commandFlagValue finds a flag whose value is a shell command string (-c for
-// runuser, flock and similar wrappers). The third result reports a dynamic word
-// before the flag: the effective flag cannot be resolved, so the caller must
-// stay fail-closed. After "--" the value is a positional argument, not a flag.
-func commandFlagValue(words []word, flags map[string]bool) (word, bool, bool) {
-	if len(flags) == 0 {
-		return word{}, false, false
-	}
-	for i := 0; i < len(words); i++ {
-		w := words[i]
-		if w.text == "--" {
-			return word{}, false, false
-		}
-		if w.dynamic {
-			return word{}, false, true
-		}
-		text := w.text
-		if flags[text] {
-			if i+1 < len(words) {
-				return words[i+1], true, false
-			}
-			return word{}, false, false
-		}
-		if name, value, ok := strings.Cut(text, "="); ok && flags[name] {
-			return word{text: value}, true, false
-		}
-		if strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") && len(text) > 2 {
-			for flag := range flags {
-				if len(flag) == 2 && strings.HasPrefix(text, flag) {
-					return word{text: text[2:]}, true, false
-				}
-			}
-		}
-	}
-	return word{}, false, false
-}
-
-// hasCommandLookupFlag reports whether command(1) was invoked with -v/-V,
-// including combined forms such as -pv. Lookup mode does not execute the
-// argument, so it is not a guard concern.
-//
-// Only the options that precede command's own argument count: a -v after the
-// command name belongs to the nested command (`command rm -v`), not to
-// command(1).
-func hasCommandLookupFlag(words []word) bool {
-	for _, w := range words {
-		if w.dynamic {
-			return false
-		}
-		text := w.text
-		if text == "--" || text == "-" || !strings.HasPrefix(text, "-") {
-			return false
-		}
-		if !strings.HasPrefix(text, "--") && strings.ContainsAny(text[1:], "vV") {
-			return true
-		}
-	}
-	return false
 }
 
 // envArgs is the statically parsed surface of an env invocation.
@@ -1021,8 +685,4 @@ func optionValue(text string, rest int, args []word, index int) (envOptionValue,
 		return envOptionValue{}, false
 	}
 	return envOptionValue{word: args[index+1], next: true}, true
-}
-
-func hasEnvSplitString(words []word) bool {
-	return parseEnvArgs(words).splitString
 }

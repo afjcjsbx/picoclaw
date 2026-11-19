@@ -495,3 +495,41 @@ func TestCheckWorkspaceResolvesBackslashEscapes(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckWorkspaceFollowsCommandStrings covers wrappers that take a shell
+// command string through a flag instead of running an argv.
+func TestCheckWorkspaceFollowsCommandStrings(t *testing.T) {
+	t.Parallel()
+
+	policy, _, _ := testWorkspacePolicy(t)
+	blocked := []string{
+		`flock ./lock -c 'cat /etc/passwd'`,
+		`flock ./lock --command='cat /etc/passwd'`,
+		`runuser -u nobody -c 'cat /etc/passwd'`,
+		`capsh -- -c 'cat /etc/passwd'`,
+		`env timeout 5 sh -c 'cat /etc/passwd'`,
+		`flock ./lock -c "$CMD"`,
+	}
+	for _, command := range blocked {
+		t.Run("blocked "+command, func(t *testing.T) {
+			t.Parallel()
+			if err := checkWorkspaceTest(command, policy); err == nil {
+				t.Fatalf("checkWorkspaceTest(%q) = nil, want a workspace violation", command)
+			}
+		})
+	}
+
+	allowed := []string{
+		`flock ./lock -c 'cat ./file'`,
+		`capsh -- -c 'cat ./file'`,
+		`env timeout 5 sh -c 'cat ./file'`,
+	}
+	for _, command := range allowed {
+		t.Run("allowed "+command, func(t *testing.T) {
+			t.Parallel()
+			if err := checkWorkspaceTest(command, policy); err != nil {
+				t.Fatalf("checkWorkspaceTest(%q) = %v, want nil", command, err)
+			}
+		})
+	}
+}
