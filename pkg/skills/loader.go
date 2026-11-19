@@ -22,8 +22,7 @@ import (
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
 
 const (
-	MaxNameLength        = 64
-	MaxDescriptionLength = 1024
+	MaxNameLength = 64
 
 	// MaxCatalogDescription is the max characters of a skill description in the prompt catalog.
 	MaxCatalogDescription = 60
@@ -124,8 +123,6 @@ func (info SkillInfo) validate() error {
 
 	if info.Description == "" {
 		errs = errors.Join(errs, errors.New("description is required"))
-	} else if len(info.Description) > MaxDescriptionLength {
-		errs = errors.Join(errs, fmt.Errorf("description exceeds %d character", MaxDescriptionLength))
 	}
 	return errs
 }

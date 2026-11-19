@@ -48,7 +48,7 @@ description: What it does and when to use it — this is the trigger.
 | Field | Required | Rules |
 | --- | --- | --- |
 | `name` | Yes | Non-empty; ≤ 64 characters; letters, digits, and hyphens only (`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`) — no underscores or spaces |
-| `description` | Yes | Non-empty; ≤ 1024 bytes |
+| `description` | Yes | Non-empty; only the first 60 characters are shown in the prompt skill catalog |
 
 The `description` is the most important line you will write: it is the only text the agent sees **before** deciding to use the skill, so state both what the skill does and when to use it (include trigger words a user would say). Unknown fields such as `license` or `metadata` are tolerated but ignored by the loader.
 
