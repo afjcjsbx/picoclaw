@@ -783,6 +783,7 @@
         "viewer_description": "Zde si přečtěte aktuální obsah SKILL.md.",
         "load_detail_error": "Načtení obsahu dovednosti selhalo.",
         "no_description": "Popis není k dispozici.",
+        "plugin_badge": "Plugin: {{id}}",
         "no_results": "Žádné dovednosti neodpovídají aktuálním filtrům.",
         "dropzone_title": "Importovat do workspace",
         "dropzone_description": "Přetáhněte soubor dovednosti nebo vyberte ze disku.",
@@ -819,6 +820,7 @@
         "origin": {
           "all": "Všechny typy",
           "builtin": "Vestavěné",
+          "plugin": "Plugin",
           "third_party": "Třetí strany",
           "manual": "Ruční"
         },
@@ -833,6 +835,7 @@
         "metadata": {
           "name": "Název",
           "description": "Popis",
+          "plugin": "Plugin",
           "registry": "Registr",
           "url": "URL",
           "version": "Nainstalovaná verze",

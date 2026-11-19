@@ -114,6 +114,9 @@ plugin in `config.json`, using the `name` from its `plugin.json` as the entry ID
 
 Restart PicoClaw or reload its configuration to activate the plugin. Review
 packages before enabling them; local plugin servers run as subprocesses.
+Skills published by an enabled plugin also appear on the Web UI **Skills**
+page with the `Plugin` origin; the dashboard discovers them from the package
+on disk, so it does not need to start the plugin to list them.
 
 The same steps from the command line: `picoclaw plugin add <name> --enable` writes
 the entry, `picoclaw plugin list` shows what is configured and what sits on disk, and

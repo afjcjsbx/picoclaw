@@ -1,5 +1,6 @@
 import {
   IconFileCode,
+  IconPuzzle,
   IconSparkles,
   IconWorld,
   IconX,
@@ -80,6 +81,8 @@ export function DetailSheet({
             <div className="bg-primary/10 string-1 ring-primary/20 text-primary flex size-10 items-center justify-center rounded-xl">
               {activeSkillDetail?.origin_kind === "builtin" ? (
                 <IconSparkles className="size-5" />
+              ) : activeSkillOrigin === "plugin" ? (
+                <IconPuzzle className="size-5" />
               ) : activeSkillDetail?.registry_name ? (
                 <IconWorld className="size-5" />
               ) : (
@@ -115,7 +118,8 @@ export function DetailSheet({
             </div>
           ) : selectedSkillDetail ? (
             <div className="space-y-6">
-              {activeSkillOrigin === "third_party" ? (
+              {activeSkillOrigin === "third_party" ||
+              activeSkillOrigin === "plugin" ? (
                 <div className="border-border/40 bg-card/40 space-y-4 rounded-xl border p-4 shadow-sm">
                   <div className="flex flex-wrap items-center gap-2 px-1">
                     <OriginBadge
@@ -125,6 +129,12 @@ export function DetailSheet({
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2">
+                    {selectedSkillDetail.plugin_id ? (
+                      <MetadataItem
+                        label={t("pages.agent.skills.metadata.plugin")}
+                        value={selectedSkillDetail.plugin_id}
+                      />
+                    ) : null}
                     {selectedSkillDetail.registry_name ? (
                       <MetadataItem
                         label={t("pages.agent.skills.metadata.registry")}
