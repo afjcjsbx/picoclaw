@@ -69,7 +69,7 @@ func TestSymlinkedCwd_PlanAndArgs(t *testing.T) {
 	// Build the mount plan exactly as applyPlatformIsolation does post-fix.
 	plan := BuildLinuxMountPlan(root, nil)
 	plan = appendLinuxCommandMountRules(plan, exe)
-	plan = ensureLinuxMountRule(plan, resolvedExecDir, resolvedExecDir, "rw")
+	plan = appendLinuxWorkingDirMount(plan, resolvedExecDir)
 
 	// No mount rule should reference the symlink path.
 	for _, rule := range plan {
@@ -131,7 +131,7 @@ func TestBwrap_SymlinkedCwd_ResolvedPathInSandbox(t *testing.T) {
 	}
 
 	plan := BuildLinuxMountPlan(root, nil)
-	plan = ensureLinuxMountRule(plan, resolvedDir, resolvedDir, "rw")
+	plan = appendLinuxWorkingDirMount(plan, resolvedDir)
 
 	namespaceFlags, flagErr := probeLinuxNamespaceFlags(bwrapPath, func(path string, fargs ...string) ([]byte, error) {
 		var stderr bytes.Buffer
