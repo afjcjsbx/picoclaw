@@ -66,20 +66,8 @@ var detachCommands = map[string]bool{
 // detaches a job from the tracked shell. trailingConverted is true when the
 // caller rewrote the command's final '&' into a tracked background run.
 func untrackedDetachReason(command string, analysis shellguard.Analysis, tracked, trailingConverted bool) string {
-	forms := analysis.Canonical
-	if !analysis.CanonicalExact {
-		forms = shellguard.CanonicalCommands(command)
-	}
-	for _, form := range forms {
-		fields := strings.Fields(form)
-		if len(fields) == 0 {
-			continue
-		}
-		name := fields[0]
-		if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
-			name = name[slash+1:]
-		}
-		if detachCommands[name] && !tracked {
+	for _, form := range analysis.Forms(command) {
+		if name := formCommandName(form); detachCommands[name] && !tracked {
 			return "Command blocked: '" + name + "' detaches the process from the exec session. " +
 				"Use background=true so PicoClaw can track it."
 		}
@@ -111,4 +99,18 @@ func untrackedDetachReason(command string, analysis shellguard.Analysis, tracked
 			"Run the whole command with background=true instead."
 	}
 	return ""
+}
+
+// formCommandName is the command a canonical form runs: its first word without
+// any directory.
+func formCommandName(form string) string {
+	fields := strings.Fields(form)
+	if len(fields) == 0 {
+		return ""
+	}
+	name := fields[0]
+	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+		name = name[slash+1:]
+	}
+	return name
 }

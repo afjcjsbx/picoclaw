@@ -65,7 +65,7 @@ func NewCronTool(
 		// Cron command jobs run synchronously and consume the output in the
 		// same call, so they keep their configured timeout instead of being
 		// promoted to a tracked background session at the exec foreground cap.
-		execTool.foregroundCap = 0
+		execTool.DisableBackgroundPromotion()
 	}
 	return &CronTool{
 		cronService:           cronService,
