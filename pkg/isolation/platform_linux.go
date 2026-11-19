@@ -208,6 +208,10 @@ func buildLinuxBwrapArgs(
 	bwrapArgs := []string{
 		"bwrap",
 		"--die-with-parent",
+		// --new-session calls setsid(2) in the sandbox so it has no controlling
+		// terminal and cannot inject characters into the caller's terminal via
+		// TIOCSTI (CVE-2017-5226).
+		"--new-session",
 	}
 	for _, flag := range linuxOptionalNamespaceFlags {
 		if namespaceFlags[flag] {
