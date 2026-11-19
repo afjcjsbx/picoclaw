@@ -335,8 +335,14 @@ func TestReloadProviderAndConfigReplacesConfiguredHooks(t *testing.T) {
 		t.Fatalf("mounted hooks = %v, want %q", got, newHookName)
 	}
 	hooks := al.hooks.snapshotHooks()
-	if len(hooks) != 1 || hooks[0].Name != newHookName {
-		t.Fatalf("mounted hook registrations = %+v, want only %q", hooks, newHookName)
+	names := make([]string, 0, len(hooks))
+	for _, hook := range hooks {
+		names = append(names, hook.Name)
+	}
+	slices.Sort(names)
+	want := []string{"exec-unknown-command-approval", newHookName}
+	if !slices.Equal(names, want) {
+		t.Fatalf("mounted hook registrations = %v, want %v", names, want)
 	}
 	if decision := al.hooks.ApproveTool(context.Background(), &ToolApprovalRequest{Tool: "exec"}); decision.Approved {
 		t.Fatal("replacement approval hook should deny exec")

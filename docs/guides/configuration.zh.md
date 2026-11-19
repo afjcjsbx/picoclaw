@@ -342,10 +342,12 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 |--------|------|--------|------|
 | `tools.exec.allow_remote` | bool | `false` | 允许从远程渠道直接执行 exec 工具；定时任务命令由 `tools.cron.command_allowed_remotes` 独立授权 |
 | `tools.exec.enable_deny_patterns` | bool | `true` | 启用内置危险命令拦截（关闭后硬性底线规则和自定义拒绝规则仍然生效） |
+| `tools.exec.unknown_command_policy` | string | `"ask"` | `ask`（默认）对分类器无法解析的命令请求用户批准，`allow` 直接运行，`block` 直接拒绝 |
+| `tools.exec.approval_timeout_seconds` | int | `300` | 未知命令批准请求等待用户回复的秒数，超时后命令被拒绝 |
 | `tools.exec.custom_deny_patterns` | string[] | `[]` | 自定义阻止的正则表达式模式；始终生效 |
 | `tools.exec.custom_allow_patterns` | string[] | `[]` | 整条命令匹配的正则表达式，仅豁免默认拒绝规则；会自动添加首尾锚点 |
 
-AST 风险分类器（`risk_threshold`）和子进程环境（`env_set`、`env_allowlist`）的说明见 [exec 工具](../tools/exec.md)文档，参见[风险分类](../tools/exec.md#risk-classification)。
+AST 风险分类器（`risk_threshold`）、未知命令审批（`unknown_command_policy`）和子进程环境（`env_set`、`env_allowlist`）的说明见 [exec 工具](../tools/exec.md)文档，参见[风险分类](../tools/exec.md#risk-classification)。
 
 > **安全提示：** Symlink 保护默认启用——所有文件路径在允许列表匹配前都会通过 `filepath.EvalSymlinks` 解析，防止符号链接逃逸攻击。
 

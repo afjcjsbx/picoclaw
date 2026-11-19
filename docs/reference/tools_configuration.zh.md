@@ -173,6 +173,8 @@ Exec 工具用于执行 shell 命令。
 |------------------------|-------|--------|--------------------------------|
 | `enabled`              | bool  | true   | 启用 exec 工具                 |
 | `enable_deny_patterns` | bool  | true   | 启用内置 shell 结构拦截（命令替换、管道到 shell、shell heredoc）和 AST 风险分类器 |
+| `unknown_command_policy` | string | "ask" | 分类器无法解析命令时的处理方式：`ask`（默认）请求用户批准，`allow` 直接运行，`block` 直接拒绝 |
+| `approval_timeout_seconds` | int | 300 | 未知命令批准请求等待用户回复的秒数，超时后命令被拒绝 |
 | `custom_deny_patterns` | array | []     | 自定义拒绝模式（正则表达式），始终生效 |
 | `custom_allow_patterns` | array | []     | 整条命令匹配，仅豁免默认拒绝规则；自动锚定 |
 
@@ -201,6 +203,7 @@ PICOCLAW_TOOLS_EXEC_ENABLED=false
 ### 功能说明
 
 - **`enable_deny_patterns`**：设为 `false` 可禁用可选的 shell 结构拦截和 AST 风险分类器；硬性底线规则和 `custom_deny_patterns` 仍然生效
+- **`unknown_command_policy`**：`ask`（默认）会向发起命令的用户发送带令牌的批准请求；超时、渠道不可用或自动化发送者（cron、heartbeat）都会拒绝。`allow` 恢复无审批运行，`block` 直接拒绝未知命令
 - **`custom_deny_patterns`**：添加自定义拒绝正则模式；即使关闭内置拦截也始终生效，且不会被自定义允许规则豁免
 - **`custom_allow_patterns`**：整条命令匹配，仅豁免默认 shell 结构拦截规则；不会豁免风险分类器
 

@@ -1462,6 +1462,15 @@ type ExecConfig struct {
 	// dangerous-command guard is enabled: low, medium, high or critical.
 	// Empty means medium.
 	RiskThreshold string `json:"risk_threshold,omitempty" env:"PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD"`
+	// UnknownCommandPolicy controls commands the AST risk classifier cannot
+	// resolve: "ask" (default) requests approval from the originating user,
+	// "allow" runs them without approval, and "block" rejects them. The
+	// classifier must be active (enable_deny_patterns=true, non-Windows).
+	UnknownCommandPolicy string `json:"unknown_command_policy,omitempty" env:"PICOCLAW_TOOLS_EXEC_UNKNOWN_COMMAND_POLICY"`
+	// ApprovalTimeoutSeconds is how long an unknown-command approval prompt
+	// waits for the user before the command is denied. It overrides
+	// hooks.defaults.approval_timeout_ms for this prompt. 0 means 300s.
+	ApprovalTimeoutSeconds int `json:"approval_timeout_seconds,omitempty" env:"PICOCLAW_TOOLS_EXEC_APPROVAL_TIMEOUT_SECONDS"`
 	// EnvSet lists variables always injected into exec child processes. Values
 	// are trusted configuration and override inherited variables, including
 	// PATH. It is not exposed as a tool argument; JSON only.
@@ -1476,6 +1485,10 @@ type ExecConfig struct {
 // tools.exec.timeout_seconds is unset or zero.
 const DefaultExecTimeoutSeconds = 180
 
+// DefaultExecApprovalTimeoutSeconds is how long an unknown-command approval
+// prompt waits when tools.exec.approval_timeout_seconds is unset or zero.
+const DefaultExecApprovalTimeoutSeconds = 300
+
 // MaxExecForegroundTimeoutSeconds caps a single foreground exec invocation.
 // Requests above the cap are promoted to a tracked background session.
 const MaxExecForegroundTimeoutSeconds = 600
@@ -1484,11 +1497,57 @@ const MaxExecForegroundTimeoutSeconds = 600
 // truncated to a head+tail window with an omission notice.
 const DefaultExecMaxOutputChars = 50000
 
+// Unknown command policies. They control commands the AST risk classifier
+// cannot map to a known command: dynamic command names, opaque shells, and
+// unparseable input.
+const (
+	// ExecUnknownCommandAsk requests approval from the originating user. When
+	// no interactive user is available, the command is denied.
+	ExecUnknownCommandAsk = "ask"
+	// ExecUnknownCommandAllow runs unknown commands without approval.
+	ExecUnknownCommandAllow = "allow"
+	// ExecUnknownCommandBlock rejects unknown commands without asking.
+	ExecUnknownCommandBlock = "block"
+)
+
+// ParseExecUnknownCommandPolicy validates and normalizes an unknown-command
+// policy. An empty value means ask.
+func ParseExecUnknownCommandPolicy(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", ExecUnknownCommandAsk:
+		return ExecUnknownCommandAsk, nil
+	case ExecUnknownCommandAllow:
+		return ExecUnknownCommandAllow, nil
+	case ExecUnknownCommandBlock:
+		return ExecUnknownCommandBlock, nil
+	default:
+		return ExecUnknownCommandAsk, fmt.Errorf(
+			"unknown command policy %q, must be one of: ask, allow, block", value,
+		)
+	}
+}
+
+// GetUnknownCommandPolicy returns the normalized policy, defaulting to ask.
+func (c ExecConfig) GetUnknownCommandPolicy() string {
+	policy, err := ParseExecUnknownCommandPolicy(c.UnknownCommandPolicy)
+	if err != nil {
+		return ExecUnknownCommandAsk
+	}
+	return policy
+}
+
 func (c ExecConfig) GetTimeoutSeconds() int {
 	if c.TimeoutSeconds > 0 {
 		return c.TimeoutSeconds
 	}
 	return DefaultExecTimeoutSeconds
+}
+
+func (c ExecConfig) GetApprovalTimeoutSeconds() int {
+	if c.ApprovalTimeoutSeconds > 0 {
+		return c.ApprovalTimeoutSeconds
+	}
+	return DefaultExecApprovalTimeoutSeconds
 }
 
 func (c ExecConfig) GetMaxOutputChars() int {

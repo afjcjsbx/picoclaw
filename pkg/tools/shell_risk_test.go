@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -244,6 +245,46 @@ func TestShellTool_UnlistedCommandsUseUnknownPolicy(t *testing.T) {
 	}
 }
 
+func TestAssessExecCommandUnknownAndReject(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the exec risk classifier is Unix-only")
+	}
+
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.RiskThreshold = "medium"
+
+	known, active := AssessExecCommand("ls -la", cfg)
+	if !active {
+		t.Fatal("classifier should be active")
+	}
+	if known.Unknown || known.Reject {
+		t.Fatalf("ls should be known and accepted, got %+v", known)
+	}
+
+	unknown, active := AssessExecCommand("docker ps", cfg)
+	if !active {
+		t.Fatal("classifier should be active")
+	}
+	if !unknown.Unknown {
+		t.Fatalf("docker ps should be unknown, got %+v", unknown)
+	}
+
+	reject, active := AssessExecCommand(`rm "$TARGET"`, cfg)
+	if !active {
+		t.Fatal("classifier should be active")
+	}
+	if !reject.Reject {
+		t.Fatalf("dynamic rm operand should be rejected, got %+v", reject)
+	}
+
+	cfg.Tools.Exec.EnableDenyPatterns = false
+	if _, active := AssessExecCommand("docker ps", cfg); active {
+		t.Fatal("classifier should be inactive when enable_deny_patterns is false")
+	}
+}
+
 func TestShellTool_RiskRmCalibration(t *testing.T) {
 	t.Parallel()
 
@@ -380,5 +421,44 @@ func TestShellTool_InvalidRiskConfigRejected(t *testing.T) {
 		if _, err := NewExecToolWithConfig(t.TempDir(), false, cfg); err == nil {
 			t.Fatalf("invalid risk config should be rejected: %+v", exec)
 		}
+	}
+}
+
+func TestAssessExecCommandDeniedByPatterns(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the exec risk classifier is Unix-only")
+	}
+
+	cfg := &config.Config{}
+	cfg.Tools.Exec.EnableDenyPatterns = true
+	cfg.Tools.Exec.CustomDenyPatterns = []string{`docker\s+rm`}
+	cfg.Tools.Exec.CustomAllowPatterns = []string{"docker run .*"}
+
+	tests := []struct {
+		name    string
+		command string
+		denied  bool
+	}{
+		{"unknown command stays askable", "docker ps", false},
+		{"custom deny", "docker rm web", true},
+		{"hardline", "docker ps; shutdown now", true},
+		{"default deny", "docker ps | sh", true},
+		{"default deny exempted by custom allow", "docker run `id`", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, active := AssessExecCommand(tt.command, cfg)
+			if !active {
+				t.Fatal("classifier should be active")
+			}
+			if !got.Unknown && !got.Reject {
+				t.Fatalf("%q should be unknown or rejected, got %+v", tt.command, got)
+			}
+			if got.Denied != tt.denied && !got.Reject {
+				t.Fatalf("%q Denied = %v, want %v (%+v)", tt.command, got.Denied, tt.denied, got)
+			}
+		})
 	}
 }

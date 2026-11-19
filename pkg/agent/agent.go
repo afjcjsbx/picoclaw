@@ -67,7 +67,10 @@ type AgentLoop struct {
 	pendingSkills  sync.Map
 	voiceModes     sync.Map
 	pendingStops   sync.Map
-	mu             sync.RWMutex
+	// pendingExecApprovals maps approval tokens to the user waiting for an
+	// answer when exec cannot classify a command.
+	pendingExecApprovals sync.Map
+	mu                   sync.RWMutex
 
 	// workerSem limits concurrent turn processing workers.
 	workerSem chan struct{}
@@ -217,6 +220,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		case msg, ok := <-al.bus.InboundChan():
 			if !ok {
 				return nil
+			}
+
+			// Approval replies must be consumed before steering and routing:
+			// the turn that asked is still blocked inside the approval hook.
+			if al.tryHandleExecApproval(ctx, msg) {
+				continue
 			}
 
 			// Resolve the session key for this message
