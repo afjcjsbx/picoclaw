@@ -40,6 +40,11 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 			disableHint,
 		)
 	}
+	if versionErr := checkBwrapVersion(bwrapPath, func(path string, args ...string) ([]byte, error) {
+		return exec.Command(path, args...).Output()
+	}); versionErr != nil {
+		return versionErr
+	}
 	if cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
@@ -81,6 +86,9 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	bwrapArgs, err := buildLinuxBwrapArgs(originalPath, resolvedPath, originalArgs, execDir, plan, namespaceFlags)
 	if err != nil {
 		return err
+	}
+	if isolation.BlockNetwork {
+		bwrapArgs = insertLinuxUnshareNet(bwrapArgs)
 	}
 
 	cmd.Path = bwrapPath
@@ -125,15 +133,22 @@ var linuxNamespaceProbe struct {
 
 func cachedLinuxNamespaceFlags(bwrapPath string) (map[string]bool, error) {
 	linuxNamespaceProbe.once.Do(func() {
+		run := func(path string, args ...string) ([]byte, error) {
+			var stderr bytes.Buffer
+			cmd := exec.Command(path, args...)
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			return stderr.Bytes(), err
+		}
+		// PID namespace is required: fail closed if the probe fails rather than
+		// running without it and silently sharing the host PID table.
+		if err := probeLinuxPIDNamespace(bwrapPath, run); err != nil {
+			linuxNamespaceProbe.err = err
+			return
+		}
 		linuxNamespaceProbe.flags, linuxNamespaceProbe.err = probeLinuxNamespaceFlags(
 			bwrapPath,
-			func(path string, args ...string) ([]byte, error) {
-				var stderr bytes.Buffer
-				cmd := exec.Command(path, args...)
-				cmd.Stderr = &stderr
-				err := cmd.Run()
-				return stderr.Bytes(), err
-			},
+			run,
 		)
 		if linuxNamespaceProbe.err != nil {
 			return
@@ -200,7 +215,12 @@ func buildLinuxBwrapArgs(
 	bwrapArgs := []string{
 		"bwrap",
 		"--die-with-parent",
+		// --new-session calls setsid(2) in the sandbox so it has no controlling
+		// terminal and cannot inject characters into the caller's terminal via
+		// TIOCSTI (CVE-2017-5226).
+		"--new-session",
 	}
+	bwrapArgs = append(bwrapArgs, "--unshare-pid")
 	for _, flag := range linuxOptionalNamespaceFlags {
 		if namespaceFlags[flag] {
 			bwrapArgs = append(bwrapArgs, flag)

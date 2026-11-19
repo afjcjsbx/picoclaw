@@ -38,7 +38,8 @@
 {
   "isolation": {
     "enabled": false,
-    "expose_paths": []
+    "expose_paths": [],
+    "block_network": false
   }
 }
 ```
@@ -47,6 +48,7 @@
 
 - `enabled`：是否启用子进程隔离。默认值：`false`。
 - `expose_paths`：显式把宿主路径带入隔离环境。仅在 `enabled=true` 时生效。Linux 支持路径重映射；macOS 仅支持源路径和目标路径相同。
+- `block_network`：将子进程置于独立网络命名空间，使其无法访问宿主机回环服务（loopback）、云实例元数据端点（如 `169.254.169.254`）、旁路服务等。默认值：`false`（共享宿主网络）。**仅支持 Linux**；在 macOS 和 Windows 上设置此项将在预检阶段返回错误。
 
 示例：
 
@@ -70,6 +72,25 @@
 }
 ```
 
+### `block_network` 安全说明
+
+默认情况下（`block_network: false`），子进程共享宿主机网络命名空间，可以访问宿主机的本地回环服务、
+云实例元数据端点（如 `http://169.254.169.254/`）、旁路服务和本地数据库。
+具备网络能力的运行时（`curl`、`python`、`node` 等）均可用于数据外泄；exec 工具的命令级防护不足以充当网络边界。
+
+启用 `block_network: true` 后，bubblewrap 会添加 `--unshare-net` 标志，将子进程放入仅含回环接口（`lo`）的全新网络命名空间。
+对宿主服务或公网的连接将以"连接被拒绝"/"网络不可达"失败。
+
+**启用 `block_network: true` 后会受影响的功能：**
+
+- 沙箱内的 `curl`、`wget` 及其他 HTTP 客户端。
+- `git fetch`/`git clone`/`git push` 等网络操作。
+- 下载包的包管理器（`pip`、`npm`、`apt` 等）。
+- 自身需要访问互联网的 MCP server。
+- 所有依赖子进程出站网络调用的 agent 工具。
+
+**替代方案：** 若 agent 需要经过过滤的互联网出站访问，但不能访问宿主本地服务，可考虑运行出站代理并通过代理路由流量，而非使用 `block_network`。
+
 `expose_paths` 规则：
 
 - `source`：宿主机路径。
@@ -81,7 +102,7 @@
 
 平台说明：
 
-- Linux 会真实使用 `source -> target` 挂载视图。
+- Linux 会真实使用 `source -> target` 挂载视图。Linux 在启动时探测 bubblewrap 命名空间支持情况。PID namespace（`--unshare-pid`）为必需项：若探测失败（例如 Docker 容器默认屏蔽了 `/proc`），启动会失败并给出明确提示（Docker 修复：添加 `--security-opt systempaths=unconfined`；Kubernetes 修复：设置 `procMount: Unmasked`）。如需完全关闭隔离，在 `config.json` 中设置 `"isolation.enabled": false`（风险：无文件系统隔离）。可选 flag（如 `--unshare-ipc`）若被内核以 EINVAL 拒绝，会以警告形式丢弃，挂载命名空间、文件系统视图和用户环境重定向仍然有效。
 - macOS 要求 `target` 与 `source` 相同；Seatbelt 不支持路径重映射。
 - Windows 当前不支持 `expose_paths`。
 
@@ -142,16 +163,56 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 能力：
 
 - 最小文件系统视图
+- `pid namespace`（必需；沙箱拥有独立 PID 表，`/proc` 只描述自身进程）
 - `ipc namespace`
 - 子进程用户环境重定向
 - `source -> target` 只读或读写挂载
 - 沙箱内始终丢弃全部 Linux 特权（`--cap-drop ALL`）
+- 新会话（`--new-session`）：沙盒在独立 session 中运行，不持有控制终端，从而阻止通过 TIOCSTI 注入终端字符（CVE-2017-5226）
+- 可选网络命名空间隔离（`block_network: true`）
 
-**不建议以 root 运行 PicoClaw。** 当有效 uid 为 0 时，bwrap 不会自动创建 user namespace，沙箱进程在 `--cap-drop` 之后仍会保留完整的宿主特权集。PicoClaw 会在 root 模式下额外传入 `--unshare-user`，在新的 user namespace 中将 CapEff 清零。但其他攻击面（可写挂载、缺少 PID namespace 时的 `/proc` 等）在 root 模式下风险更高。请以专用非特权用户运行 PicoClaw。
+**不建议以 root 运行 PicoClaw。** 当有效 uid 为 0 时，bwrap 不会自动创建 user namespace，沙箱进程在 `--cap-drop` 之后仍会保留完整的宿主特权集。PicoClaw 会在 root 模式下额外传入 `--unshare-user`，在新的 user namespace 中将 CapEff 清零。以 root 运行的风险面仍大于使用专用非特权用户。
 
-默认映射包括实例根，以及 `/usr`、`/bin`、`/lib`、`/lib64`、`/etc/resolv.conf` 等最小运行时系统路径。
+实例根目录内的默认挂载范围刻意收窄：
+
+| 路径 | 权限 | 用途 |
+|------|------|------|
+| `<root>/workspace` | rw | 代理的工作区目录 |
+| `<root>/runtime-user-env` | rw | 重定向后的 `HOME`、`TMPDIR`、XDG 目录 |
+| `<root>/skills` | ro | 沙箱可执行的 skill 脚本 |
+
+`config.json`（含 API 密钥）、`.security.yml`、`logs`、`cache`、`state` 及实例根目录下的其他文件**不会被挂载**，沙箱内的命令无法读取或修改宿主配置。
+
+最小运行时系统路径（`/usr`、`/bin`、`/lib`、`/lib64`、`/etc/resolv.conf` 等）以只读方式挂载。
 
 运行时还会按需补充可执行文件本身、其所在目录、生效后的工作目录，以及命令行中的绝对路径参数。
+
+**重新暴露实例根目录。** 如果运维人员确实需要让沙箱看到完整的实例根目录，可以在 `expose_paths` 中添加一条 target 等于实例根的规则：
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "expose_paths": [
+      { "source": "/home/alice/.picoclaw", "target": "/home/alice/.picoclaw", "mode": "rw" }
+    ]
+  }
+}
+```
+
+该规则会在默认规则之后合并，恢复完整根目录视图。代理系统提示中的沙箱边界通知也会同步更新（`PicoClaw instance root: … writable`）。
+
+**`PICOCLAW_CONFIG` 环境变量。** Linux 隔离启用时，`exec` 子进程不会接收 `PICOCLAW_CONFIG`，因为 `config.json` 未被挂载，该路径在沙箱内不存在。`PICOCLAW_HOME` 仍会传入。
+
+**需要额外 `expose_paths` 的 spawn site。** 部分频道和钩子会在实例根目录下存储数据，启用隔离时需要显式配置 `expose_paths`：
+
+| Spawn site | 所需路径 | 建议规则 |
+|-----------|----------|---------|
+| Delta Chat RPC 服务 | `~/.picoclaw/deltachat/<channel>` (rw) | 在 `expose_paths` 中添加该目录 |
+| 脚本在实例根下的 process hook | hook 脚本目录（ro 或 rw） | 将 hook 目录加入 `expose_paths` |
+| 工作目录在实例根下的插件 MCP stdio 服务 | 插件目录（ro） | 加入 `expose_paths` |
+
+Weixin SILK 语音解码器使用 OS 临时目录（`/tmp`），不在实例根下，无需额外规则。
 
 缺少 `bwrap` 时不会自动回退。
 
@@ -162,6 +223,16 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 - `yum install bubblewrap`
 - `pacman -S bubblewrap`
 - `apk add bubblewrap`
+
+#### 支持的 bubblewrap 版本
+
+| 版本范围              | 支持状态                                                                                   |
+|-----------------------|--------------------------------------------------------------------------------------------|
+| < 0.3.3               | **启动时拒绝。** 0.1.x 和 0.2.x 缺少 PicoClaw 始终传递的 `--` 参数分隔符，运行时会出现晦涩的 `Unknown option --` 错误。 |
+| >= 0.3.3，< 0.12.0    | 允许运行，但会记录一次性警告。CVE-2026-87766（沙箱搭建期间的符号链接遍历漏洞，可在沙箱外创建文件）尚未修复。发行版软件包可能携带版本字符串无法体现的反向移植补丁；建议升级 bubblewrap 或使用包含该补丁的发行版构建。 |
+| >= 0.12.0             | 完全支持，推荐使用。CVE-2026-87766 已修复。                                                |
+
+无论版本如何，**始终拒绝** setuid 模式的 bubblewrap 二进制文件。setuid 执行模型是特权提升类 CVE（如 CVE-2026-41163）的攻击面。bubblewrap 0.12+ 已不再使用 setuid；请移除 setuid 位，或安装 0.12+ 版本的软件包。
 
 如果需要临时关闭隔离：
 
@@ -226,8 +297,7 @@ macOS 调试日志名：`macOS Seatbelt profile prepared`。
 ## 当前限制
 
 - Linux 基于 `bwrap` 实现，而不是纯内建 isolation runtime。
-- Linux 当前没有默认启用独立的 `pid namespace`。
-- root 模式下，`--unshare-user` 会创建新的 user namespace（CapEff=0），但在独立 PID namespace（由后续 PR 补充）加入前，`/proc/1/root` 仍可能可访问。
+- Linux 默认启用独立的 `pid` namespace；Docker 容器需要添加 `--security-opt systempaths=unconfined`。
 - Windows 还没有对所有允许/拒绝路径做完整 ACL 落地。
 - macOS Seatbelt 不支持 `source -> target` 路径重映射，并依赖 Apple 已弃用的 `sandbox-exec` 命令。
 - 当前隔离的是子进程，不是 `picoclaw` 主进程自身。
