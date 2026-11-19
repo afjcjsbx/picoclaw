@@ -186,6 +186,11 @@ func (c EvolutionConfig) AutoAppliesDrafts() bool {
 type IsolationConfig struct {
 	Enabled     bool         `json:"enabled,omitempty"`
 	ExposePaths []ExposePath `json:"expose_paths,omitempty"`
+	// BlockNetwork drops the sandbox off the host network namespace so loopback
+	// services, cloud metadata endpoints, and sidecar daemons are unreachable from
+	// child processes. Default false (host network shared). Linux only; preflight
+	// rejects this on macOS and Windows.
+	BlockNetwork bool `json:"block_network,omitempty"`
 }
 
 // ExposePath describes a host path that should remain visible inside the isolated

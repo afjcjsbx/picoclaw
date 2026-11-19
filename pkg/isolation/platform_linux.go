@@ -39,6 +39,11 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 			disableHint,
 		)
 	}
+	if versionErr := checkBwrapVersion(bwrapPath, func(path string, args ...string) ([]byte, error) {
+		return exec.Command(path, args...).Output()
+	}); versionErr != nil {
+		return versionErr
+	}
 	if cmd == nil || cmd.Path == "" || len(cmd.Args) == 0 {
 		return nil
 	}
@@ -80,6 +85,9 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 	bwrapArgs, err := buildLinuxBwrapArgs(originalPath, resolvedPath, originalArgs, execDir, plan, namespaceFlags)
 	if err != nil {
 		return err
+	}
+	if isolation.BlockNetwork {
+		bwrapArgs = insertLinuxUnshareNet(bwrapArgs)
 	}
 
 	cmd.Path = bwrapPath
@@ -199,6 +207,10 @@ func buildLinuxBwrapArgs(
 	bwrapArgs := []string{
 		"bwrap",
 		"--die-with-parent",
+		// --new-session calls setsid(2) in the sandbox so it has no controlling
+		// terminal and cannot inject characters into the caller's terminal via
+		// TIOCSTI (CVE-2017-5226).
+		"--new-session",
 	}
 	for _, flag := range linuxOptionalNamespaceFlags {
 		if namespaceFlags[flag] {

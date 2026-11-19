@@ -44,7 +44,8 @@ Isolation lives under:
 {
   "isolation": {
     "enabled": false,
-    "expose_paths": []
+    "expose_paths": [],
+    "block_network": false
   }
 }
 ```
@@ -53,6 +54,7 @@ Field meanings:
 
 - `enabled`: enables or disables subprocess isolation. Default: `false`.
 - `expose_paths`: explicitly exposes host paths inside the isolated environment. It only matters when `enabled=true`. Linux supports path remapping; macOS supports same-path access only.
+- `block_network`: drops child processes into an isolated network namespace so they cannot reach loopback services, cloud-metadata endpoints (e.g. `169.254.169.254`), sidecar daemons, or other host-local services. Default: `false` (host network shared). **Linux only**; preflight returns an error on macOS and Windows.
 
 Example:
 
@@ -75,6 +77,29 @@ Example:
   }
 }
 ```
+
+### `block_network` security note
+
+By default (`block_network: false`) child processes share the host network namespace. This means loopback
+services on the host, cloud-instance metadata endpoints such as `http://169.254.169.254/`, sidecar
+daemons, and local databases are reachable from inside the sandbox. A sandboxed process can exfiltrate
+data with any network-capable runtime (`curl`, `python`, `node`, etc.); the exec tool's command-level
+guards are not a sufficient network boundary.
+
+Enabling `block_network: true` passes `--unshare-net` to bubblewrap, placing child processes in a fresh
+network namespace that contains only a loopback interface (`lo`). Connections to host services or the
+internet fail with "connection refused" / "network unreachable".
+
+**What breaks when `block_network: true`:**
+
+- `curl`, `wget`, or any HTTP client inside the sandbox.
+- `git fetch`/`git clone`/`git push` over the network.
+- Package managers (`pip`, `npm`, `apt`, etc.) that download packages.
+- MCP servers that themselves need internet access.
+- Any agent tool that relies on outbound network calls from child processes.
+
+**Alternative:** if agents need a filtered outbound internet but must not reach host-local services,
+consider running an egress proxy and routing traffic through it rather than using `block_network`.
 
 Rules for `expose_paths`:
 
@@ -154,8 +179,20 @@ Capabilities:
 - `ipc` namespace isolation
 - redirected child-process user environment
 - `source -> target` read-only or read-write mounts
+- new session (`--new-session`): the sandbox runs in a detached session with no controlling terminal, blocking TIOCSTI-based terminal injection (CVE-2017-5226)
+- optional network namespace isolation (`block_network: true`)
 
-Default mounts include the instance root plus the minimum runtime system paths such as `/usr`, `/bin`, `/lib`, `/lib64`, and `/etc/resolv.conf`.
+Default mounts inside the instance root are intentionally narrow:
+
+| Path | Mode | Purpose |
+|------|------|---------|
+| `<root>/workspace` | rw | agent working area |
+| `<root>/runtime-user-env` | rw | redirected `HOME`, `TMPDIR`, XDG dirs |
+| `<root>/skills` | ro | skill scripts the sandbox may execute |
+
+`config.json` (API keys), `.security.yml`, `logs`, `cache`, `state`, and all other instance-root files are **not mounted**. A sandboxed command cannot read or modify the host configuration.
+
+Minimum runtime system paths (`/usr`, `/bin`, `/lib`, `/lib64`, `/etc/resolv.conf`, etc.) are mounted read-only.
 
 At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed.
 
@@ -167,6 +204,33 @@ Absolute path arguments are auto-exposed with the following rules:
 - Broad paths are **refused** automatically: `/`, any path directly under `/` (e.g. `/home`, `/etc`, `/tmp`, `/proc`), the invoking user's home directory, and every ancestor of the home directory. A single warning is logged per distinct refused path. Use `isolation.expose_paths` in `config.json` to grant access to these paths explicitly when needed.
 - If the mount plan already has a rule that covers the path (an exact match or an ancestor), no additional rule is added, preventing conflicting mode stacking.
 
+**Re-exposing the instance root.** An operator who needs the full root visible can add an `expose_paths` rule whose target is the instance root:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "expose_paths": [
+      { "source": "/home/alice/.picoclaw", "target": "/home/alice/.picoclaw", "mode": "rw" }
+    ]
+  }
+}
+```
+
+That rule merges in after the defaults and restores the full root view. The sandbox boundary notice in the agent system prompt will reflect the change (`PicoClaw instance root: … writable`).
+
+**`PICOCLAW_CONFIG` environment variable.** When isolation is enabled on Linux, `PICOCLAW_CONFIG` is not passed to `exec` child processes because `config.json` is not mounted and the path would point to a non-existent file. `PICOCLAW_HOME` is still set.
+
+**Spawn sites that need extra expose_paths on Linux.** Some channels and hooks store data under the instance root and require an explicit `expose_paths` rule when isolation is enabled:
+
+| Spawn site | Path needed | Suggested rule |
+|-----------|-------------|----------------|
+| Delta Chat RPC server | `~/.picoclaw/deltachat/<channel>` (rw) | `expose_paths: [{source: "...", target: "...", mode: "rw"}]` |
+| Process hooks with script under instance root | hook script directory (ro or rw as needed) | add the hook directory to `expose_paths` |
+| Plugin MCP stdio servers with working directory under instance root | the plugin directory (ro) | add to `expose_paths` |
+
+Weixin SILK voice decoder uses the OS temp dir (`/tmp`), not the instance root; no extra rule is needed.
+
 There is no automatic fallback when `bwrap` is missing.
 
 Install examples:
@@ -176,6 +240,16 @@ Install examples:
 - `yum install bubblewrap`
 - `pacman -S bubblewrap`
 - `apk add bubblewrap`
+
+#### Supported bubblewrap versions
+
+| Version range       | Support status                                                                      |
+|---------------------|-------------------------------------------------------------------------------------|
+| < 0.3.3             | **Refused at startup.** 0.1.x and 0.2.x lack the `--` argument separator PicoClaw always passes; they fail with an obscure `Unknown option --` error. |
+| >= 0.3.3, < 0.12.0  | Accepted; a one-time warning is logged. CVE-2026-87766 (symlink traversal during sandbox setup can create files outside the sandbox) is not fixed. Distro packages may carry a backport the version string cannot show; upgrading bubblewrap or using such a distro build is recommended. |
+| >= 0.12.0           | Fully supported and recommended. CVE-2026-87766 is fixed.                           |
+
+Setuid bubblewrap binaries are **always refused** regardless of version. The setuid execution model is the attack surface of privilege-escalation CVEs such as CVE-2026-41163. bubblewrap 0.12+ no longer uses setuid; remove the setuid bit or install a 0.12+ package.
 
 If isolation must be disabled temporarily:
 

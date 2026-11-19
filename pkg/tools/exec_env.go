@@ -3,12 +3,14 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 )
 
 // defaultExecEnvAllowlist is the set of parent environment variables inherited
@@ -105,10 +107,18 @@ func setPicoclawEnv(env map[string]string, workspace string) {
 	if home != "" {
 		env[config.EnvHome] = home
 	}
-	if configPath := os.Getenv(config.EnvConfig); configPath != "" {
-		env[config.EnvConfig] = configPath
-	} else if home != "" {
-		env[config.EnvConfig] = filepath.Join(home, "config.json")
+	// On Linux with isolation enabled the config file is not mounted inside the
+	// sandbox (it contains API keys). Keep PICOCLAW_HOME for workspace and tool
+	// discovery but omit PICOCLAW_CONFIG so the child cannot reach host secrets.
+	// ponytail: runtime check couples exec env to isolation state; remove once
+	// a mount-manifest API lets the sandbox declare what it exposes.
+	linuxIsolated := runtime.GOOS == "linux" && isolation.CurrentConfig().Enabled
+	if !linuxIsolated {
+		if configPath := os.Getenv(config.EnvConfig); configPath != "" {
+			env[config.EnvConfig] = configPath
+		} else if home != "" {
+			env[config.EnvConfig] = filepath.Join(home, "config.json")
+		}
 	}
 
 	if workspace != "" {
