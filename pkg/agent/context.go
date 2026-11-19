@@ -284,7 +284,7 @@ func (cb *ContextBuilder) buildIsolationPrompt() string {
 	if boundary.Workspace != "" {
 		fmt.Fprintf(&sb, "- Workspace: `%s` (working directory; create task files here)\n", boundary.Workspace)
 	}
-	if boundary.Root != "" {
+	if boundary.Root != "" && boundary.RootVisible {
 		rootMode := "read-only"
 		if boundary.RootWritable {
 			rootMode = "writable"

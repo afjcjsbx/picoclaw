@@ -12,8 +12,15 @@ import (
 // child processes. PathBoundary is false on backends that only apply
 // process-level restrictions and do not provide a path-level filesystem view.
 type Boundary struct {
-	Backend         string
-	Root            string
+	Backend string
+	Root    string
+	// RootVisible is true when the entire instance root directory is in the
+	// filesystem view (i.e. a mount rule covers the root itself or one of its
+	// ancestors). On Linux with the default narrow mount set only workspace,
+	// runtime-user-env, and skills are mounted, so RootVisible is false unless
+	// an operator expose_paths rule explicitly re-exposes the root.
+	// On macOS Seatbelt the instance root is always writable and visible.
+	RootVisible     bool
 	RootWritable    bool
 	Workspace       string
 	Scratch         string
@@ -80,7 +87,12 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 			}
 		}
 
-		boundary.RootWritable = effectiveBoundaryMode(merged, boundary.Root) == "rw"
+		rootMode := effectiveBoundaryMode(merged, boundary.Root)
+		// RootVisible is true only when a rule directly covers the root or one
+		// of its ancestors; isolated child processes without such a rule cannot
+		// see config.json and other root-level files.
+		boundary.RootVisible = rootMode != ""
+		boundary.RootWritable = rootMode == "rw"
 		boundary.ScratchWritable = effectiveBoundaryMode(merged, boundary.Scratch) == "rw"
 	case "darwin":
 		boundary.PathBoundary = true
@@ -88,6 +100,7 @@ func DescribeBoundary(workspace string, cfg config.IsolationConfig) (Boundary, b
 		// The Seatbelt profile always allows writes under the instance root.
 		// Seatbelt rules are additive, so a later read-only allow cannot revoke
 		// that write access; report the enforced mode, not the requested one.
+		boundary.RootVisible = true
 		boundary.RootWritable = true
 		boundary.ScratchWritable = true
 

@@ -169,9 +169,46 @@ Linux 后端当前依赖 `bwrap`（`bubblewrap`）。
 - 新会话（`--new-session`）：沙盒在独立 session 中运行，不持有控制终端，从而阻止通过 TIOCSTI 注入终端字符（CVE-2017-5226）
 - 可选网络命名空间隔离（`block_network: true`）
 
-默认映射包括实例根，以及 `/usr`、`/bin`、`/lib`、`/lib64`、`/etc/resolv.conf` 等最小运行时系统路径。
+实例根目录内的默认挂载范围刻意收窄：
+
+| 路径 | 权限 | 用途 |
+|------|------|------|
+| `<root>/workspace` | rw | 代理的工作区目录 |
+| `<root>/runtime-user-env` | rw | 重定向后的 `HOME`、`TMPDIR`、XDG 目录 |
+| `<root>/skills` | ro | 沙箱可执行的 skill 脚本 |
+
+`config.json`（含 API 密钥）、`.security.yml`、`logs`、`cache`、`state` 及实例根目录下的其他文件**不会被挂载**，沙箱内的命令无法读取或修改宿主配置。
+
+最小运行时系统路径（`/usr`、`/bin`、`/lib`、`/lib64`、`/etc/resolv.conf` 等）以只读方式挂载。
 
 运行时还会按需补充可执行文件本身、其所在目录、生效后的工作目录，以及命令行中的绝对路径参数。
+
+**重新暴露实例根目录。** 如果运维人员确实需要让沙箱看到完整的实例根目录，可以在 `expose_paths` 中添加一条 target 等于实例根的规则：
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "expose_paths": [
+      { "source": "/home/alice/.picoclaw", "target": "/home/alice/.picoclaw", "mode": "rw" }
+    ]
+  }
+}
+```
+
+该规则会在默认规则之后合并，恢复完整根目录视图。代理系统提示中的沙箱边界通知也会同步更新（`PicoClaw instance root: … writable`）。
+
+**`PICOCLAW_CONFIG` 环境变量。** Linux 隔离启用时，`exec` 子进程不会接收 `PICOCLAW_CONFIG`，因为 `config.json` 未被挂载，该路径在沙箱内不存在。`PICOCLAW_HOME` 仍会传入。
+
+**需要额外 `expose_paths` 的 spawn site。** 部分频道和钩子会在实例根目录下存储数据，启用隔离时需要显式配置 `expose_paths`：
+
+| Spawn site | 所需路径 | 建议规则 |
+|-----------|----------|---------|
+| Delta Chat RPC 服务 | `~/.picoclaw/deltachat/<channel>` (rw) | 在 `expose_paths` 中添加该目录 |
+| 脚本在实例根下的 process hook | hook 脚本目录（ro 或 rw） | 将 hook 目录加入 `expose_paths` |
+| 工作目录在实例根下的插件 MCP stdio 服务 | 插件目录（ro） | 加入 `expose_paths` |
+
+Weixin SILK 语音解码器使用 OS 临时目录（`/tmp`），不在实例根下，无需额外规则。
 
 缺少 `bwrap` 时不会自动回退。
 
