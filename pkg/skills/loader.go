@@ -22,6 +22,7 @@ import (
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
 
 const (
+	// MaxNameLength is the max length of a new skill name, and of a name in the prompt catalog.
 	MaxNameLength = 64
 
 	// MaxCatalogDescription is the max characters of a skill description in the prompt catalog.
@@ -86,7 +87,7 @@ func (s SkillInfo) pluginLocation() string {
 func (s SkillInfo) CatalogLines() []string {
 	lines := []string{
 		"  <skill>",
-		fmt.Sprintf("    <name>%s</name>", escapeXML(s.Name)),
+		fmt.Sprintf("    <name>%s</name>", escapeXML(truncateRunes(s.Name, MaxNameLength))),
 		fmt.Sprintf(
 			"    <description>%s</description>",
 			escapeXML(truncateRunes(s.Description, MaxCatalogDescription)),
@@ -116,7 +117,7 @@ func (info SkillInfo) validate() error {
 	if info.Name == "" {
 		errs = errors.Join(errs, errors.New("name is required"))
 	} else {
-		if err := ValidateSkillName(info.Name); err != nil {
+		if err := validateSkillNameFormat(info.Name); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -227,7 +228,7 @@ func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
 			return entry.Body, true
 		}
 	}
-	if err := ValidateSkillName(name); err != nil {
+	if err := validateSkillNameFormat(name); err != nil {
 		return "", false
 	}
 

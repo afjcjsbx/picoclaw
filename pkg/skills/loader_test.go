@@ -443,3 +443,21 @@ func TestBuildCatalogCapsSkills(t *testing.T) {
 		t.Fatal("empty catalog must be empty string")
 	}
 }
+
+func TestListSkills_LongNameStaysListedButCatalogTruncatesIt(t *testing.T) {
+	ws := t.TempDir()
+	name := strings.Repeat("a", 70)
+	dir := filepath.Join(ws, "skills", name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\ndescription: d\n---\n"), 0o644))
+
+	sl := NewSkillsLoader(ws, "", "")
+	require.Len(t, sl.ListSkills(), 1)
+	_, ok := sl.LoadSkill(name)
+	assert.True(t, ok)
+
+	catalog := sl.BuildSkillsSummary()
+	assert.Contains(t, catalog, "<name>"+strings.Repeat("a", MaxNameLength-3)+"...</name>")
+	assert.Contains(t, catalog, name) // full name survives in <location>
+	assert.Error(t, ValidateSkillName(name), "writers keep the cap")
+}
