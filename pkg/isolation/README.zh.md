@@ -103,6 +103,10 @@
 平台说明：
 
 - Linux 会真实使用 `source -> target` 挂载视图。Linux 在启动时探测 bubblewrap 命名空间支持情况。PID namespace（`--unshare-pid`）为必需项：若探测失败（例如 Docker 容器默认屏蔽了 `/proc`），启动会失败并给出明确提示（Docker 修复：添加 `--security-opt systempaths=unconfined`；Kubernetes 修复：设置 `procMount: Unmasked`）。如需完全关闭隔离，在 `config.json` 中设置 `"isolation.enabled": false`（风险：无文件系统隔离）。可选 flag（如 `--unshare-ipc`）若被内核以 EINVAL 拒绝，会以警告形式丢弃，挂载命名空间、文件系统视图和用户环境重定向仍然有效。
+- Linux 会拒绝 `expose_paths` 中 `target` 路径经过位于可写挂载点内的符号链接的规则。
+  这可防止沙箱内的 agent 在工作区植入符号链接并将挂载目标重定向到宿主机的任意路径
+  （bwrap < 0.12.0 的 CVE-2026-87766）。系统级符号链接（如 Debian 的 `/bin -> usr/bin`）
+  位于只读挂载点下，不受此检查影响。如遇拒绝，请删除该符号链接或选择不经过它的目标路径。
 - macOS 要求 `target` 与 `source` 相同；Seatbelt 不支持路径重映射。
 - Windows 当前不支持 `expose_paths`。
 

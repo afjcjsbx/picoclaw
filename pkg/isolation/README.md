@@ -114,6 +114,13 @@ Platform note:
 
 - Linux uses a real `source -> target` mount view.
 - Linux probes bubblewrap namespace flags once at startup. The PID namespace (`--unshare-pid`) is required: if the probe fails (for example, in a Docker container whose `/proc` is masked by default), startup fails with a clear error naming the fix (`--security-opt systempaths=unconfined` for Docker, `procMount: Unmasked` for Kubernetes). To opt out entirely, set `"isolation.enabled": false in config.json` (risk: no filesystem isolation). Optional flags such as `--unshare-ipc` are dropped with a warning when the kernel rejects them with `Creating new namespace failed` (EINVAL) while mount namespace, filesystem view, and user environment remain active.
+- Linux rejects any `expose_paths` rule whose `target` passes through a symlink
+  that sits inside an earlier writable mount. This prevents a sandboxed agent
+  from planting a symlink in its workspace and redirecting a mount to an
+  arbitrary host path (CVE-2026-87766 on bwrap < 0.12.0). System-level
+  symlinks such as Debian's `/bin -> usr/bin` are not affected because they lie
+  under read-only mounts. Remove the symlink or choose a target path that does
+  not traverse it.
 - macOS requires `target` to match `source`; Seatbelt does not remap paths.
   Read-only rules under the instance root are rejected because Seatbelt cannot
   revoke the root's write access.

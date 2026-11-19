@@ -75,6 +75,9 @@ func applyPlatformIsolation(cmd *exec.Cmd, isolation config.IsolationConfig, roo
 		}
 	}
 	plan = appendLinuxArgumentMounts(plan, originalArgs[1:])
+	if guardErr := checkSymlinkMountTargets(plan); guardErr != nil {
+		return guardErr
+	}
 	logger.DebugCF("isolation", "linux isolation mount plan",
 		map[string]any{
 			"root":        root,
