@@ -17,6 +17,7 @@ Every command accepts the global `--no-color` flag, which disables ANSI colors i
 | [`config reset`](#config-reset) | Reset configuration to factory defaults |
 | [`status`](#status--version--update) / [`version`](#status--version--update) / [`update`](#status--version--update) | Inspect and update the installation |
 | [`usage`](#usage) | Show token usage and cost per session |
+| [`backup`](#backup) / [`restore`](#restore) | Create and restore portable snapshots |
 | [`agent`](#agent) | Interact with the agent directly |
 | [`gateway`](#gateway) | Start the Gateway service |
 | [`model`](#model) / [`model add`](#model-add) | Show, set, and add models |
@@ -251,6 +252,56 @@ picoclaw mcp add filesystem npx -y @modelcontextprotocol/server-filesystem ~/not
 picoclaw mcp add remote https://example.com/mcp --transport http
 picoclaw mcp list --status
 ```
+
+## Backup
+
+Creates a portable snapshot of the migratable PicoClaw state: home, workspace, sessions, memory, skills, cron jobs, auth files, config/`.security.yml` outside the home, and the credential SSH key. Caches, logs, temporary files, and sandbox runtime directories are skipped. A `MANIFEST.json` with per-file SHA-256 hashes and the config schema version is stored inside the archive. See [Backup and restore](../operations/backup-restore.md).
+
+| Flag | Description |
+| --- | --- |
+| `-o, --output` | Output archive (default: `picoclaw-backup-<timestamp>.tar.gz` in the current directory) |
+| `--home` | PicoClaw home to archive (default: `PICOCLAW_HOME` or `~/.picoclaw`) |
+| `--config` | Config file path (default: `<home>/config.json` or `PICOCLAW_CONFIG`) |
+| `--ssh-key` | Credential SSH key path (default: `PICOCLAW_SSH_KEY_PATH` or `~/.ssh/picoclaw_ed25519.key`) |
+| `--encrypt` | Encrypt with a passphrase (AES-256-GCM + scrypt) |
+| `--passphrase-file` | Read the passphrase from a file instead of the terminal |
+| `--allow-running` | Best-effort backup while the gateway runs (not recommended) |
+| `-f, --force` | Overwrite an existing output archive |
+| `--dry-run` | Show what would be archived without writing |
+
+The passphrase can also come from `PICOCLAW_BACKUP_PASSPHRASE`. It is never accepted as a command-line flag and never stored in the archive.
+
+```bash
+picoclaw backup
+picoclaw backup --encrypt -o /media/usb/picoclaw.tar.gz
+PICOCLAW_BACKUP_PASSPHRASE='a-long-enough-passphrase' picoclaw backup --encrypt
+picoclaw backup --dry-run
+```
+
+## Restore
+
+Restores a snapshot created by `picoclaw backup`. The archive is verified against its manifest before anything is written to the target.
+
+| Flag | Description |
+| --- | --- |
+| `--home` | Target PicoClaw home (default: `PICOCLAW_HOME` or `~/.picoclaw`) |
+| `--config` | Target config file path |
+| `--ssh-key` | Target credential SSH key path |
+| `--passphrase-file` | Read the archive passphrase from a file |
+| `-f, --force` | Restore over an existing installation; creates a pre-restore safety archive |
+| `--allow-running` | Best-effort restore while the gateway runs (not recommended) |
+| `--no-ssh-key` | Keep the target SSH key instead of restoring the archived one |
+| `--no-safety-backup` | Do not create the automatic pre-restore archive |
+| `--dry-run` | Read the manifest and check the target without writing |
+
+```bash
+picoclaw restore picoclaw-backup.tar.gz
+picoclaw restore backup.tar.gz.enc
+picoclaw restore backup.tar.gz --force
+picoclaw restore backup.tar.gz --dry-run
+```
+
+A newer config schema is refused unless `--force` is given. An older schema is restored and migrated on the next start. Absolute JSON config paths under the source home are rewritten to the target home. Files already present in the target are preserved unless the archive contains the same path.
 
 ## Migrate
 
