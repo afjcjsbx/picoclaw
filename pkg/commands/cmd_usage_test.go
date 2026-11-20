@@ -61,7 +61,7 @@ func TestUsageCommandFormatsSessionUsage(t *testing.T) {
 	for _, want := range []string{
 		"Usage for this session",
 		"LLM calls: 3 · turns: 2",
-		"Input: 1,500 tokens (fresh 400 · cache read 1,000 · cache write 100)",
+		"Input: 1,500 tokens — fresh 400 (26.7%) · cache read 1,000 (66.7%) · cache write 100 (6.7%)",
 		"Output: 250 tokens",
 		"Total: 1,750 tokens",
 		"Cost: $0.0123",

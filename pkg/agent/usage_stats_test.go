@@ -139,7 +139,7 @@ func TestHandleCommandUsageReportsSessionUsage(t *testing.T) {
 	for _, want := range []string{
 		"Usage for this session",
 		"LLM calls: 2 · turns: 1",
-		"Input: 250 tokens (fresh 150 · cache read 100)",
+		"Input: 250 tokens — fresh 150 (60.0%) · cache read 100 (40.0%)",
 		"Cost: $0.0010",
 		"Model: `test-model`",
 	} {

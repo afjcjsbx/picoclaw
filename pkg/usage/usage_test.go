@@ -138,6 +138,38 @@ func TestTotalsFreshInputTokensNeverNegative(t *testing.T) {
 	}
 }
 
+func TestTotalsInputBreakdownShowsShares(t *testing.T) {
+	totals := Totals{InputTokens: 1500, CacheReadTokens: 1000, CacheCreationTokens: 100}
+	want := "1,500 tokens — fresh 400 (26.7%) · cache read 1,000 (66.7%) · cache write 100 (6.7%)"
+	if got := totals.InputBreakdown(); got != want {
+		t.Fatalf("InputBreakdown() = %q, want %q", got, want)
+	}
+}
+
+func TestTotalsInputBreakdownOmitsSharesWithoutCache(t *testing.T) {
+	totals := Totals{InputTokens: 1200}
+	if got := totals.InputBreakdown(); got != "1,200 tokens" {
+		t.Fatalf("InputBreakdown() = %q, want no cache split", got)
+	}
+}
+
+func TestFormatShare(t *testing.T) {
+	cases := []struct {
+		tokens, input int
+		want          string
+	}{
+		{0, 100, "0%"},
+		{1, 1_000_000, "<0.1%"},
+		{5, 1000, "0.5%"},
+		{1000, 1000, "100.0%"},
+	}
+	for _, tc := range cases {
+		if got := formatShare(tc.tokens, tc.input); got != tc.want {
+			t.Fatalf("formatShare(%d, %d) = %q, want %q", tc.tokens, tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestFormatTokens(t *testing.T) {
 	cases := map[int]string{
 		0:       "0",

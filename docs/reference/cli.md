@@ -86,7 +86,7 @@ picoclaw usage --json          # Machine-readable output
 
 Each session keeps running totals in its metadata, updated as messages are written. Truncating, compacting, or clearing a session's history does not reduce its totals. The command only reads metadata, so it can run while the gateway is active. Pruning a session also deletes its totals. Sessions written before this version have no totals yet: the gateway counts them from their files when it starts, and `picoclaw usage` counts them on the fly until then.
 
-Input tokens are split into fresh prompt tokens, cache reads, and cache writes. Costs are the amounts providers report; a session whose provider reports no cost shows `-` in tables.
+Input tokens are split into fresh prompt tokens, cache reads, and cache writes, each shown with its percentage of all input tokens. Percentages are rounded to one decimal and may not add up to exactly 100%. Costs are the amounts providers report; a session whose provider reports no cost shows `-` in tables.
 
 ## Agent
 
