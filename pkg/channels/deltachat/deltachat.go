@@ -10,6 +10,7 @@ package deltachat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/mail"
 	"os"
@@ -60,16 +61,18 @@ type dcContact struct {
 
 // dcMessage is the subset of Delta Chat's MessageObject we consume.
 type dcMessage struct {
-	ID        int64      `json:"id"`
-	ChatID    int64      `json:"chatId"`
-	FromID    int64      `json:"fromId"`
-	Text      string     `json:"text"`
-	File      string     `json:"file"`
-	FileName  string     `json:"fileName"`
-	FileMime  string     `json:"fileMime"`
-	Timestamp int64      `json:"timestamp"`
-	IsInfo    bool       `json:"isInfo"`
-	Sender    *dcContact `json:"sender"`
+	DownloadState string     `json:"downloadState"`
+	State         int        `json:"state"`
+	ID            int64      `json:"id"`
+	ChatID        int64      `json:"chatId"`
+	FromID        int64      `json:"fromId"`
+	Text          string     `json:"text"`
+	File          string     `json:"file"`
+	FileName      string     `json:"fileName"`
+	FileMime      string     `json:"fileMime"`
+	Timestamp     int64      `json:"timestamp"`
+	IsInfo        bool       `json:"isInfo"`
+	Sender        *dcContact `json:"sender"`
 }
 
 // dcChat is the subset of Delta Chat's FullChat we consume.
@@ -297,7 +300,7 @@ func (c *DeltaChatChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([
 	// misc_send_msg(account_id, chat_id, text, file, name, location, quoted_message_id)
 	raw, err := c.rpc.call(ctx, "misc_send_msg", c.accountID, chatID, msg.Content, nil, nil, nil, nil)
 	if err != nil {
-		return nil, fmt.Errorf("deltachat send: %w", err)
+		return nil, deltaChatSendError("send", err)
 	}
 
 	// Result is [message_id, message_object]; we only need the id.
@@ -358,7 +361,7 @@ func (c *DeltaChatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaM
 				"ref":   part.Ref,
 				"error": err.Error(),
 			})
-			return messageIDs, fmt.Errorf("deltachat send media: %w", channels.ErrTemporary)
+			return messageIDs, deltaChatSendError("send media", err)
 		}
 
 		// send_msg returns the new message id as a bare integer.
@@ -369,6 +372,18 @@ func (c *DeltaChatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaM
 	}
 
 	return messageIDs, nil
+}
+
+// Device chats contain local core notices and can never receive replies. A
+// stale numeric target may still reach Send/SendMedia, even though inbound and
+// alias lookup filter these chats. Preserve the RPC error and prevent retries.
+func deltaChatSendError(action string, err error) error {
+	kind := channels.ErrTemporary
+	var rpcErr *rpcError
+	if errors.As(err, &rpcErr) && strings.Contains(strings.ToLower(rpcErr.Message), "the chat is a device chat") {
+		kind = channels.ErrSendFailed
+	}
+	return fmt.Errorf("deltachat %s: %w: %w", action, kind, err)
 }
 
 func (c *DeltaChatChannel) resolveOutboundChatID(
@@ -928,10 +943,12 @@ func (c *DeltaChatChannel) ensureAccount(ctx context.Context) error {
 	}
 	// Mark this account as a bot so the core delivers all messages to us.
 	// mdns_enabled lets markseen_msgs send read receipts for the visible
-	// double-check state in peer clients.
+	// double-check state in peer clients. Disable any inherited download limit
+	// so complete attachment messages can generate IncomingMsg events.
 	if _, err := c.rpc.call(ctx, "batch_set_config", accountID, map[string]string{
-		"bot":          "1",
-		"mdns_enabled": "1",
+		"bot":            "1",
+		"mdns_enabled":   "1",
+		"download_limit": "0",
 	}); err != nil {
 		return fmt.Errorf("deltachat set bot config: %w", err)
 	}

@@ -22,36 +22,51 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
-// listen is the inbound message loop. It blocks on wait_next_msgs and feeds
-// each new message into the PicoClaw inbound pipeline.
+// listen replays pending messages once, then uses IncomingMsg events, which
+// Delta Chat emits after the complete message (including attachments) arrives.
+// wait_next_msgs can return pre-messages containing only a size/summary label.
 func (c *DeltaChatChannel) listen() {
 	logger.InfoCF("deltachat", "Listening for messages", map[string]any{
 		"account_id": c.accountID,
 		"email":      c.selfAddr,
 	})
+	raw, err := c.rpc.call(c.ctx, "get_next_msgs", c.accountID)
+	if err != nil {
+		logger.WarnCF("deltachat", "Failed to fetch pending messages", map[string]any{"error": err.Error()})
+	} else {
+		var ids []int64
+		if err := json.Unmarshal(raw, &ids); err == nil {
+			for _, id := range ids {
+				c.handleMessage(id)
+			}
+		}
+	}
 	for c.IsRunning() && c.ctx.Err() == nil {
-		raw, err := c.rpc.call(c.ctx, "wait_next_msgs", c.accountID)
+		raw, err := c.rpc.call(c.ctx, "get_next_event")
 		if err != nil {
 			if c.ctx.Err() != nil || !c.IsRunning() {
 				return
 			}
-			logger.ErrorCF("deltachat", "wait_next_msgs failed", map[string]any{"error": err.Error()})
-			time.Sleep(time.Second)
+			logger.ErrorCF("deltachat", "get_next_event failed", map[string]any{"error": err.Error()})
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
 			continue
 		}
-
-		var messageIDs []int64
-		if err := json.Unmarshal(raw, &messageIDs); err != nil {
+		var event struct {
+			ContextID int64 `json:"contextId"`
+			Event     struct {
+				Kind  string `json:"kind"`
+				MsgID int64  `json:"msgId"`
+			} `json:"event"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
 			continue
 		}
-
-		if len(messageIDs) > 0 {
-			logger.DebugCF("deltachat", "Received message batch", map[string]any{
-				"count": len(messageIDs),
-			})
-		}
-		for _, messageID := range messageIDs {
-			c.handleMessage(messageID)
+		if event.ContextID == c.accountID && event.Event.Kind == "IncomingMsg" && event.Event.MsgID > 0 {
+			c.handleMessage(event.Event.MsgID)
 		}
 	}
 }
@@ -67,7 +82,18 @@ func (c *DeltaChatChannel) handleMessage(messageID int64) {
 		return
 	}
 
-	if msg.IsInfo || (strings.TrimSpace(msg.Text) == "" && msg.File == "") {
+	// State 26 is InSeen. It also prevents replaying startup backlog messages
+	// when their queued IncomingMsg events are subsequently drained.
+	if msg.IsInfo || msg.State == 26 || msg.FromID == 1 {
+		return
+	}
+	if msg.DownloadState != "" && msg.DownloadState != "Done" {
+		logger.DebugCF("deltachat", "Deferring incomplete message", map[string]any{
+			"message_id": messageID, "download_state": msg.DownloadState,
+		})
+		return
+	}
+	if strings.TrimSpace(msg.Text) == "" && msg.File == "" {
 		return
 	}
 
