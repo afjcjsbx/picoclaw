@@ -235,3 +235,41 @@ default (deferred). `aws` explicitly opts in to deferred mode even though it is 
 > It can pin a server's tools as always-visible (`"deferred": false`) or hidden (`"deferred": true`),
 > but it cannot enable discovery on its own: with `discovery.enabled: false` the search tools are
 > not registered, so `"deferred": true` is ignored and the server's tools stay visible.
+
+### 5) Browser automation with Playwright
+
+Playwright MCP exposes a real Chromium browser as MCP tools. This example attaches to a headless Chromium already listening on loopback; omit `--cdp-endpoint` to let Playwright launch and manage its own browser. Install the server with `npm install -g @playwright/mcp` and use the absolute path printed by `command -v playwright-mcp`.
+
+```json
+{
+  "tools": {
+    "mcp": {
+      "enabled": true,
+      "servers": {
+        "playwright": {
+          "enabled": true,
+          "type": "stdio",
+          "command": "/usr/local/bin/playwright-mcp",
+          "args": [
+            "--cdp-endpoint",
+            "http://127.0.0.1:9222",
+            "--headless",
+            "--isolated",
+            "--user-agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+            "--timeout-navigation",
+            "45000",
+            "--idle-timeout",
+            "300000",
+            "--output-dir",
+            "/root/.picoclaw/workspace/browser"
+          ],
+          "deferred": false
+        }
+      }
+    }
+  }
+}
+```
+
+`deferred` is optional and only matters when tool discovery is enabled. Keep `supports_parallel_tool_calls` at its default `false` because browser actions are stateful. See [Browser automation](browser-automation.md) for the Chromium CDP setup, the full flag reference, the browser workflow, security notes, and troubleshooting.

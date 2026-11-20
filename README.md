@@ -62,7 +62,7 @@ See [maintenance status](docs/project/maintenance-status.md) for the current com
 |:--|:--|
 | 🪶 **Featherweight**<br>10–20 MB of RAM in recent builds — small enough for a $10 board. | ⚡ **Instant startup**<br>Ready in under a second, even on a 0.6 GHz single-core processor. |
 | 💰 **Minimal cost**<br>Runs on hardware that costs 98% less than a Mac mini. | 🌍 **One binary everywhere**<br>RISC-V, ARM, MIPS, x86-64, and LoongArch — the same single executable. |
-| 🔌 **MCP native**<br>Connect any [Model Context Protocol](https://modelcontextprotocol.io/) server to extend the agent. | 🧩 **Agent Plugins 1.0.0**<br>Package skills and MCP servers into portable, installable plugins. |
+| 🔌 **MCP native**<br>Connect any [Model Context Protocol](https://modelcontextprotocol.io/) server to extend the agent — including Playwright for real browser automation. | 🧩 **Agent Plugins 1.0.0**<br>Package skills and MCP servers into portable, installable plugins. |
 | 👁️ **Vision pipeline**<br>Send images and files directly to multimodal LLMs with automatic base64 encoding. | 🧠 **Smart routing**<br>Rule-based model routing sends simple queries to cheaper, faster models. |
 | 💬 **19+ chat channels**<br>Telegram, Discord, Slack, WhatsApp, Matrix, WeChat, and many more. | 🔗 **30+ providers**<br>OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, local models, and more. |
 
@@ -446,6 +446,8 @@ For more details, see [Skills tools](docs/tools/skills.md).
 PicoClaw natively supports [MCP](https://modelcontextprotocol.io/) — connect any MCP server to extend your agent's capabilities with external tools and data sources.
 
 PicoClaw is a lightweight assistant, so remote MCP servers are the best choice. For local servers, prefer natively compiled server binaries and avoid `npx`, `uvx`, or other heavyweight dependency managers.
+
+Lightweight does not mean limited. When you need it, a local Playwright MCP server gives the agent full browser automation — JavaScript rendering, clicks, forms, sessions, and screenshots — with Chromium running as a separate process. See [Browser automation](docs/tools/browser-automation.md) for installation, configuration, and the parameters that matter on low-RAM boards.
 
 ```json
 {
