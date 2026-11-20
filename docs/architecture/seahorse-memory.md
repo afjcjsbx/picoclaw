@@ -361,6 +361,29 @@ summary row.
 These are estimates, not provider tokenizer counts. The hard proactive budget
 check and the overflow retry exist because the estimate can undershoot.
 
+### Calibration from provider usage
+
+The agent keeps a per-session usage anchor with the last provider-reported
+`prompt_tokens` (see
+[Context § Usage anchor](../agent-refactor/context.md#usage-anchor-provider-reported-prompt-size)).
+Seahorse uses the anchor's observed real-token-over-heuristic ratio in three
+places:
+
+- `ContextTokens` multiplies the stored-context estimate by the ratio, so the
+  value exposed to `CompactBeforeLLM` and `/compact` is closer to real tokens.
+- `Assemble` divides the real-token history budget by the ratio before handing
+  it to the assembler, which works in heuristic units. The static system/tool
+  reserve is subtracted in heuristic units.
+- `compactBudget` applies the same conversion, so compaction targets and the
+  `ContextTokens` comparison stay in the same units.
+
+When there is no anchor, or the observed ratio is implausible (outside
+0.25–8), the ratio is 1 and the plain heuristic is used. The ratio is
+session-local and memory-only. Compaction invalidates the prompt baseline but
+keeps the ratio, so assembly right after a compaction still uses the session's
+calibration; `/clear` drops the entry, and the next LLM call rebuilds it. A
+change of model also invalidates the baseline, since tokenizers differ.
+
 ## Data model and ordinals
 
 A conversation is a session key. A message belongs to a conversation. A summary

@@ -158,6 +158,9 @@ func usableContextTokens(agent *AgentInstance) int {
 // summarizeThresholdTokens is the prompt size at which summarization starts:
 // SummarizeTokenPercent of the usable window, capped at the window itself so
 // summarization never fires later than emergency compression.
+// CompactBeforeLLM compares it against the real prompt size from the session's
+// usage anchor when the provider reported one, and against the heuristic
+// otherwise.
 func summarizeThresholdTokens(agent *AgentInstance) int {
 	usable := usableContextTokens(agent)
 	threshold := usable * agent.SummarizeTokenPercent / 100

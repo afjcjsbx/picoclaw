@@ -559,6 +559,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 			if err := al.contextManager.Clear(ctx, opts.SessionKey); err != nil {
 				return err
 			}
+			al.clearUsageAnchor(agent.ID, opts.SessionKey)
 			if tool, ok := agent.Tools.Get("todo"); ok {
 				if todo, ok := tool.(*tools.TodoTool); ok {
 					todo.ClearSession(agent.ID, opts.SessionKey)
@@ -598,6 +599,9 @@ func (al *AgentLoop) buildCommandsRuntime(
 				Force:              force,
 				Outcome:            outcome,
 			})
+			if err == nil {
+				al.invalidateUsageAnchor(agent.ID, opts.SessionKey)
+			}
 			after, _ := al.currentContextUsage(agent, opts.SessionKey)
 			if after != nil {
 				outcome.TokensAfter = after.HistoryTokens
