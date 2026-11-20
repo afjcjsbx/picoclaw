@@ -550,7 +550,7 @@ func TestLegacyCompact_Threshold_PruneKeepsNewestActiveRounds(t *testing.T) {
 	}
 	got, _ := agent.Sessions.GetHistory(context.Background(), "active-turn")
 	for _, msg := range got {
-		if msg.Content == prunedToolResult {
+		if isEvictedToolResult(msg.Content) {
 			t.Fatalf("a tool result of the newest round was cleared before the model saw it")
 		}
 	}
@@ -575,7 +575,7 @@ func TestLegacyCompact_Threshold_PruneKeepsTurnRecordInStep(t *testing.T) {
 		t.Fatalf("compaction: %v", err)
 	}
 	got, _ := agent.Sessions.GetHistory(context.Background(), "active-turn")
-	if got[2].Content != prunedToolResult {
+	if !isEvictedToolResult(got[2].Content) {
 		t.Fatalf("round 1 result = %.12q, want it cleared", got[2].Content)
 	}
 	if matched := matchingTurnMessageTail(got, ts.persistedMessagesSnapshot()); matched != len(turn) {
