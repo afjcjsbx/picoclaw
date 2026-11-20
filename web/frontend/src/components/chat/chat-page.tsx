@@ -29,6 +29,7 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { forkSession, getSessionHistory } from "@/api/sessions"
+import { ApprovalMessage } from "@/components/chat/approval-message"
 import { AssistantMessage } from "@/components/chat/assistant-message"
 import {
   ChatComposer,
@@ -55,6 +56,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { isExecApprovalReply } from "@/features/chat/approval"
 import {
   type PendingFollowUp,
   enqueuePendingFollowUp,
@@ -1014,6 +1016,11 @@ export function ChatPage() {
     }
   }
 
+  // Approval replies are handled by the agent loop before steering, so they
+  // must bypass the composer's follow-up queue while the turn is blocked.
+  const respondToExecApproval = (action: "approve" | "deny", token: string) =>
+    sendMessage({ content: `${action} ${token}`, attachments: [] })
+
   const renderMessages = (
     renderedMessages: ChatMessage[],
     sessionId: string,
@@ -1154,6 +1161,7 @@ export function ChatPage() {
         : start + messageOffset
       const canFork =
         msg.role === "assistant" && (!msg.kind || msg.kind === "normal")
+      const approval = msg.kind === "approval" ? msg.approval : undefined
 
       return (
         <div
@@ -1162,24 +1170,34 @@ export function ChatPage() {
           className={`group flex w-full flex-col ${activityChild ? "gap-0" : "gap-1"}`}
         >
           {msg.role === "assistant" ? (
-            <>
-              <AssistantMessage
-                content={msg.content}
-                attachments={msg.attachments}
-                kind={msg.kind}
-                modelName={msg.modelName}
-                onOpenFile={handleOpenFile}
-                filePathAliases={filePathAliasesByMessage.get(msg.id)}
-                onFork={
-                  canFork
-                    ? () => void handleFork(sessionId, messageIndex)
-                    : undefined
+            approval ? (
+              <ApprovalMessage
+                approval={approval}
+                onApprove={() =>
+                  respondToExecApproval("approve", approval.token)
                 }
-                toolCalls={msg.toolCalls}
-                timestamp={msg.timestamp}
-                usage={msg.usage}
+                onDeny={() => respondToExecApproval("deny", approval.token)}
               />
-            </>
+            ) : (
+              <>
+                <AssistantMessage
+                  content={msg.content}
+                  attachments={msg.attachments}
+                  kind={msg.kind}
+                  modelName={msg.modelName}
+                  onOpenFile={handleOpenFile}
+                  filePathAliases={filePathAliasesByMessage.get(msg.id)}
+                  onFork={
+                    canFork
+                      ? () => void handleFork(sessionId, messageIndex)
+                      : undefined
+                  }
+                  toolCalls={msg.toolCalls}
+                  timestamp={msg.timestamp}
+                  usage={msg.usage}
+                />
+              </>
+            )
           ) : (
             <UserMessage
               content={msg.content}
@@ -1260,8 +1278,9 @@ export function ChatPage() {
     const content = input
     const nextAttachments = attachments
     const shouldQueue =
-      isAgentRunning ||
-      Boolean(nextPendingFollowUp(pendingFollowUps, activeSessionId))
+      !isExecApprovalReply(content) &&
+      (isAgentRunning ||
+        Boolean(nextPendingFollowUp(pendingFollowUps, activeSessionId)))
 
     if (shouldQueue) {
       setPendingFollowUps((current) =>

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,10 +107,45 @@ func outboundMessageIsToolCalls(msg bus.OutboundMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["message_kind"]), MessageKindToolCalls)
 }
 
+func outboundMessageIsApproval(msg bus.OutboundMessage) bool {
+	if len(msg.Context.Raw) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["message_kind"]), MessageKindApproval)
+}
+
+func picoApprovalPayload(msg bus.OutboundMessage) map[string]any {
+	raw := msg.Context.Raw
+	if len(raw) == 0 {
+		return nil
+	}
+
+	approval := make(map[string]any, 4)
+	if token := strings.TrimSpace(raw["approval_token"]); token != "" {
+		approval[ApprovalKeyToken] = token
+	}
+	if command := raw["approval_command"]; command != "" {
+		approval[ApprovalKeyCommand] = command
+	}
+	if reason := raw["approval_reason"]; reason != "" {
+		approval[ApprovalKeyReason] = reason
+	}
+	if expires := strings.TrimSpace(raw["approval_expires_at"]); expires != "" {
+		if expiresAt, err := strconv.ParseInt(expires, 10, 64); err == nil {
+			approval[ApprovalKeyExpiresAt] = expiresAt
+		}
+	}
+	if len(approval) == 0 {
+		return nil
+	}
+	return approval
+}
+
 func outboundMessageFinalizesTrackedToolFeedback(msg bus.OutboundMessage) bool {
 	return !outboundMessageIsToolFeedback(msg) &&
 		!outboundMessageIsThought(msg) &&
-		!outboundMessageIsToolCalls(msg)
+		!outboundMessageIsToolCalls(msg) &&
+		!outboundMessageIsApproval(msg)
 }
 
 // outboundMessageIsFinal reports whether the agent marked this message as the
@@ -353,6 +389,7 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 	isThought := outboundMessageIsThought(msg)
 	isToolFeedback := outboundMessageIsToolFeedback(msg)
 	isToolCalls := outboundMessageIsToolCalls(msg)
+	isApproval := outboundMessageIsApproval(msg)
 	if isToolFeedback {
 		if msgID, handled, err := c.progress.Update(ctx, msg.ChatID, msg.Content); handled {
 			if err != nil {
@@ -382,6 +419,12 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 		payload[PayloadKeyModelName] = modelName
 	}
 	switch {
+	case isApproval:
+		payload[PayloadKeyKind] = MessageKindApproval
+		if approval := picoApprovalPayload(msg); approval != nil {
+			payload[PayloadKeyApproval] = approval
+		}
+
 	case isToolFeedback:
 		payload[PayloadKeyKind] = "tool_feedback"
 

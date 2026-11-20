@@ -34,6 +34,14 @@ export type AssistantMessageKind =
   | "thought"
   | "tool_calls"
   | "tool_feedback"
+  | "approval"
+
+export interface ChatApproval {
+  token: string
+  command?: string
+  reason?: string
+  expiresAt?: number
+}
 
 export interface ChatMessage {
   id: string
@@ -45,6 +53,7 @@ export interface ChatMessage {
   attachments?: ChatAttachment[]
   toolCalls?: ChatToolCall[]
   usage?: TokenUsage
+  approval?: ChatApproval
 }
 
 export interface TokenUsage {

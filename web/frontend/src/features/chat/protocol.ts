@@ -170,7 +170,7 @@ export function handlePicoMessage(
         setSessionRunning(expectedSessionId, false)
       }
       const messageId = (payload.message_id as string) || `pico-${Date.now()}`
-      const { content, kind, toolCalls } =
+      const { content, kind, toolCalls, approval } =
         parseAssistantMessageCreateState(payload)
       const attachments = parseAttachments(payload)
       const contextUsage = parseContextUsage(payload)
@@ -193,6 +193,7 @@ export function handlePicoMessage(
             kind,
             ...(modelName ? { modelName } : {}),
             ...(toolCalls ? { toolCalls } : {}),
+            ...(approval ? { approval } : {}),
             ...(usage ? { usage } : {}),
             attachments,
             timestamp,
