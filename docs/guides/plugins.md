@@ -726,7 +726,7 @@ it is not a sandbox for arbitrary subprocess code. Enable only trusted packages.
 
 For isolated installations outside the instance filesystem, configure explicit
 read-only package and writable data/toolchain exposure as described in the
-[isolation documentation](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md).
+[subprocess isolation documentation](../security/isolation.md).
 The plugin loader never
 silently broadens those OS permissions.
 

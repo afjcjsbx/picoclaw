@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The exec tool schema now declares `background` and `pty` as booleans, matching their documentation and the values the tool already accepted; string `"true"`/`"false"` arguments are still tolerated for models that emit the previous form.
 - Background `spawn` no longer drops requests above `agents.defaults.subturn.max_concurrent`: the tool reserves a concurrency slot before acknowledging, and CLI one-shot turns join their spawned children before answering.
 
+### Changed
+
+- The opt-in gateway config watcher now polls every 60 seconds instead of every 2 seconds (still scaled by `power.poll_interval_multiplier`), reducing its idle wake-ups from 43,200 to 1,440 per day when hot reload is enabled.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

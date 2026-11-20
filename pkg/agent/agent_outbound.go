@@ -54,7 +54,7 @@ func (al *AgentLoop) publishTurnFailureNotice(
 		return
 	}
 
-	al.publishResponseIfNeeded(ctx, channel, chatID, sessionKey, notice, nil, publishResponseOptions{
+	al.publishResponseIfNeeded(ctx, nil, channel, chatID, sessionKey, notice, nil, publishResponseOptions{
 		skipMessageToolSuppression: true,
 		surviveCanceledContext:     true,
 	})
@@ -62,6 +62,7 @@ func (al *AgentLoop) publishTurnFailureNotice(
 
 func (al *AgentLoop) publishResponseOrError(
 	ctx context.Context,
+	inbound *bus.InboundContext,
 	channel, chatID, sessionKey string,
 	response string,
 	err error,
@@ -72,7 +73,7 @@ func (al *AgentLoop) publishResponseOrError(
 		}
 		response = ""
 	}
-	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+	al.publishFinalResponseForInbound(ctx, inbound, channel, chatID, sessionKey, response)
 }
 
 // publishResponseOptions controls how a response is delivered.
@@ -85,16 +86,14 @@ type publishResponseOptions struct {
 	surviveCanceledContext bool
 }
 
+// PublishResponseIfNeeded publishes a response unless the message tool already
+// delivered to the same chat during this round. It is the default path for
+// non-interactive turns (cron, CLI) where a synchronous tool result may be the
+// only delivery.
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
-	al.publishFinalResponse(ctx, channel, chatID, sessionKey, response)
-}
-
-func (al *AgentLoop) publishFinalResponse(
-	ctx context.Context,
-	channel, chatID, sessionKey, response string,
-) bool {
-	return al.publishResponseIfNeeded(
+	al.publishResponseIfNeeded(
 		ctx,
+		nil,
 		channel,
 		chatID,
 		sessionKey,
@@ -104,8 +103,39 @@ func (al *AgentLoop) publishFinalResponse(
 	)
 }
 
+// PublishResponseForInbound publishes the terminal reply of an interactive
+// turn, threading it to the originating message when the inbound context
+// provides one. A progress update sent through the message tool earlier in the
+// turn must not suppress the actual answer, so this path bypasses message-tool
+// suppression.
+func (al *AgentLoop) PublishResponseForInbound(
+	ctx context.Context,
+	inbound *bus.InboundContext,
+	channel, chatID, sessionKey, response string,
+) bool {
+	return al.publishFinalResponseForInbound(ctx, inbound, channel, chatID, sessionKey, response)
+}
+
+func (al *AgentLoop) publishFinalResponseForInbound(
+	ctx context.Context,
+	inbound *bus.InboundContext,
+	channel, chatID, sessionKey, response string,
+) bool {
+	return al.publishResponseIfNeeded(
+		ctx,
+		inbound,
+		channel,
+		chatID,
+		sessionKey,
+		response,
+		al.latestAssistantUsage(ctx, sessionKey, response),
+		publishResponseOptions{skipMessageToolSuppression: true},
+	)
+}
+
 func (al *AgentLoop) publishResponseIfNeeded(
 	ctx context.Context,
+	inbound *bus.InboundContext,
 	channel, chatID, sessionKey, response string,
 	usage *bus.TokenUsage,
 	opts publishResponseOptions,
@@ -146,7 +176,7 @@ func (al *AgentLoop) publishResponseIfNeeded(
 	}
 
 	msg := bus.OutboundMessage{
-		Context:    bus.NewOutboundContext(channel, chatID, ""),
+		Context:    outboundContextFromInbound(inbound, channel, chatID, ""),
 		SessionKey: sessionKey,
 		Content:    response,
 		Usage:      usage,

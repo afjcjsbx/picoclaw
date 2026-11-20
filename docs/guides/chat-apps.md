@@ -31,6 +31,76 @@ Talk to your picoclaw through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk,
 | **MaixCam**          | ⭐ Easy            | Hardware integration channel for Sipeed AI cameras    | [Docs](../channels/maixcam/)                                                                           |
 | **Pico**             | ⭐ Easy            | Native PicoClaw protocol channel                      |                                                                                                                  |
 
+## Outbound-only channels
+
+An **outbound-only channel** is an enabled channel that PicoClaw can use as a `message` target but that never starts an agent turn for incoming messages. Use it when one chat app is your control surface (for example Telegram) and another is only a destination (for example a Discord announcements channel).
+
+### Supported channels
+
+The pattern applies to channels that:
+
+- enforce `allow_from` on inbound messages, and
+- have an outbound sender, so the `message` tool can deliver to them.
+
+Check the channel page under `docs/channels/<name>/README.md`: if it documents `allow_from`, inbound traffic can be blocked. Bidirectional chat channels that can deliver replies generally also expose an outbound sender, so the `message` tool can deliver proactively, subject to platform limits. Some channels are outbound-only by design, such as the optional `slack_webhook` and `teams_webhook` channels; they have no inbound path and do not need this workaround. See [Custom Builds](custom-builds.md) for those build tags.
+
+### Make a bidirectional channel outbound-only
+
+Keep the channel enabled so its worker and sender stay available, then set `allow_from` to an ID that cannot match a real sender. Do **not** use an empty list: empty means "allow everyone".
+
+```json
+{
+  "channel_list": {
+    "telegram": {
+      "enabled": true,
+      "type": "telegram",
+      "allow_from": ["YOUR_TELEGRAM_USER_ID"],
+      "settings": {
+        "token": "YOUR_TELEGRAM_BOT_TOKEN"
+      }
+    },
+    "discord": {
+      "enabled": true,
+      "type": "discord",
+      "allow_from": ["0"],
+      "settings": {
+        "token": "YOUR_DISCORD_BOT_TOKEN"
+      }
+    }
+  }
+}
+```
+
+In this example:
+
+- Telegram is the control channel. Only your Telegram user ID can trigger the agent.
+- Discord stays connected and can send messages, but every inbound Discord message is dropped by the allowlist before it reaches the agent. `"0"` is not a valid Discord user ID, so no real user matches it.
+
+If you want only yourself to be able to trigger the bot on the destination channel, use your own platform user ID instead of `"0"`.
+
+### Send to the outbound-only channel
+
+From the control channel, ask the agent to use the `message` tool with the destination channel and chat ID:
+
+```json
+{
+  "content": "Deploy finished.",
+  "channel": "discord",
+  "chat_id": "123456789012345678"
+}
+```
+
+`channel` is the key under `channel_list`, not necessarily the channel `type` (custom channel names can differ). `chat_id` is the platform-specific destination: a Discord channel ID, a Slack channel ID, a Telegram chat ID, or a webhook target name for native output-only webhook channels. The gateway must be running, and the `message` tool must be enabled (`tools.message.enabled`, default `true`). See [Messaging tools](../tools/messaging.md) for the full `message` tool reference.
+
+### Caveats
+
+- `allow_from: []` means "allow all", not "deny all". Use a non-matching sentinel such as `"0"` on numeric-ID platforms.
+- `allow_from` filters inbound messages only. It does not restrict outbound sends, but the bot still needs the permissions required to post in the destination.
+- Inbound messages are dropped, not queued. The agent cannot use them as context.
+- Some channels may still answer protocol-level interactions (for example Discord slash commands) with a denial message. For absolute silence, use a native output-only channel or do not grant the interaction scope.
+- `group_trigger.mention_only` is not a substitute: it filters group messages and still responds when the bot is mentioned or receives a DM.
+- `enabled: false` disables both directions. The channel must stay enabled for outbound delivery.
+
 <a id="telegram"></a>
 <details>
 <summary><b>Telegram</b> (Recommended)</summary>

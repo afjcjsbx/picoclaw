@@ -1,5 +1,7 @@
 # `pkg/isolation`
 
+> User-facing documentation: [Subprocess Isolation](../../docs/security/isolation.md). This file is the package-level implementation reference.
+
 `pkg/isolation` provides process-level isolation for child processes started by `picoclaw`.
 
 It does not sandbox the main `picoclaw` process itself.
@@ -210,6 +212,7 @@ Capabilities:
 - `source -> target` read-only or read-write mounts
 - all Linux capabilities dropped (`--cap-drop ALL`) inside every sandbox
 - new session (`--new-session`): the sandbox runs in a detached session with no controlling terminal, blocking TIOCSTI-based terminal injection (CVE-2017-5226)
+- ephemeral `/tmp` tmpfs per sandbox, for tools that hardcode `/tmp`; the host `/tmp` is not exposed
 - optional network namespace isolation (`block_network: true`)
 
 **Do not run PicoClaw as root.** When the effective uid is 0, bwrap does not
@@ -231,7 +234,7 @@ Default mounts inside the instance root are intentionally narrow:
 
 Minimum runtime system paths (`/usr`, `/bin`, `/lib`, `/lib64`, `/etc/resolv.conf`, etc.) are mounted read-only.
 
-At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed. If the working directory is a symlink (or contains symlink components), it is resolved to its canonical path before mounting so that bubblewrap 0.12 and later can accept it as a bind-mount target.
+At runtime, PicoClaw also adds the executable path, its directory, the effective working directory, and absolute path arguments when needed. The working directory is mounted read-only unless it is already covered by a writable rule (`workspace`, `runtime-user-env`, or an explicit `rw` `expose_paths` rule), so a remembered `cwd` outside the writable boundary cannot turn into a writable hole. If the working directory is a symlink (or contains symlink components), it is resolved to its canonical path before mounting so that bubblewrap 0.12 and later can accept it as a bind-mount target.
 
 Absolute path arguments are auto-exposed with the following rules:
 

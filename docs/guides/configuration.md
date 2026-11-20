@@ -71,7 +71,7 @@ The Gateway can reload `config.json` without a restart. Two independent triggers
   }
   ```
 
-  The default is `false`. When enabled, PicoClaw polls the config file (every 2 seconds, scaled by `power.poll_interval_multiplier`) and reloads after a change is written and validated. An invalid or partially written file is ignored and retried on the next poll; the last valid configuration stays in effect.
+  The default is `false`. When enabled, PicoClaw polls the config file (every 60 seconds, scaled by `power.poll_interval_multiplier`) and reloads after a change is written and validated. An invalid or partially written file is ignored and retried on the next poll; the last valid configuration stays in effect.
 
 - **`POST /reload`** — always available, regardless of `gateway.hot_reload`, on the shared Gateway HTTP server. It requires the Gateway auth token (`Authorization: Bearer <token>`) when one is configured and returns `202 Accepted` as soon as the reload is scheduled. The reload itself runs asynchronously; watch the `gateway.reload.started` / `gateway.reload.completed` / `gateway.reload.failed` runtime events, or the logs, for the outcome. `GET /reload/status` reports the latest reload generation and outcome so callers can wait for completion.
 
@@ -450,6 +450,34 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 
 > The workspace restriction is a static path policy, not an OS sandbox. It validates command paths, home expansion and directory changes, but child processes and script contents remain outside its reach. Use containers, VMs, or a dedicated user for untrusted workloads.
 
+#### Process Isolation
+
+The workspace restriction only controls paths. To confine child processes at the OS level, enable the optional top-level `isolation` block:
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "expose_paths": [
+      { "source": "/opt/toolchains/go", "target": "/opt/toolchains/go", "mode": "ro" }
+    ],
+    "block_network": false
+  }
+}
+```
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `isolation.enabled` | bool | `false` | Sandbox child processes: `exec`, CLI providers, process hooks, MCP `stdio` servers and plugins |
+| `isolation.expose_paths` | array | `[]` | Host paths exposed inside the sandbox as `{source, target, mode}`, where `mode` is `ro` or `rw` |
+| `isolation.block_network` | bool | `false` | Isolate child processes from the host network namespace; Linux only. When `false`, sandboxed commands still reach host loopback, the LAN and cloud metadata endpoints |
+
+Linux requires `bwrap` (bubblewrap); macOS uses Seatbelt through `sandbox-exec`; Windows applies process-level restrictions. When isolation is enabled, `HOME`, `TMPDIR` and the XDG directories are redirected to the instance root, and only an allowlist of environment variables is inherited. The workspace restriction and process isolation complement each other and do not replace each other.
+
+> ⚠️ **Warning**: `block_network` defaults to `false`, so an isolated command can still reach `127.0.0.1`, scan the LAN and brute-force the host or other devices. Set it to `true` unless `exec`, MCP servers or CLI providers need `curl`, `wget`, `git` or other outbound network access. See [Network isolation](../security/isolation.md#network-isolation).
+
+For platform support, `expose_paths` rules, bubblewrap requirements, network isolation and troubleshooting, see [Subprocess Isolation](../security/isolation.md).
+
 #### Additional Exec Protection
 
 By default, the `exec` tool blocks these dangerous commands (the hardline subset stays blocked even when `enable_deny_patterns` is `false`):
@@ -719,7 +747,7 @@ For constrained devices, enable the static low-power profile:
 }
 ```
 
-With `low_power` enabled, the heartbeat interval defaults to 120 minutes (or the larger configured normal interval), and the agent loop blocks on inbound events instead of waking every 100 ms. `poll_interval_multiplier` scales maintenance intervals: `5` turns a 30-minute media cleanup interval into 150 minutes, a 10-second channel-maintenance interval into 50 seconds, and a 2-second config-file check into 10 seconds when hot reload is enabled. Set `low_power_heartbeat_interval` and `poll_interval_multiplier` to tune the profile. Channel protocol keepalives remain unchanged so connected integrations stay available.
+With `low_power` enabled, the heartbeat interval defaults to 120 minutes (or the larger configured normal interval), and the agent loop blocks on inbound events instead of waking every 100 ms. `poll_interval_multiplier` scales maintenance intervals: `5` turns a 30-minute media cleanup interval into 150 minutes, a 10-second channel-maintenance interval into 50 seconds, and a 60-second config-file check into 300 seconds when hot reload is enabled. Set `low_power_heartbeat_interval` and `poll_interval_multiplier` to tune the profile. Channel protocol keepalives remain unchanged so connected integrations stay available.
 
 ### Providers
 
