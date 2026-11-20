@@ -38,7 +38,6 @@ func TestSave_WithColonInKey(t *testing.T) {
 
 	// Create a session with a key containing colon (typical channel session key).
 	key := "telegram:123456"
-	sm.GetOrCreate(key)
 	if err := sm.AddMessage(context.Background(), key, "user", "hello"); err != nil {
 		t.Fatalf("AddMessage(%q) failed: %v", key, err)
 	}
@@ -75,14 +74,18 @@ func TestSave_RejectsPathTraversal(t *testing.T) {
 	// Invalid names that must still be rejected.
 	badKeys := []string{"", ".", ".."}
 	for _, key := range badKeys {
-		sm.GetOrCreate(key)
+		if err := sm.AddMessage(context.Background(), key, "user", "hello"); err != nil {
+			t.Fatalf("AddMessage(%q) failed: %v", key, err)
+		}
 		if err := sm.Save(context.Background(), key); err == nil {
 			t.Errorf("Save(%q) should have failed but didn't", key)
 		}
 	}
 
 	// Keys containing path separators are sanitized (no subdirs created).
-	sm.GetOrCreate("foo/bar")
+	if err := sm.AddMessage(context.Background(), "foo/bar", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage(foo/bar) failed: %v", err)
+	}
 	if err := sm.Save(context.Background(), "foo/bar"); err != nil {
 		t.Fatalf("Save(\"foo/bar\") after sanitize should succeed: %v", err)
 	}
@@ -131,7 +134,6 @@ func TestLastActivity(t *testing.T) {
 	}
 
 	before := time.Now().Add(-time.Second)
-	sm.GetOrCreate("s1")
 	if err := sm.AddMessage(context.Background(), "s1", "user", "hello"); err != nil {
 		t.Fatalf("AddMessage(s1) failed: %v", err)
 	}
@@ -145,7 +147,6 @@ func TestDeleteSession(t *testing.T) {
 	sm := NewSessionManager(dir)
 
 	for _, key := range []string{"telegram:1", "telegram:2"} {
-		sm.GetOrCreate(key)
 		if err := sm.AddMessage(context.Background(), key, "user", "hello"); err != nil {
 			t.Fatalf("AddMessage(%q): %v", key, err)
 		}
@@ -190,7 +191,9 @@ func TestDeleteSession_RejectsInvalidKey(t *testing.T) {
 
 func TestDeleteSession_InMemoryManager(t *testing.T) {
 	sm := NewSessionManager("")
-	sm.GetOrCreate("s1")
+	if err := sm.AddMessage(context.Background(), "s1", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
 	if err := sm.DeleteSession("s1"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}

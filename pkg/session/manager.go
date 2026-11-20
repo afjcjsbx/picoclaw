@@ -41,26 +41,6 @@ func NewSessionManager(storage string) *SessionManager {
 	return sm
 }
 
-func (sm *SessionManager) GetOrCreate(key string) *Session {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	session, ok := sm.sessions[key]
-	if ok {
-		return session
-	}
-
-	session = &Session{
-		Key:      key,
-		Messages: []providers.Message{},
-		Created:  time.Now(),
-		Updated:  time.Now(),
-	}
-	sm.sessions[key] = session
-
-	return session
-}
-
 func ensureMessageCreatedAt(msg *providers.Message, fallback time.Time) {
 	if msg.CreatedAt != nil && !msg.CreatedAt.IsZero() {
 		return
