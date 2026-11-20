@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -361,6 +362,236 @@ func TestSend_NormalMessageHasNoInlineKeyboard(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &payload))
 	_, hasMarkup := payload["reply_markup"]
 	require.False(t, hasMarkup)
+}
+
+func TestTelegramSkillNames(t *testing.T) {
+	skills := []string{"weather", "github", "summarize"}
+	require.Equal(t, skills, telegramSkillNames(useHelpText(skills...)))
+	require.Nil(t, telegramSkillNames(useHelpText()))
+	require.Nil(t, telegramSkillNames("hello"))
+}
+
+func TestTelegramUseCommandMenuMarkup(t *testing.T) {
+	markup := telegramCommandMenuMarkup(
+		useHelpText("weather", "github", "summarize"),
+		commands.BuiltinDefinitions(),
+	)
+	require.NotNil(t, markup)
+	require.Len(t, markup.InlineKeyboard, 1)
+	require.Len(t, markup.InlineKeyboard[0], 3)
+
+	require.Equal(t, "weather", markup.InlineKeyboard[0][0].Text)
+	require.Equal(t, "pu:s:0", markup.InlineKeyboard[0][0].CallbackData)
+	require.Equal(t, "github", markup.InlineKeyboard[0][1].Text)
+	require.Equal(t, "pu:s:1", markup.InlineKeyboard[0][1].CallbackData)
+	require.Equal(t, "summarize", markup.InlineKeyboard[0][2].Text)
+	require.Equal(t, "pu:s:2", markup.InlineKeyboard[0][2].CallbackData)
+}
+
+func TestTelegramSkillMenuMarkup_Pagination(t *testing.T) {
+	skills := make([]string, 25)
+	for i := range skills {
+		skills[i] = fmt.Sprintf("skill-%02d", i)
+	}
+
+	first := telegramSkillMenuMarkup(skills, 0)
+	require.NotNil(t, first)
+	require.Len(t, first.InlineKeyboard, 5)
+	require.Equal(t, "skill-00", first.InlineKeyboard[0][0].Text)
+	require.Equal(t, "pu:s:0", first.InlineKeyboard[0][0].CallbackData)
+	require.Equal(t, "skill-11", first.InlineKeyboard[3][2].Text)
+	require.Equal(t, "pu:s:11", first.InlineKeyboard[3][2].CallbackData)
+
+	firstNav := first.InlineKeyboard[4]
+	require.Len(t, firstNav, 2)
+	require.Equal(t, "1/3", firstNav[0].Text)
+	require.Equal(t, "pu:p:0", firstNav[0].CallbackData)
+	require.Equal(t, "Next ▶", firstNav[1].Text)
+	require.Equal(t, "pu:p:1", firstNav[1].CallbackData)
+
+	second := telegramSkillMenuMarkup(skills, 1)
+	require.NotNil(t, second)
+	require.Len(t, second.InlineKeyboard, 5)
+	require.Equal(t, "skill-12", second.InlineKeyboard[0][0].Text)
+	require.Equal(t, "pu:s:12", second.InlineKeyboard[0][0].CallbackData)
+
+	secondNav := second.InlineKeyboard[4]
+	require.Len(t, secondNav, 3)
+	require.Equal(t, "◀ Prev", secondNav[0].Text)
+	require.Equal(t, "pu:p:0", secondNav[0].CallbackData)
+	require.Equal(t, "2/3", secondNav[1].Text)
+	require.Equal(t, "pu:p:1", secondNav[1].CallbackData)
+	require.Equal(t, "Next ▶", secondNav[2].Text)
+	require.Equal(t, "pu:p:2", secondNav[2].CallbackData)
+
+	last := telegramSkillMenuMarkup(skills, 2)
+	require.NotNil(t, last)
+	require.Len(t, last.InlineKeyboard, 2)
+	require.Equal(t, "skill-24", last.InlineKeyboard[0][0].Text)
+	require.Equal(t, "pu:s:24", last.InlineKeyboard[0][0].CallbackData)
+
+	lastNav := last.InlineKeyboard[1]
+	require.Len(t, lastNav, 2)
+	require.Equal(t, "◀ Prev", lastNav[0].Text)
+	require.Equal(t, "pu:p:1", lastNav[0].CallbackData)
+	require.Equal(t, "3/3", lastNav[1].Text)
+}
+
+func TestTelegramSkillCallback(t *testing.T) {
+	kind, value, ok := telegramSkillCallback("pu:p:2")
+	require.True(t, ok)
+	require.Equal(t, telegramSkillCallbackPage, kind)
+	require.Equal(t, 2, value)
+
+	kind, value, ok = telegramSkillCallback("pu:s:5")
+	require.True(t, ok)
+	require.Equal(t, telegramSkillCallbackSelect, kind)
+	require.Equal(t, 5, value)
+
+	for _, data := range []string{"pu:x:1", "pu:p:-1", "pu:s:", "pc:/list models", ""} {
+		_, _, ok := telegramSkillCallback(data)
+		require.False(t, ok, "callback data %q should be rejected", data)
+	}
+}
+
+func TestTelegramCallbackCommandAllowed_UseSkill(t *testing.T) {
+	defs := commands.BuiltinDefinitions()
+
+	require.True(t, telegramCallbackCommandAllowed("/use weather", defs))
+	require.False(t, telegramCallbackCommandAllowed("/use clear", defs))
+	require.False(t, telegramCallbackCommandAllowed("/use", defs))
+	require.False(t, telegramCallbackCommandAllowed("/use weather extra", defs))
+}
+
+func TestHandleCallbackQuery_SkillSelection(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+			if !strings.Contains(url, "answerCallbackQuery") {
+				t.Fatalf("unexpected API call: %s", url)
+			}
+			return &ta.Response{Ok: true, Result: []byte("true")}, nil
+		},
+	}
+	ch, messageBus := newCallbackTestChannel(t, caller, nil)
+
+	err := ch.handleCallbackQuery(context.Background(), telego.CallbackQuery{
+		ID:   "cb-skill",
+		From: telego.User{ID: 777, FirstName: "Alice", Username: "alice"},
+		Data: "pu:s:1",
+		Message: &telego.Message{
+			MessageID: 42,
+			Chat:      telego.Chat{ID: 12345, Type: "private"},
+			Text:      useHelpText("weather", "github"),
+		},
+	})
+	require.NoError(t, err)
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		require.Equal(t, "/use github", inbound.Content)
+		require.Equal(t, "42", inbound.Context.ReplyToMessageID)
+	case <-time.After(time.Second):
+		t.Fatal("no inbound message published")
+	}
+
+	requireCallbackAnswered(t, caller)
+}
+
+func TestHandleCallbackQuery_SkillPageEditsMarkup(t *testing.T) {
+	var editBody []byte
+	caller := &stubCaller{
+		callFn: func(_ context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			switch {
+			case strings.Contains(url, "answerCallbackQuery"):
+				return &ta.Response{Ok: true, Result: []byte("true")}, nil
+			case strings.Contains(url, "editMessageReplyMarkup"):
+				editBody = append([]byte(nil), data.BodyRaw...)
+				return successResponse(t), nil
+			default:
+				t.Fatalf("unexpected API call: %s", url)
+				return nil, nil
+			}
+		},
+	}
+	ch, _ := newCallbackTestChannel(t, caller, nil)
+
+	skills := make([]string, 25)
+	for i := range skills {
+		skills[i] = fmt.Sprintf("skill-%02d", i)
+	}
+	err := ch.handleCallbackQuery(context.Background(), telego.CallbackQuery{
+		ID:   "cb-page",
+		From: telego.User{ID: 777, FirstName: "Alice"},
+		Data: "pu:p:1",
+		Message: &telego.Message{
+			MessageID: 42,
+			Chat:      telego.Chat{ID: 12345, Type: "private"},
+			Text:      useHelpText(skills...),
+		},
+	})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(editBody, &payload))
+	markup, ok := payload["reply_markup"].(map[string]any)
+	require.True(t, ok)
+	rows, ok := markup["inline_keyboard"].([]any)
+	require.True(t, ok)
+	require.Len(t, rows, 5)
+
+	firstRow, ok := rows[0].([]any)
+	require.True(t, ok)
+	firstButton, ok := firstRow[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "skill-12", firstButton["text"])
+	require.Equal(t, "pu:s:12", firstButton["callback_data"])
+
+	navRow, ok := rows[4].([]any)
+	require.True(t, ok)
+	require.Len(t, navRow, 3)
+	requireCallbackAnswered(t, caller)
+}
+
+func TestHandleCallbackQuery_SkillMenuExpired(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+			if !strings.Contains(url, "answerCallbackQuery") {
+				t.Fatalf("unexpected API call: %s", url)
+			}
+			return &ta.Response{Ok: true, Result: []byte("true")}, nil
+		},
+	}
+	ch, messageBus := newCallbackTestChannel(t, caller, nil)
+
+	err := ch.handleCallbackQuery(context.Background(), telego.CallbackQuery{
+		ID:   "cb-expired",
+		From: telego.User{ID: 777, FirstName: "Alice"},
+		Data: "pu:s:0",
+		Message: &telego.Message{
+			MessageID: 42,
+			Chat:      telego.Chat{ID: 12345, Type: "private"},
+			Text:      "No installed skills found.",
+		},
+	})
+	require.NoError(t, err)
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("unexpected inbound message: %+v", inbound)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	requireCallbackAnswered(t, caller)
+}
+
+func useHelpText(skills ...string) string {
+	if len(skills) == 0 {
+		return "Usage: /use <skill> [message]\nNo installed skills found."
+	}
+	return fmt.Sprintf(
+		"Usage: /use <skill> [message]\n\nInstalled Skills:\n- %s\n\nUse /use <skill> to apply a skill to your next message, or /use <skill> <message> to force it immediately.",
+		strings.Join(skills, "\n- "),
+	)
 }
 
 func newCallbackTestChannel(
