@@ -364,13 +364,29 @@ func hasParam(w *syntax.Word) (found bool) {
 	return found
 }
 
-// hasAssignExpansion reports ${NAME=word} or ${NAME:=word} anywhere in n: an
-// expansion that assigns a variable as a side effect.
+// hasAssignExpansion reports an expansion that assigns a variable as a side
+// effect: ${NAME=word}, ${NAME:=word}, or an arithmetic assignment such as
+// $((IFS=53)) and $((x++)). Arithmetic assignments matter even when the result
+// is unused: they can change IFS or any other variable the tracker later reads.
 func hasAssignExpansion(n syntax.Node) (found bool) {
 	syntax.Walk(n, func(n syntax.Node) bool {
-		if p, ok := n.(*syntax.ParamExp); ok && p.Exp != nil &&
-			(p.Exp.Op == syntax.AssignUnset || p.Exp.Op == syntax.AssignUnsetOrNull) {
-			found = true
+		switch n := n.(type) {
+		case *syntax.ParamExp:
+			if n.Exp != nil &&
+				(n.Exp.Op == syntax.AssignUnset || n.Exp.Op == syntax.AssignUnsetOrNull) {
+				found = true
+			}
+		case *syntax.BinaryArithm:
+			switch n.Op {
+			case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn, syntax.MulAssgn,
+				syntax.QuoAssgn, syntax.RemAssgn, syntax.AndAssgn, syntax.OrAssgn,
+				syntax.XorAssgn, syntax.ShlAssgn, syntax.ShrAssgn:
+				found = true
+			}
+		case *syntax.UnaryArithm:
+			if n.Op == syntax.Inc || n.Op == syntax.Dec {
+				found = true
+			}
 		}
 		return !found
 	})

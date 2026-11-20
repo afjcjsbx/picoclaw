@@ -42,6 +42,7 @@ func TestConstResolution(t *testing.T) {
 		{`R=rm; cd /tmp; $R -rf x`, RiskCritical},
 		{`D=build; ls $D`, RiskLow},
 		{`R=ls; $R -la`, RiskLow},
+		{`X=$((1+2)); R=ls; $R -la`, RiskLow},
 		{`set -- ls -la; "$@"`, RiskLow},
 		{`set -- sudo ls; "$@"`, RiskCritical},
 		{`set -- ls; "$@" -la`, RiskLow},
@@ -104,6 +105,10 @@ func TestConstResolutionStopsWhenUnsafe(t *testing.T) {
 		`R=rm; R=ls & $R -rf x`,
 		`R=rm; echo | R=ls; $R -rf x`,
 		`R=ls; R=rm :; $R -rf x`,
+		`X=$((IFS=53)); R=ls; $R -la`,
+		`X=$((R++)); R=ls; $R -la`,
+		`R=ls; X=$((IFS+=53)); $R -la`,
+		`C=find; A=x5-delete; X=$((IFS=53)); $C . $A`,
 		`set -- rm -rf; false && set -- ls; "$@" x`,
 		`R=ls; false || R=rm; $R -rf x`,
 		`R=ls; R=rm & $R -rf x`,
@@ -140,6 +145,28 @@ func TestConstResolutionStopsWhenUnsafe(t *testing.T) {
 	} {
 		if blocked := checkGuard(g, command); blocked == nil {
 			t.Errorf("Check(%q) allowed, want blocked", command)
+		}
+	}
+}
+
+// TestConstResolutionStopsOnArithmeticAssignment: arithmetic expansion can
+// assign a variable, including IFS, as a side effect. The tracker must stop
+// resolving after it; otherwise a value such as push5--force is read as one
+// safe word while the shell splits it into git push --force.
+func TestConstResolutionStopsOnArithmeticAssignment(t *testing.T) {
+	t.Parallel()
+
+	g := mustGuard(t, "medium")
+	for _, command := range []string{
+		`X=$((IFS=53)); R=ls; $R -la`,
+		`X=$((R++)); R=ls; $R -la`,
+		`C=git; A=push5--force; X=$((IFS=53)); $C $A`,
+		`C=find; A=x5-delete; X=$((IFS=53)); $C . $A`,
+	} {
+		a := assessCommand(t, g, command)
+		if a.Verdict != VerdictUnknown {
+			t.Errorf("%q = verdict %d level %v (%s), want unknown",
+				command, a.Verdict, a.Level, a.Reason)
 		}
 	}
 }
