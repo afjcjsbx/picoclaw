@@ -13,11 +13,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/session"
 )
 
-// Compile-time interface satisfaction checks.
-var (
-	_ session.SessionStore = (*session.SessionManager)(nil)
-	_ session.SessionStore = (*session.JSONLBackend)(nil)
-)
+// Compile-time interface satisfaction check.
+var _ session.SessionStore = (*session.JSONLBackend)(nil)
 
 func newBackend(t *testing.T) *session.JSONLBackend {
 	t.Helper()

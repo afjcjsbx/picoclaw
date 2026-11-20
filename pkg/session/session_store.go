@@ -35,8 +35,8 @@ type SessionWriter interface {
 //
 // DeleteSession and LastActivity are intentionally not part of this
 // interface: only the session pruner needs them, and it declares its own
-// minimal interfaces (pkg/session/pruner). Both SessionManager and
-// JSONLBackend still expose them as concrete methods.
+// minimal interfaces (pkg/session/pruner). JSONLBackend still exposes them as
+// concrete methods.
 type SessionStore interface {
 	SessionReader
 	SessionWriter

@@ -214,7 +214,12 @@ func NewAgentInstance(
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
-	sessions := initSessionStore(sessionsDir, cfg.Session.DurableWritesEnabled())
+	sessions, err := initSessionStore(sessionsDir, cfg.Session.DurableWritesEnabled())
+	if err != nil {
+		logger.ErrorCF("agent", "Failed to initialize session store",
+			map[string]any{"dir": sessionsDir, "error": err.Error()})
+		panic(fmt.Sprintf("agent: initialize session store in %s: %v", sessionsDir, err))
+	}
 
 	mcpDiscoveryActive := agentHasDiscoverableMCPServers(cfg, agentMCPServerAllowlist)
 	contextBuilder := NewContextBuilder(workspace).
@@ -824,30 +829,26 @@ func closeUnreferencedStatefulProviders(
 }
 
 // initSessionStore creates the session persistence backend.
-// It uses the JSONL store by default and auto-migrates legacy JSON sessions.
-// Falls back to SessionManager if the JSONL store cannot be initialized or
-// if migration fails (which indicates the store cannot write reliably).
-func initSessionStore(dir string, durableWrites bool) session.SessionStore {
+// It uses the JSONL store and auto-migrates legacy JSON sessions. There is no
+// fallback backend: if the store cannot be created or the migration fails,
+// history cannot be persisted safely, so the caller must abort startup instead
+// of running on a partial or legacy store.
+func initSessionStore(dir string, durableWrites bool) (session.SessionStore, error) {
 	store, err := memory.NewJSONLStore(dir, memory.WithDurableWrites(durableWrites))
 	if err != nil {
-		logger.WarnCF("agent", "Memory JSONL store init failed; falling back to json sessions",
-			map[string]any{"error": err.Error()})
-		return session.NewSessionManager(dir)
+		return nil, fmt.Errorf("create JSONL session store: %w", err)
 	}
 
-	if n, merr := memory.MigrateFromJSON(context.Background(), dir, store); merr != nil {
-		// Migration failure means the store could not write data.
-		// Fall back to SessionManager to avoid a split state where
-		// some sessions are in JSONL and others remain in JSON.
-		logger.WarnCF("agent", "Memory migration failed; falling back to json sessions",
-			map[string]any{"error": merr.Error()})
-		store.Close()
-		return session.NewSessionManager(dir)
-	} else if n > 0 {
+	n, err := memory.MigrateFromJSON(context.Background(), dir, store)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("migrate legacy JSON sessions: %w", err)
+	}
+	if n > 0 {
 		logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
 	}
 
-	return session.NewJSONLBackend(store)
+	return session.NewJSONLBackend(store), nil
 }
 
 // budgetWarnIteration returns the iteration at which the budget checkpoint

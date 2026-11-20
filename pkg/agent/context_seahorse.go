@@ -144,7 +144,7 @@ func (m *seahorseContextManager) pruneStores() (stores []pruner.Store, ok bool) 
 }
 
 // asPruneStore returns the session store as a pruning store when its dynamic
-// type supports deletion (JSONLBackend and SessionManager do).
+// type supports deletion (JSONLBackend does).
 func asPruneStore(store session.SessionStore) pruner.Store {
 	if store == nil {
 		return nil

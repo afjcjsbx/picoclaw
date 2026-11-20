@@ -1615,6 +1615,24 @@ func TestNewAgentInstance_RegistersMemoryToolWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestInitSessionStore_ReturnsErrorWhenPathIsFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions")
+	if err := os.WriteFile(path, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store, err := initSessionStore(path, false)
+	if err == nil {
+		if store != nil {
+			_ = store.Close()
+		}
+		t.Fatal("initSessionStore() error = nil, want failure")
+	}
+	if store != nil {
+		t.Fatalf("initSessionStore() store = %v, want nil on failure", store)
+	}
+}
+
 func TestNewAgentInstance_FileToolsLeaveMemoryFilesToTheMemoryTool(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		for name, args := range map[string]map[string]any{

@@ -13,7 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-// jsonSession mirrors pkg/session.Session for migration purposes.
+// jsonSession mirrors the legacy sessions/*.json schema for migration purposes.
 type jsonSession struct {
 	Key      string              `json:"key"`
 	Messages []providers.Message `json:"messages"`

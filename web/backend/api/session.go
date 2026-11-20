@@ -31,7 +31,7 @@ func (h *Handler) registerSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.handleDeleteSession)
 }
 
-// sessionFile mirrors the on-disk session JSON structure from pkg/session.
+// sessionFile mirrors the legacy on-disk session JSON structure (sessions/*.json).
 type sessionFile struct {
 	Key        string              `json:"key"`
 	Messages   []providers.Message `json:"messages"`
