@@ -502,7 +502,7 @@ export function EditModelSheet({
                     <span>
                       {t(
                         modelValidation.messageKey,
-                        modelValidation.messageParams,
+                        modelValidation.messageParams ?? {},
                       )}
                     </span>
                     {modelValidation.fix && (
