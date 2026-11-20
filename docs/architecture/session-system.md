@@ -34,7 +34,6 @@ The session system has four jobs:
 | Layer | Files | Responsibility |
 | --- | --- | --- |
 | Session contract | `pkg/session/session_store.go` | Defines the `SessionStore` interface used by the agent loop. |
-| Legacy backend | `pkg/session/manager.go` | Stores one JSON file per session. Still used as a fallback. |
 | Session adapter | `pkg/session/jsonl_backend.go` | Adapts `pkg/memory.Store` to `SessionStore`, including alias and scope metadata support. |
 | Durable storage | `pkg/memory/jsonl.go` | Append-only JSONL storage plus `.meta.json` sidecar metadata. |
 | Scope and key building | `pkg/session/scope.go`, `pkg/session/key.go`, `pkg/session/allocator.go` | Builds structured scopes, opaque canonical keys, and legacy aliases from routing results. |
@@ -213,9 +212,7 @@ In other words, `Save` is no longer "flush dirty memory to disk"; it is now "rec
 `pkg/memory.JSONLStore` uses a fixed 64-shard mutex array keyed by session hash.
 That gives per-session serialization without keeping an unbounded mutex map in memory.
 
-The legacy `SessionManager` uses a single in-memory map guarded by an RW mutex.
-
-Both backends satisfy the same `SessionStore` interface, which is why the agent loop does not need storage-specific code.
+The agent loop depends only on the `SessionStore` interface, so it does not need storage-specific code.
 
 ## Compatibility And Migration
 
@@ -226,9 +223,8 @@ Startup sequence:
 1. Create `memory.NewJSONLStore(dir)`.
 2. Run `memory.MigrateFromJSON(...)` to import legacy `.json` sessions.
 3. Wrap the store with `session.NewJSONLBackend(store)`.
-4. If JSONL initialization or migration fails, fall back to `session.NewSessionManager(dir)`.
 
-This fallback is intentional: a partial migration would be worse than staying on the legacy store for one run.
+There is no fallback backend. If JSONL initialization or migration fails, agent startup aborts: continuing with a partial or legacy store would risk silently losing history.
 
 ### Alias promotion
 
@@ -260,7 +256,6 @@ The session system is consumed by more than the agent loop:
 ## Related Files
 
 - `pkg/session/session_store.go`
-- `pkg/session/manager.go`
 - `pkg/session/jsonl_backend.go`
 - `pkg/session/scope.go`
 - `pkg/session/key.go`

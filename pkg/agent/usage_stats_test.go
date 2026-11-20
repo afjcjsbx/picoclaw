@@ -27,7 +27,7 @@ func usageAssistantMessage(model string, prompt, completion int) providers.Messa
 }
 
 func TestSessionUsageSummaryFallsBackToHistory(t *testing.T) {
-	agent := &AgentInstance{Sessions: session.NewSessionManager("")}
+	agent := &AgentInstance{Sessions: newTestSessionStore(t)}
 	ctx := context.Background()
 	const sessionKey = "agent:main:test"
 	if err := agent.Sessions.AddFullMessage(ctx, sessionKey, usageAssistantMessage("model-a", 100, 20)); err != nil {

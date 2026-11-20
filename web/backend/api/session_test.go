@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -1760,16 +1759,22 @@ func TestHandleGetSession_LegacyJSONFallback(t *testing.T) {
 	defer cleanup()
 
 	dir := sessionsTestDir(t, configPath)
-	manager := session.NewSessionManager(dir)
-	sessionKey := legacyPicoSessionPrefix + "legacy-json"
-	if err := manager.AddMessage(context.Background(), sessionKey, "user", "legacy user"); err != nil {
-		t.Fatalf("AddMessage() error = %v", err)
+	now := time.Now()
+	legacy := sessionFile{
+		Key: legacyPicoSessionPrefix + "legacy-json",
+		Messages: []providers.Message{
+			{Role: "user", Content: "legacy user"},
+			{Role: "assistant", Content: "legacy assistant"},
+		},
+		Created: now,
+		Updated: now,
 	}
-	if err := manager.AddMessage(context.Background(), sessionKey, "assistant", "legacy assistant"); err != nil {
-		t.Fatalf("AddMessage() error = %v", err)
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
 	}
-	if err := manager.Save(context.Background(), sessionKey); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "legacy-json.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 
 	h := NewHandler(configPath)

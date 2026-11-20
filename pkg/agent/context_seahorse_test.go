@@ -1283,7 +1283,7 @@ func TestSeahorseSummarizeSkipsCondensedWhenBelowThreshold(t *testing.T) {
 type noDeleteStore struct{ session.SessionStore }
 
 func TestSeahorsePruneStoresSkipsWhenStoreCannotDelete(t *testing.T) {
-	mgr := &seahorseContextManager{sessions: noDeleteStore{session.NewSessionManager("")}}
+	mgr := &seahorseContextManager{sessions: noDeleteStore{newTestSessionStore(t)}}
 
 	stores, ok := mgr.pruneStores()
 	if ok {
@@ -1299,7 +1299,7 @@ func TestSeahorsePruneStoresSkipsWhenStoreCannotDelete(t *testing.T) {
 }
 
 func TestSeahorsePruneStoresAcceptsDeletableStore(t *testing.T) {
-	mgr := &seahorseContextManager{sessions: session.NewSessionManager("")}
+	mgr := &seahorseContextManager{sessions: newTestSessionStore(t)}
 
 	stores, ok := mgr.pruneStores()
 	if !ok || len(stores) != 1 {

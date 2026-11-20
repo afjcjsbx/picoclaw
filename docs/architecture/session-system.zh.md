@@ -29,7 +29,6 @@ Session 系统承担四件事：
 | 层次 | 文件 | 作用 |
 | --- | --- | --- |
 | Session 抽象 | `pkg/session/session_store.go` | 定义 agent loop 依赖的 `SessionStore` 接口。 |
-| 旧后端 | `pkg/session/manager.go` | 每个 session 一个 JSON 文件的旧实现，仍作为回退方案保留。 |
 | Session 适配层 | `pkg/session/jsonl_backend.go` | 把 `pkg/memory.Store` 适配成 `SessionStore`，并支持 alias 与 scope metadata。 |
 | 持久化存储 | `pkg/memory/jsonl.go` | Append-only JSONL 存储与 `.meta.json` 元数据侧文件。 |
 | Scope / Key 构建 | `pkg/session/scope.go`、`pkg/session/key.go`、`pkg/session/allocator.go` | 从路由结果生成结构化 scope、不透明 canonical key 和 legacy alias。 |
@@ -205,9 +204,7 @@ JSONL store 的设计核心是“追加优先、宁可暂时读到旧数据也�
 `pkg/memory.JSONLStore` 使用固定 64 分片 mutex，按 session key 的 hash 做串行化。
 这样既能做到“按 session 串行”，又不会因为 session 数量增长而把 mutex map 做成无界结构。
 
-旧的 `SessionManager` 则是一个内存 map 加 RW mutex。
-
-这两个实现都满足同一个 `SessionStore` 接口，所以 agent loop 不需要写任何存储后端特化逻辑。
+agent loop 只依赖 `SessionStore` 接口，因此不需要写任何存储后端特化逻辑。
 
 ## 兼容与迁移
 
@@ -218,9 +215,8 @@ JSONL store 的设计核心是“追加优先、宁可暂时读到旧数据也�
 1. 创建 `memory.NewJSONLStore(dir)`。
 2. 执行 `memory.MigrateFromJSON(...)`，把旧 `.json` session 迁入新格式。
 3. 用 `session.NewJSONLBackend(store)` 包装。
-4. 如果 JSONL 初始化或迁移失败，则回退到 `session.NewSessionManager(dir)`。
 
-这个回退是刻意设计的：做一半的迁移，比整轮继续使用旧后端更危险。
+没有后备存储：如果 JSONL 初始化或迁移失败，agent 启动会直接中止，避免在部分迁移或旧存储上静默丢失历史。
 
 ### Alias 提升
 
@@ -250,7 +246,6 @@ Session 系统不只被 agent loop 使用：
 ## 相关文件
 
 - `pkg/session/session_store.go`
-- `pkg/session/manager.go`
 - `pkg/session/jsonl_backend.go`
 - `pkg/session/scope.go`
 - `pkg/session/key.go`
