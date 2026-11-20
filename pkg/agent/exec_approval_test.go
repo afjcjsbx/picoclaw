@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -62,20 +63,28 @@ func execApprovalRequest(origin bus.InboundContext, command string) *ToolApprova
 	}
 }
 
-func waitExecApprovalPrompt(t *testing.T, mgr *execApprovalTestManager) string {
+func waitExecApprovalPromptMessage(
+	t *testing.T,
+	mgr *execApprovalTestManager,
+) bus.OutboundMessage {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case msg := <-mgr.sent:
 			if strings.Contains(msg.Content, "Approval required") {
-				return msg.Content
+				return msg
 			}
 		case <-deadline:
 			t.Fatal("approval prompt was not sent")
-			return ""
+			return bus.OutboundMessage{}
 		}
 	}
+}
+
+func waitExecApprovalPrompt(t *testing.T, mgr *execApprovalTestManager) string {
+	t.Helper()
+	return waitExecApprovalPromptMessage(t, mgr).Content
 }
 
 func execApprovalToken(t *testing.T, prompt string) string {
@@ -177,6 +186,49 @@ func TestExecUnknownApprovalApproveAndDeny(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("denial did not complete")
+	}
+}
+
+func TestExecUnknownApprovalPromptCarriesInteractiveMetadata(t *testing.T) {
+	t.Parallel()
+	requireUnixRiskClassifier(t)
+
+	al, mgr, origin, cleanup := newExecApprovalTestLoop(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan ApprovalDecision, 1)
+	go func() { done <- al.hooks.ApproveTool(ctx, execApprovalRequest(origin, "docker ps")) }()
+
+	prompt := waitExecApprovalPromptMessage(t, mgr)
+	token := execApprovalToken(t, prompt.Content)
+	raw := prompt.Context.Raw
+	if got := raw[metadataKeyMessageKind]; got != messageKindApproval {
+		t.Fatalf("message_kind = %q, want %q", got, messageKindApproval)
+	}
+	if got := raw[metadataKeyApprovalToken]; got != token {
+		t.Fatalf("approval_token = %q, want %q", got, token)
+	}
+	if got := raw[metadataKeyApprovalCommand]; got != `"docker ps"` {
+		t.Fatalf("approval_command = %q, want %q", got, `"docker ps"`)
+	}
+	if got := raw[metadataKeyApprovalReason]; got == "" {
+		t.Fatal("approval_reason is empty")
+	}
+	expiresAt, err := strconv.ParseInt(raw[metadataKeyApprovalExpires], 10, 64)
+	if err != nil || expiresAt <= time.Now().UnixMilli() {
+		t.Fatalf("approval_expires_at = %q, err = %v", raw[metadataKeyApprovalExpires], err)
+	}
+
+	if !al.tryHandleExecApproval(ctx, bus.InboundMessage{
+		Context: origin,
+		Content: "approve " + token,
+	}) {
+		t.Fatal("approval reply was not intercepted")
+	}
+	if decision := <-done; !decision.Approved {
+		t.Fatalf("approved command was denied: %s", decision.Reason)
 	}
 }
 

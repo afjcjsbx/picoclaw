@@ -32,9 +32,16 @@ const (
 	PayloadKeyUsage       = "usage"
 	PayloadKeyEvent       = "event"
 	PayloadKeyFinal       = "final"
+	PayloadKeyApproval    = "approval"
 
 	MessageKindThought   = "thought"
 	MessageKindToolCalls = "tool_calls"
+	MessageKindApproval  = "approval"
+
+	ApprovalKeyToken     = "token"
+	ApprovalKeyCommand   = "command"
+	ApprovalKeyReason    = "reason"
+	ApprovalKeyExpiresAt = "expires_at"
 )
 
 // PicoMessage is the wire format for all Pico Protocol messages.

@@ -2761,6 +2761,63 @@ func TestPreSend_AuxiliaryMessageKeepsTyping(t *testing.T) {
 	}
 }
 
+func TestPreSend_ApprovalPromptSurvivesFinishedStream(t *testing.T) {
+	m := newTestManager()
+	m.streamActive.Store("test:123", true)
+
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "Approval required",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"message_kind": "approval",
+			},
+		},
+	})
+	msgIDs, handled := m.preSend(context.Background(), "test", msg, &mockChannel{})
+	if handled {
+		t.Fatalf("approval prompt must not be suppressed by a finished stream, got %v", msgIDs)
+	}
+}
+
+func TestPreSend_ApprovalPromptBypassesPlaceholderEdit(t *testing.T) {
+	m := newTestManager()
+
+	ch := &mockDeletingMessageEditor{
+		mockMessageEditor: mockMessageEditor{
+			editFn: func(_ context.Context, _, _, _ string) error {
+				t.Fatal("expected approval prompt to bypass placeholder edit")
+				return nil
+			},
+		},
+	}
+
+	m.RecordPlaceholder("test", "123", "456")
+
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "Approval required",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"message_kind": "approval",
+			},
+		},
+	})
+	msgIDs, handled := m.preSend(context.Background(), "test", msg, ch)
+	if handled {
+		t.Fatalf("approval prompt must fall through so the channel can send a new message, got %v", msgIDs)
+	}
+	if ch.deleteCalls != 1 {
+		t.Fatalf("expected placeholder deletion, got %d delete calls", ch.deleteCalls)
+	}
+}
+
 func TestPreSend_NoRegisteredState(t *testing.T) {
 	m := newTestManager()
 

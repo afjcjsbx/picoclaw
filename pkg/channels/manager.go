@@ -212,7 +212,10 @@ func outboundMessageHasAuxiliaryKind(msg bus.OutboundMessage) bool {
 	if len(msg.Context.Raw) == 0 {
 		return false
 	}
-	return strings.TrimSpace(msg.Context.Raw["message_kind"]) != ""
+	kind := strings.TrimSpace(msg.Context.Raw["message_kind"])
+	// Approval prompts are interactive control messages, not stream output, so
+	// a finalized stream must not suppress them.
+	return kind != "" && !strings.EqualFold(kind, "approval")
 }
 
 func outboundMessageIsFinal(msg bus.OutboundMessage) bool {
@@ -227,7 +230,9 @@ func outboundMessageBypassesPlaceholderEdit(msg bus.OutboundMessage) bool {
 		return false
 	}
 	kind := strings.TrimSpace(msg.Context.Raw["message_kind"])
-	return strings.EqualFold(kind, "thought") || strings.EqualFold(kind, "tool_calls")
+	return strings.EqualFold(kind, "thought") ||
+		strings.EqualFold(kind, "tool_calls") ||
+		strings.EqualFold(kind, "approval")
 }
 
 func outboundMessageEditPayload(msg bus.OutboundMessage, content string) map[string]any {

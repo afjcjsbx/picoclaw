@@ -77,6 +77,31 @@ describe("parseAssistantMessageCreateState", () => {
       },
     ])
   })
+
+  it("parses an interactive approval payload", () => {
+    expect(
+      parseAssistantMessageCreateState({
+        content: "Approval required",
+        kind: "approval",
+        approval: {
+          token: "0123456789abcdef0123456789abcdef",
+          command: '"docker ps"',
+          reason: "command is not in the risk table",
+          expires_at: 1700000000000,
+        },
+      }),
+    ).toEqual({
+      content: "Approval required",
+      kind: "approval",
+      toolCalls: undefined,
+      approval: {
+        token: "0123456789abcdef0123456789abcdef",
+        command: '"docker ps"',
+        reason: "command is not in the risk table",
+        expiresAt: 1700000000000,
+      },
+    })
+  })
 })
 
 describe("parseAssistantMessageUpdateState", () => {

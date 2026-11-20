@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -191,9 +192,26 @@ func (h *execUnknownCommandApprovalHook) ask(
 			"This request expires in %s.\n\n%sCommand: %s",
 		token, token, remaining.Round(time.Second), reasonLine, display,
 	)
+	outboundCtx := outboundContextFromInbound(
+		req.Context.Inbound,
+		origin.Channel,
+		origin.ChatID,
+		origin.MessageID,
+	)
+	if outboundCtx.Raw == nil {
+		outboundCtx.Raw = make(map[string]string, 5)
+	}
+	outboundCtx.Raw[metadataKeyMessageKind] = messageKindApproval
+	outboundCtx.Raw[metadataKeyApprovalToken] = token
+	outboundCtx.Raw[metadataKeyApprovalCommand] = display
+	outboundCtx.Raw[metadataKeyApprovalExpires] = strconv.FormatInt(deadline.UnixMilli(), 10)
+	if reason != "" {
+		outboundCtx.Raw[metadataKeyApprovalReason] = reason
+	}
+
 	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	err := al.channelManager.SendMessage(sendCtx, bus.OutboundMessage{
-		Context:    origin,
+		Context:    outboundCtx,
 		AgentID:    req.Meta.AgentID,
 		SessionKey: req.Meta.SessionKey,
 		Content:    message,

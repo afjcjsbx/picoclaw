@@ -337,6 +337,75 @@ func TestSend_ThoughtMessageDoesNotFinalizeTrackedToolFeedback(t *testing.T) {
 	}
 }
 
+func TestSend_ApprovalMessageCarriesInteractivePrompt(t *testing.T) {
+	ch := newTestPicoChannel(t)
+
+	if err := ch.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer ch.Stop(context.Background())
+
+	clientConn, received, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{id: "conn-1", conn: clientConn, sessionID: "sess-1"})
+	ch.RecordToolFeedbackMessage("pico:sess-1", "msg-progress", "🔧 `exec`\nRunning")
+
+	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "pico:sess-1",
+		Content: "Approval required for an unknown exec command.",
+		Context: bus.InboundContext{
+			Channel: "pico",
+			ChatID:  "pico:sess-1",
+			Raw: map[string]string{
+				"message_kind":        MessageKindApproval,
+				"approval_token":      "0123456789abcdef0123456789abcdef",
+				"approval_command":    `"docker ps"`,
+				"approval_reason":     "command is not in the risk table",
+				"approval_expires_at": "1700000000000",
+				PayloadKeyModelName:   "gpt-5.4",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Send(approval) error = %v", err)
+	}
+
+	select {
+	case msg := <-received:
+		if msg.Type != TypeMessageCreate {
+			t.Fatalf("approval message type = %q, want %q", msg.Type, TypeMessageCreate)
+		}
+		payload := msg.Payload
+		if got := payload[PayloadKeyKind]; got != MessageKindApproval {
+			t.Fatalf("approval kind = %#v, want %q", got, MessageKindApproval)
+		}
+		approval, ok := payload[PayloadKeyApproval].(map[string]any)
+		if !ok {
+			t.Fatalf("approval payload = %#v, want map", payload[PayloadKeyApproval])
+		}
+		if got := approval[ApprovalKeyToken]; got != "0123456789abcdef0123456789abcdef" {
+			t.Fatalf("approval token = %#v", got)
+		}
+		if got := approval[ApprovalKeyCommand]; got != `"docker ps"` {
+			t.Fatalf("approval command = %#v", got)
+		}
+		if got := approval[ApprovalKeyReason]; got != "command is not in the risk table" {
+			t.Fatalf("approval reason = %#v", got)
+		}
+		if got, ok := approval[ApprovalKeyExpiresAt].(float64); !ok || int64(got) != 1700000000000 {
+			t.Fatalf("approval expires_at = %#v", approval[ApprovalKeyExpiresAt])
+		}
+		if _, ok := payload[PayloadKeyFinal]; ok {
+			t.Fatal("approval message must not be marked final")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected approval message to be delivered")
+	}
+
+	if msgID, ok := ch.currentToolFeedbackMessage("pico:sess-1"); !ok || msgID != "msg-progress" {
+		t.Fatalf("tracked tool feedback = (%q, %v), want (msg-progress, true)", msgID, ok)
+	}
+}
+
 func TestSend_ToolCallsMessageIncludesModelName(t *testing.T) {
 	ch := newTestPicoChannel(t)
 
