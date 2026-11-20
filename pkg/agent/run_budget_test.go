@@ -82,7 +82,7 @@ func TestPruneIgnoresRunBudgetNoticeLength(t *testing.T) {
 		{Role: "tool", Content: both},
 		{Role: "tool", Content: rev},
 	}
-	if pruneToolResultsBefore(history, len(history)) {
+	if pruneToolResultsBefore(history, len(history), "") {
 		t.Fatalf("short results carrying notices were pruned: %+v", history)
 	}
 }

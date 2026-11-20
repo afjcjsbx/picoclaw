@@ -392,8 +392,9 @@ func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
 	if len(got) != len(history) || result.DroppedMessages != 0 {
 		t.Fatalf("pruning dropped messages: got %d messages, dropped %d", len(got), result.DroppedMessages)
 	}
-	if got[2].Content != "[Old tool output cleared to save context space]" || got[2].ToolCallID != "old-call" {
-		t.Fatalf("old tool result not safely pruned: %+v", got[2])
+	data := readArchivedToolResult(t, got[2].Content)
+	if string(data) != largeOutput || got[2].ToolCallID != "old-call" {
+		t.Fatalf("old tool result not safely archived: %+v", got[2])
 	}
 	if got[6].Content != "recent output" {
 		t.Fatalf("recent tool result should remain intact: %+v", got[6])
@@ -590,6 +591,86 @@ func TestLegacyCompact_Threshold_SummarizesSynchronously(t *testing.T) {
 	}
 }
 
+// readArchivedToolResult returns the file an archive stub points at.
+func readArchivedToolResult(t *testing.T, stub string) []byte {
+	t.Helper()
+	rest, ok := strings.CutPrefix(stub, archivedToolResultPrefix)
+	if !ok {
+		t.Fatalf("content = %q, want an archive stub", stub)
+	}
+	path, _, _ := strings.Cut(rest, ";")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("archived output unreadable: %v", err)
+	}
+	return data
+}
+
+// Evicted tool outputs are archived under the workspace and the stub fits the
+// prune limit, so a later pass leaves it alone instead of archiving it again.
+func TestPruneToolResultsArchivesBeforeEviction(t *testing.T) {
+	workspace := t.TempDir()
+	bulky := strings.Repeat("z", 500)
+	history := []providers.Message{
+		{Role: "tool", Content: bulky},
+		{Role: "tool", Content: "short"},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the bulky result to be evicted")
+	}
+	if got := readArchivedToolResult(t, history[0].Content); string(got) != bulky {
+		t.Fatalf("archived output = %q, want the original", got)
+	}
+	if len(history[0].Content) >= len(bulky) {
+		t.Fatalf("stub is %d chars, want it shorter than the %d chars it replaces", len(history[0].Content), len(bulky))
+	}
+	if history[1].Content != "short" {
+		t.Fatalf("short result changed: %q", history[1].Content)
+	}
+	if pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("a stub must not be archived again")
+	}
+	files, _ := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if len(files) != 1 {
+		t.Fatalf("archive files = %d, want 1", len(files))
+	}
+}
+
+// A stub longer than the output it replaces would grow the context, so a result
+// barely over the prune limit is cleared instead and leaves no file behind.
+func TestPruneToolResultsSkipsArchiveWhenStubIsLonger(t *testing.T) {
+	workspace := t.TempDir()
+	history := []providers.Message{{Role: "tool", Content: strings.Repeat("z", minToolResultChars+1)}}
+	workspace = filepath.Join(workspace, strings.Repeat("d", 200)) // deep path: the stub outgrows the output
+	if !pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("expected eviction")
+	}
+	if history[0].Content != prunedToolResult {
+		t.Fatalf("content = %q, want %q", history[0].Content, prunedToolResult)
+	}
+	files, _ := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if len(files) != 0 {
+		t.Fatalf("archive files = %d, want 0", len(files))
+	}
+}
+
+// Without a usable archive the eviction stays lossy but still frees the context.
+func TestPruneToolResultsFallsBackWhenArchiveFails(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, workspace := range []string{"", blocked} { // no workspace; .artifacts under a regular file
+		history := []providers.Message{{Role: "tool", Content: strings.Repeat("z", 500)}}
+		if !pruneToolResultsBefore(history, 1, workspace) {
+			t.Fatalf("workspace %q: expected eviction", workspace)
+		}
+		if history[0].Content != prunedToolResult {
+			t.Fatalf("workspace %q: content = %q, want %q", workspace, history[0].Content, prunedToolResult)
+		}
+	}
+}
+
 // With nothing older than the active turn to summarize, the threshold path
 // clears old tool outputs instead, and reports a clean session as nothing to do.
 func TestLegacyCompact_Threshold_PrunesToolOutputsOfSingleTurn(t *testing.T) {
@@ -625,8 +706,8 @@ func TestLegacyCompact_Threshold_PrunesToolOutputsOfSingleTurn(t *testing.T) {
 	if len(got) != len(history) {
 		t.Fatalf("messages = %d, want %d (pruning must not drop messages)", len(got), len(history))
 	}
-	if got[2].Content != prunedToolResult {
-		t.Fatalf("old tool output = %q, want it cleared", got[2].Content)
+	if data := readArchivedToolResult(t, got[2].Content); string(data) != bulky {
+		t.Fatalf("archived output = %q, want the original", data)
 	}
 	if got[6].Content != bulky {
 		t.Fatalf("recent tool output must be kept, got %q", got[6].Content)

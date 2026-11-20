@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +13,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // legacyContextManager wraps the existing summarization/compression logic
@@ -152,11 +155,43 @@ func (m *legacyContextManager) Clear(ctx context.Context, sessionKey string) err
 }
 
 const (
-	// prunedToolResult replaces bulky tool outputs outside the protected tail.
-	prunedToolResult   = "[Old tool output cleared to save context space]"
-	protectedTail      = 4
-	minToolResultChars = 200
+	// prunedToolResult replaces bulky tool outputs outside the protected tail
+	// when they could not be archived.
+	prunedToolResult = "[Old tool output cleared to save context space]"
+	// archivedToolResultPrefix starts the stub that replaces an archived tool
+	// output; it also marks a result as already evicted.
+	archivedToolResultPrefix = "[Old tool output archived at "
+	protectedTail            = 4
+	minToolResultChars       = 200
 )
+
+// isEvictedToolResult reports whether content is a stub left by pruning.
+func isEvictedToolResult(content string) bool {
+	return content == prunedToolResult || strings.HasPrefix(content, archivedToolResultPrefix)
+}
+
+// archiveToolResult saves a tool output before it is evicted and returns the
+// stub that replaces it in the history; the model recovers the output with
+// read_file. An empty workspace, a write failure, or a stub no shorter than the
+// output (a deep workspace path) falls back to prunedToolResult. Files go in
+// their own artifact dir so they and live tool spills do not push each other
+// out of the retention bound.
+func archiveToolResult(workspace, content string) string {
+	if workspace == "" {
+		return prunedToolResult
+	}
+	path, err := toolshared.PersistTextArtifact(
+		filepath.Join(workspace, ".artifacts", "evicted"), "tool_result_*.txt", content)
+	if err != nil {
+		return prunedToolResult
+	}
+	stub := archivedToolResultPrefix + path + "; read_file it, or re-run the tool]"
+	if len(stub) >= len(content) {
+		_ = os.Remove(path)
+		return prunedToolResult
+	}
+	return stub
+}
 
 // resultLen is len(content) without trailing budget notices, so a notice alone
 // never makes a short result bulky enough to be pruned.
@@ -170,20 +205,22 @@ func resultLen(content string) int {
 	return n
 }
 
-// pruneOldToolResults clears tool outputs longer than minToolResultChars that
-// sit before the last protectedTail messages, in place. Media-carrying results
+// pruneOldToolResults evicts tool outputs longer than minToolResultChars that
+// sit before the last protectedTail messages, in place: each is archived under
+// workspace and replaced by a stub pointing at the file. Media-carrying results
 // are kept. It reports whether anything changed.
-func pruneOldToolResults(history []providers.Message) bool {
-	return pruneToolResultsBefore(history, len(history)-protectedTail)
+func pruneOldToolResults(history []providers.Message, workspace string) bool {
+	return pruneToolResultsBefore(history, len(history)-protectedTail, workspace)
 }
 
 // pruneToolResultsBefore is pruneOldToolResults for history[:end].
-func pruneToolResultsBefore(history []providers.Message, end int) bool {
+func pruneToolResultsBefore(history []providers.Message, end int, workspace string) bool {
 	pruned := false
 	for i := 0; i < end; i++ {
 		if history[i].Role == "tool" && resultLen(history[i].Content) > minToolResultChars &&
-			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 {
-			history[i].Content = prunedToolResult
+			len(history[i].Media) == 0 && len(history[i].Attachments) == 0 &&
+			!isEvictedToolResult(history[i].Content) {
+			history[i].Content = archiveToolResult(workspace, history[i].Content)
 			pruned = true
 		}
 	}
@@ -211,7 +248,7 @@ func (m *legacyContextManager) pruneSessionToolResults(
 		activeLen = matchingTurnMessageTail(history, persisted)
 		end = min(end, activeTurnPruneEnd(history, persisted))
 	}
-	if !pruneToolResultsBefore(history, end) {
+	if !pruneToolResultsBefore(history, end, agent.Workspace) {
 		return 0, false
 	}
 	if activeLen > 0 {
@@ -245,7 +282,7 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 		warnSessionStoreError(sessionKey, "get history", err)
 		history = []providers.Message{}
 	}
-	if pruneOldToolResults(history) {
+	if pruneOldToolResults(history, agent.Workspace) {
 		warnSessionStoreError(
 			sessionKey,
 			"set history",

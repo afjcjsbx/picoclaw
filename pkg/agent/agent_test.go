@@ -5575,7 +5575,7 @@ func TestPruneIgnoresBudgetNoticeLength(t *testing.T) {
 		{Role: "tool", Content: long + notice},  // genuinely bulky: still pruned
 		{Role: "tool", Content: long},
 	}
-	if !pruneToolResultsBefore(history, len(history)) {
+	if !pruneToolResultsBefore(history, len(history), "") {
 		t.Fatal("expected the bulky results to be pruned")
 	}
 	if history[0].Content != short+notice {
