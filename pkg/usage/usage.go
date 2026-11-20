@@ -48,21 +48,39 @@ func (t *Totals) FreshInputTokens() int {
 }
 
 // InputBreakdown renders the input token count and, when the provider reported
-// cache activity, the fresh/cache-read/cache-write split.
+// cache activity, the fresh/cache-read/cache-write split with each share of
+// the input tokens.
 func (t *Totals) InputBreakdown() string {
 	line := FormatTokens(t.InputTokens) + " tokens"
 	if t.CacheReadTokens == 0 && t.CacheCreationTokens == 0 {
 		return line
 	}
 
-	parts := []string{"fresh " + FormatTokens(t.FreshInputTokens())}
+	parts := []string{inputShare("fresh", t.FreshInputTokens(), t.InputTokens)}
 	if t.CacheReadTokens > 0 {
-		parts = append(parts, "cache read "+FormatTokens(t.CacheReadTokens))
+		parts = append(parts, inputShare("cache read", t.CacheReadTokens, t.InputTokens))
 	}
 	if t.CacheCreationTokens > 0 {
-		parts = append(parts, "cache write "+FormatTokens(t.CacheCreationTokens))
+		parts = append(parts, inputShare("cache write", t.CacheCreationTokens, t.InputTokens))
 	}
-	return line + " (" + strings.Join(parts, " · ") + ")"
+	return line + " — " + strings.Join(parts, " · ")
+}
+
+// inputShare renders a token count with its one-decimal percentage of all
+// input tokens. A nonzero share below 0.1% does not render as 0.0%.
+func inputShare(label string, tokens, input int) string {
+	return label + " " + FormatTokens(tokens) + " (" + formatShare(tokens, input) + ")"
+}
+
+func formatShare(tokens, input int) string {
+	if tokens <= 0 || input <= 0 {
+		return "0%"
+	}
+	share := strconv.FormatFloat(float64(tokens)*100/float64(input), 'f', 1, 64)
+	if share == "0.0" {
+		return "<0.1%"
+	}
+	return share + "%"
 }
 
 // Merge adds other to t.
