@@ -151,6 +151,8 @@ You can also inspect skills and MCP servers directly from Telegram:
 - `/use <skill>` and then send the actual request in the next message
 - `/use clear`
 
+When you send a command that needs a sub-command (for example `/list`), the usage reply includes inline-keyboard buttons for the sub-commands that can run without arguments. Tapping one runs the equivalent slash command, so you do not have to type it again.
+
 **4. Advanced Formatting**
 You can set use_markdown_v2: true to enable enhanced formatting options. This allows the bot to utilize the full range of Telegram MarkdownV2 features, including nested styles, spoilers, and custom fixed-width blocks.
 
