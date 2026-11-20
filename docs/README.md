@@ -16,7 +16,7 @@ If you are browsing docs rather than reorganizing them, start with these directo
 - [Documentation Home](index.md): user-facing landing page with quick start and reading paths.
 - [Guides](guides/): setup, configuration, provider, and workflow guides.
 - [Reference](reference/): precise configuration and behavior reference.
-- [Operations](operations/): debugging and troubleshooting material.
+- [Operations](operations/): troubleshooting, debugging, and backup/restore material.
 - [Security](security/): security-focused guides and controls.
 - [Architecture](architecture/): implementation notes and internal design docs.
 - [Tools](tools/): tool-specific deep dives.

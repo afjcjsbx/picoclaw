@@ -499,6 +499,8 @@ Connect PicoClaw to the Agent Social Network by sending a single message via the
 | `picoclaw gateway`        | Start the gateway                    |
 | `picoclaw status`         | Show status                          |
 | `picoclaw usage`          | Show session token usage and cost    |
+| `picoclaw backup`         | Snapshot config, sessions, and skills |
+| `picoclaw restore <file>` | Restore a PicoClaw snapshot           |
 | `picoclaw version`        | Show version info                    |
 | `picoclaw model`          | View or switch the default model     |
 | `picoclaw mcp list`       | List configured MCP servers          |

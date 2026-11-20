@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/agent"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/auth"
+	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/backupcmd"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/cliui"
 	configcmd "github.com/sipeed/picoclaw/cmd/picoclaw/internal/config"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/cron"
@@ -144,6 +145,8 @@ picoclaw --no-color status`,
 		mcp.NewMCPCommand(),
 		plugin.NewPluginCommand(),
 		migrate.NewMigrateCommand(),
+		backupcmd.NewBackupCommand(),
+		backupcmd.NewRestoreCommand(),
 		skills.NewSkillsCommand(),
 		model.NewModelCommand(),
 		updater.NewUpdateCommand("picoclaw"),
