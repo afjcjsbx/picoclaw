@@ -1250,6 +1250,44 @@ type MessageToolsConfig struct {
 	MediaEnabled bool `json:"media_enabled" yaml:"-" env:"PICOCLAW_TOOLS_MESSAGE_MEDIA_ENABLED"`
 }
 
+// AskUserToolsConfig configures the Ask User (ask_user) tool.
+type AskUserToolsConfig struct {
+	ToolConfig `yaml:"-" envPrefix:"PICOCLAW_TOOLS_ASK_USER_"`
+
+	// TimeoutSeconds is how long the chat adapter waits for the user before
+	// returning a timed_out result. The countdown starts when the first
+	// question is delivered. A non-positive value uses the default.
+	TimeoutSeconds int `json:"timeout_seconds" yaml:"-" env:"PICOCLAW_TOOLS_ASK_USER_TIMEOUT_SECONDS"`
+
+	// MaxPromptChars bounds the rendered prompt of a single question. It keeps
+	// long questions and options inside the message limits of common channels.
+	// A non-positive value uses the default.
+	MaxPromptChars int `json:"max_prompt_chars" yaml:"-" env:"PICOCLAW_TOOLS_ASK_USER_MAX_PROMPT_CHARS"`
+}
+
+// DefaultAskUserTimeoutSeconds is the default Ask User interaction timeout.
+const DefaultAskUserTimeoutSeconds = 300
+
+// DefaultAskUserMaxPromptChars is the default per-question prompt budget.
+const DefaultAskUserMaxPromptChars = 1900
+
+// GetTimeout returns the configured interaction timeout.
+func (c AskUserToolsConfig) GetTimeout() time.Duration {
+	seconds := c.TimeoutSeconds
+	if seconds <= 0 {
+		seconds = DefaultAskUserTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// GetMaxPromptChars returns the per-question prompt budget in characters.
+func (c AskUserToolsConfig) GetMaxPromptChars() int {
+	if c.MaxPromptChars <= 0 {
+		return DefaultAskUserMaxPromptChars
+	}
+	return c.MaxPromptChars
+}
+
 type BraveConfig struct {
 	Enabled    bool          `json:"enabled"           yaml:"-"                  env:"PICOCLAW_TOOLS_WEB_BRAVE_ENABLED"`
 	APIKeys    SecureStrings `json:"api_keys,omitzero" yaml:"api_keys,omitempty" env:"PICOCLAW_TOOLS_WEB_BRAVE_API_KEYS"`
@@ -1662,6 +1700,7 @@ type ToolsConfig struct {
 	ArtifactMaxAgeHours int                     `json:"artifact_max_age_hours" yaml:"-"                env:"PICOCLAW_TOOLS_ARTIFACT_MAX_AGE_HOURS"`
 	Web                 WebToolsConfig          `json:"web"                    yaml:"web,omitempty"`
 	Cron                CronToolsConfig         `json:"cron"                   yaml:"-"`
+	AskUser             AskUserToolsConfig      `json:"ask_user"               yaml:"-"`
 	Exec                ExecConfig              `json:"exec"                   yaml:"-"`
 	Skills              SkillsToolsConfig       `json:"skills"                 yaml:"skills,omitempty"`
 	MediaCleanup        MediaCleanupConfig      `json:"media_cleanup"          yaml:"-"`
@@ -2479,6 +2518,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.Web.Enabled
 	case "cron":
 		return t.Cron.Enabled
+	case "ask_user":
+		return t.AskUser.Enabled
 	case "exec":
 		return t.Exec.Enabled
 	case "skills":

@@ -1,0 +1,525 @@
+package askuser
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
+)
+
+// DefaultTimeout is used when the adapter is configured without a timeout.
+const DefaultTimeout = 5 * time.Minute
+
+// DefaultMaxPromptRunes is the default upper bound for one rendered question
+// prompt. It fits the smallest common chat limits (Discord: 2000 characters,
+// Telegram: 4096) with a small margin for the framing text.
+const DefaultMaxPromptRunes = 1900
+
+// SendFunc delivers one ask_user prompt to the user.
+type SendFunc func(ctx context.Context, channel, chatID, content string) error
+
+// Broker routes the next inbound message of a conversation to the ask_user
+// interaction currently waiting on that conversation. The agent loop owns the
+// inbound side and calls Deliver; the adapter owns the waiting side.
+type Broker struct {
+	mu      sync.Mutex
+	waiters map[string]*waiter
+}
+
+type waiter struct {
+	mu      sync.Mutex
+	closed  bool
+	replies chan string
+}
+
+func newWaiter() *waiter {
+	return &waiter{replies: make(chan string, 1)}
+}
+
+// NewBroker creates an empty clarification broker.
+func NewBroker() *Broker {
+	return &Broker{waiters: make(map[string]*waiter)}
+}
+
+// BrokerKey identifies an interaction. The routing key binds it to the
+// conversation, the asking agent, the requester and the session, so a reply
+// from another participant, another agent or another session cannot satisfy
+// the pending question. channel+chatID is the routing identity used by inbound
+// messages; the session key is a fallback for callers without chat context.
+func BrokerKey(channel, chatID, agentID, senderID, sessionKey string) string {
+	channel = strings.TrimSpace(channel)
+	chatID = strings.TrimSpace(chatID)
+	if channel != "" && chatID != "" {
+		return strings.Join([]string{
+			channel,
+			chatID,
+			strings.TrimSpace(agentID),
+			strings.TrimSpace(senderID),
+			strings.TrimSpace(sessionKey),
+		}, "\x00")
+	}
+	return strings.TrimSpace(sessionKey)
+}
+
+// Deliver hands an inbound user message to a waiting interaction. It returns
+// false when no interaction is waiting for this conversation, so the caller
+// can process the message normally.
+func (b *Broker) Deliver(key, content string) bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	waiter := b.waiters[key]
+	b.mu.Unlock()
+	if waiter == nil {
+		return false
+	}
+	return waiter.deliver(content)
+}
+
+func (b *Broker) register(key string) (*waiter, error) {
+	if key == "" {
+		return nil, errors.New("ask_user requires an active conversation")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, exists := b.waiters[key]; exists {
+		return nil, errors.New("another ask_user request is already pending for this conversation")
+	}
+	waiter := newWaiter()
+	b.waiters[key] = waiter
+	return waiter, nil
+}
+
+func (b *Broker) unregister(key string, candidate *waiter) {
+	b.mu.Lock()
+	if current, exists := b.waiters[key]; exists && current == candidate {
+		delete(b.waiters, key)
+	}
+	b.mu.Unlock()
+	candidate.close()
+}
+
+func (w *waiter) deliver(content string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return false
+	}
+	select {
+	case w.replies <- content:
+		return true
+	default:
+		return false
+	}
+}
+
+func (w *waiter) close() {
+	w.mu.Lock()
+	w.closed = true
+	w.mu.Unlock()
+}
+
+func (w *waiter) next(ctx context.Context, timeout time.Duration) (string, bool, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case reply := <-w.replies:
+		return reply, true, nil
+	case <-timer.C:
+		return "", false, nil
+	case <-ctx.Done():
+		return "", false, ctx.Err()
+	}
+}
+
+func (w *waiter) drain() {
+	for {
+		select {
+		case <-w.replies:
+		default:
+			return
+		}
+	}
+}
+
+// ChatAdapter renders questions as chat messages and waits for textual replies
+// through the broker. It reproduces the semantics of a numbered-option UI on
+// platforms without cards or buttons.
+type ChatAdapter struct {
+	broker  *Broker
+	send    SendFunc
+	timeout time.Duration
+
+	maxPromptRunes int
+}
+
+// NewChatAdapter builds a text/chat adapter. A non-positive timeout falls back
+// to DefaultTimeout.
+func NewChatAdapter(broker *Broker, send SendFunc, timeout time.Duration) *ChatAdapter {
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	return &ChatAdapter{
+		broker:         broker,
+		send:           send,
+		timeout:        timeout,
+		maxPromptRunes: DefaultMaxPromptRunes,
+	}
+}
+
+// SetMaxPromptRunes overrides the per-question prompt budget. Non-positive
+// values restore the default.
+func (a *ChatAdapter) SetMaxPromptRunes(limit int) {
+	if limit <= 0 {
+		limit = DefaultMaxPromptRunes
+	}
+	a.maxPromptRunes = limit
+}
+
+func (a *ChatAdapter) promptRuneLimit() int {
+	if a.maxPromptRunes <= 0 {
+		return DefaultMaxPromptRunes
+	}
+	return a.maxPromptRunes
+}
+
+// Collect is the adapter entry point. It keeps one waiter registered for the
+// whole batch, so the agent loop can route every inbound reply here.
+func (a *ChatAdapter) Collect(ctx context.Context, questions []Question) (AdapterResult, error) {
+	if a == nil || a.broker == nil {
+		return AdapterResult{}, errors.New("ask_user adapter is not configured")
+	}
+	if a.send == nil {
+		return AdapterResult{}, errors.New("ask_user send callback is not configured")
+	}
+	if !IsInteractiveSession(ctx) {
+		return AdapterResult{
+			Outcome: OutcomeUndelivered,
+			Notice:  "ask_user requires an interactive chat turn; this invocation cannot receive a reply",
+		}, nil
+	}
+
+	channel := toolshared.ToolChannel(ctx)
+	chatID := toolshared.ToolChatID(ctx)
+	if channel == "" || chatID == "" {
+		return AdapterResult{
+			Outcome: OutcomeUndelivered,
+			Notice:  "ask_user requires an active chat conversation to deliver questions",
+		}, nil
+	}
+
+	key := BrokerKey(
+		channel,
+		chatID,
+		toolshared.ToolAgentID(ctx),
+		toolshared.ToolSenderID(ctx),
+		toolshared.ToolSessionKey(ctx),
+	)
+
+	// Reject an oversized prompt before any question is delivered, so a
+	// partial batch is never shown to the user.
+	limit := a.promptRuneLimit()
+	for index, question := range questions {
+		rendered := utf8.RuneCountInString(formatPrompt(index, len(questions), question))
+		if rendered > limit {
+			return AdapterResult{}, fmt.Errorf(
+				"question %d prompt is too long for this channel: %d characters, limit %d",
+				index+1,
+				rendered,
+				limit,
+			)
+		}
+	}
+	waiting, err := a.broker.register(key)
+	if err != nil {
+		return AdapterResult{}, err
+	}
+	defer a.broker.unregister(key, waiting)
+
+	answers := make(map[string]any, len(questions))
+	var deadline time.Time
+
+	for index, question := range questions {
+		if !deadline.IsZero() && time.Until(deadline) <= 0 {
+			return timedOut(answers, a.timeout), nil
+		}
+
+		waiting.drain()
+		if err := a.send(ctx, channel, chatID, formatPrompt(index, len(questions), question)); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return AdapterResult{}, ctxErr
+			}
+			return AdapterResult{
+				Answers: answers,
+				Outcome: OutcomeUndelivered,
+				Notice:  "failed to deliver ask_user request: " + err.Error(),
+			}, nil
+		}
+		if deadline.IsZero() {
+			deadline = time.Now().Add(a.timeout)
+		}
+
+		var reply string
+		for {
+			candidate, received, waitErr := waiting.next(ctx, time.Until(deadline))
+			if waitErr != nil {
+				if errors.Is(waitErr, context.DeadlineExceeded) {
+					return timedOut(answers, a.timeout), nil
+				}
+				return AdapterResult{}, waitErr
+			}
+			if !received {
+				return timedOut(answers, a.timeout), nil
+			}
+			// Empty and whitespace-only messages (for example a media-only
+			// reply) are not answers: keep waiting instead of skipping.
+			if strings.TrimSpace(candidate) != "" {
+				reply = candidate
+				break
+			}
+		}
+
+		trimmed := strings.TrimSpace(reply)
+		// Slash commands always work. Bare skip/cancel are convenience
+		// shortcuts on questions with choices, unless an option uses the word
+		// as its exact label. On open questions they are literal answers.
+		if !matchesChoiceLabel(trimmed, question) && (strings.HasPrefix(trimmed, "/") || len(question.Choices) > 0) {
+			switch strings.ToLower(trimmed) {
+			case "cancel", "/cancel":
+				return AdapterResult{Answers: answers, Outcome: OutcomeCancelled}, nil
+			case "skip", "/skip":
+				answers[question.ID] = nil
+				continue
+			}
+		}
+
+		if question.MultiSelect {
+			answers[question.ID] = parseMultiAnswer(reply, question)
+		} else {
+			answers[question.ID] = parseSingleAnswer(reply, question)
+		}
+	}
+
+	return AdapterResult{Answers: answers, Outcome: OutcomeSubmitted}, nil
+}
+
+func timedOut(answers map[string]any, timeout time.Duration) AdapterResult {
+	return AdapterResult{
+		Answers: answers,
+		Outcome: OutcomeTimedOut,
+		Notice:  timeoutNotice(timeout),
+	}
+}
+
+func timeoutNotice(timeout time.Duration) string {
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	timeout = timeout.Round(time.Second)
+	minutes := int(timeout / time.Minute)
+	seconds := int((timeout % time.Minute) / time.Second)
+	var amount string
+	switch {
+	case minutes == 0:
+		amount = fmt.Sprintf("%ds", seconds)
+	case seconds == 0:
+		amount = fmt.Sprintf("%dm", minutes)
+	default:
+		amount = fmt.Sprintf("%dm%ds", minutes, seconds)
+	}
+	return fmt.Sprintf("[user did not respond within %s]", amount)
+}
+
+func formatPrompt(index, total int, question Question) string {
+	var builder strings.Builder
+	if total > 1 {
+		fmt.Fprintf(&builder, "Question %d/%d\n", index+1, total)
+	}
+	builder.WriteString(question.Text)
+
+	if len(question.Choices) == 0 {
+		builder.WriteString("\n\nType your answer.")
+	} else {
+		builder.WriteString("\n\n")
+		for choiceIndex, choice := range question.DisplayChoices() {
+			fmt.Fprintf(&builder, "%d. %s\n", choiceIndex+1, choice)
+		}
+		if question.MultiSelect {
+			builder.WriteString(
+				"\nReply with one or more numbers separated by commas, or type your own answer (Other).",
+			)
+		} else {
+			builder.WriteString("\nReply with a number, or type your own answer (Other).")
+		}
+	}
+	builder.WriteString("\nType `/skip` to skip this question or `/cancel` to cancel.")
+	return builder.String()
+}
+
+func parseSingleAnswer(reply string, question Question) any {
+	reply = strings.TrimSpace(reply)
+	// An exact option label wins over the numeric index: with options "2" and
+	// "1" a reply of "1" means the second option, not option one.
+	for _, choice := range question.Choices {
+		if strings.EqualFold(choice, reply) {
+			return choice
+		}
+	}
+	if index, ok := validChoiceIndex(reply, question); ok {
+		return question.Choices[index-1]
+	}
+	if custom, ok := otherAnswer(reply); ok {
+		return custom
+	}
+	return reply
+}
+
+func parseMultiAnswer(reply string, question Question) []string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return []string{}
+	}
+	if parsed, ok := parseJSONStringArray(reply); ok {
+		answers := make([]string, 0, len(parsed))
+		for _, item := range parsed {
+			answers = appendSelectableAnswer(answers, item, question)
+		}
+		return answers
+	}
+
+	parts := splitMultiReply(reply)
+	if len(parts) == 0 {
+		return []string{}
+	}
+
+	// Free text containing commas is one custom answer unless at least one
+	// token is a valid option number or an exact option label.
+	hasSelectableToken := false
+	for _, part := range parts {
+		if _, ok := validChoiceIndex(part, question); ok {
+			hasSelectableToken = true
+			break
+		}
+		for _, choice := range question.Choices {
+			if strings.EqualFold(choice, part) {
+				hasSelectableToken = true
+				break
+			}
+		}
+		if hasSelectableToken {
+			break
+		}
+	}
+	if !hasSelectableToken {
+		if custom, ok := otherAnswer(reply); ok {
+			return []string{custom}
+		}
+		return []string{reply}
+	}
+
+	answers := make([]string, 0, len(parts))
+	for _, part := range parts {
+		answers = appendSelectableAnswer(answers, part, question)
+	}
+	return answers
+}
+
+func appendSelectableAnswer(answers []string, raw string, question Question) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return answers
+	}
+	// Exact labels win over the numeric index so numeric option texts are not
+	// shadowed by their position.
+	for _, choice := range question.Choices {
+		if strings.EqualFold(choice, raw) {
+			return append(answers, choice)
+		}
+	}
+	if index, ok := validChoiceIndex(raw, question); ok {
+		return append(answers, question.Choices[index-1])
+	}
+	if custom, ok := otherAnswer(raw); ok {
+		if custom == "" {
+			return answers
+		}
+		return append(answers, custom)
+	}
+	return append(answers, raw)
+}
+
+func splitMultiReply(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if isNumberList(value) {
+		return strings.Fields(value)
+	}
+	return strings.FieldsFunc(value, func(r rune) bool {
+		switch r {
+		case ',', ';', '\n', '\r':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func isNumberList(value string) bool {
+	fields := strings.Fields(value)
+	if len(fields) < 2 {
+		return false
+	}
+	for _, field := range fields {
+		if _, err := strconv.Atoi(field); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func choiceIndex(value string) (int, bool) {
+	index, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, false
+	}
+	return index, true
+}
+
+func validChoiceIndex(value string, question Question) (int, bool) {
+	index, ok := choiceIndex(value)
+	if !ok || index < 1 || index > len(question.Choices) {
+		return 0, false
+	}
+	return index, true
+}
+
+func matchesChoiceLabel(value string, question Question) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, choice := range question.Choices {
+		if strings.EqualFold(strings.TrimSpace(choice), value) {
+			return true
+		}
+	}
+	return false
+}
+
+func otherAnswer(value string) (string, bool) {
+	lower := strings.ToLower(value)
+	const prefix = "other:"
+	if strings.HasPrefix(lower, prefix) {
+		return strings.TrimSpace(value[len(prefix):]), true
+	}
+	return "", false
+}
