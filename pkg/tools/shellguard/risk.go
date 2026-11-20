@@ -148,7 +148,7 @@ var commandRiskTable = map[string]RiskLevel{
 	"ssh": RiskHigh, "scp": RiskHigh, "rsync": RiskHigh, "nc": RiskHigh,
 	"netcat": RiskHigh, "ncat": RiskHigh, "socat": RiskHigh, "useradd": RiskHigh,
 	"userdel": RiskHigh, "usermod": RiskHigh, "passwd": RiskHigh, "chroot": RiskHigh,
-	"truncate": RiskHigh, "shred": RiskHigh, "parallel": RiskHigh,
+	"truncate": RiskHigh, "shred": RiskHigh, "unlink": RiskHigh, "parallel": RiskHigh,
 	"podman": RiskHigh, "nerdctl": RiskHigh, "buildah": RiskHigh, "ctr": RiskHigh,
 	"systemd-run": RiskHigh, "at": RiskHigh, "batch": RiskHigh, "tmux": RiskHigh,
 	"screen": RiskHigh, "start-stop-daemon": RiskHigh, "nsenter": RiskHigh,
