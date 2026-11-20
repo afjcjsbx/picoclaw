@@ -675,6 +675,7 @@ func flagMatchesArg(token, arg string) bool {
 var destructiveOperandCommands = map[string]bool{
 	"rm":         true,
 	"rmdir":      true,
+	"unlink":     true,
 	"mv":         true,
 	"cp":         true,
 	"truncate":   true,

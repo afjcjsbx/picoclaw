@@ -67,6 +67,7 @@ func TestConstResolutionRejectsExpandedDestructiveOperands(t *testing.T) {
 	for _, command := range []string{
 		`R=rm F=-rf; $R $F x`,
 		`F=a.txt; rm $F`,
+		`F=a.txt; unlink $F`,
 		`set -- rm -rf; "$@" x`,
 		`set -- rm -rf; $@ x`,
 		`set -- rm -rf x; "$@"`,
