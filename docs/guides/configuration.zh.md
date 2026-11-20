@@ -315,6 +315,34 @@ PicoClaw 默认在沙箱环境中运行。Agent 只能访问配置的工作区�
 | `append_file` | 追加文件     | 仅限工作区内的文件             |
 | `exec`        | 执行命令     | 命令路径必须在工作区内         |
 
+#### 子进程隔离
+
+工作区限制只控制路径。要在操作系统层面约束子进程，请启用顶层的可选 `isolation` 配置块：
+
+```json
+{
+  "isolation": {
+    "enabled": true,
+    "expose_paths": [
+      { "source": "/opt/toolchains/go", "target": "/opt/toolchains/go", "mode": "ro" }
+    ],
+    "block_network": false
+  }
+}
+```
+
+| 配置键 | 类型 | 默认值 | 描述 |
+|--------|------|--------|------|
+| `isolation.enabled` | bool | `false` | 对子进程启用沙箱：`exec`、CLI provider、进程 hooks、MCP `stdio` server 和插件 |
+| `isolation.expose_paths` | array | `[]` | 带入沙箱的宿主路径，格式为 `{source, target, mode}`，`mode` 为 `ro` 或 `rw` |
+| `isolation.block_network` | bool | `false` | 将子进程与宿主网络命名空间隔离；仅支持 Linux。为 `false` 时，沙箱内命令仍可访问宿主回环、局域网和云元数据端点 |
+
+Linux 需要 `bwrap`（bubblewrap）；macOS 通过 `sandbox-exec` 使用 Seatbelt；Windows 施加进程级限制。启用隔离后，`HOME`、`TMPDIR` 和 XDG 目录会重定向到实例根目录，子进程只会继承允许列表中的环境变量。工作区限制和子进程隔离互补，不能互相替代。
+
+> ⚠️ **警告**：`block_network` 默认为 `false`，隔离后的命令仍可访问 `127.0.0.1`、扫描局域网，并对宿主机或其他设备进行爆破。除非 `exec`、MCP server 或 CLI provider 需要 `curl`、`wget`、`git` 等出站网络访问，否则应设为 `true`。详见[网络隔离](../security/isolation.zh.md#网络隔离)。
+
+平台支持、`expose_paths` 规则、bubblewrap 要求、网络隔离和排障详见[子进程隔离](../security/isolation.zh.md)。
+
 #### 额外的 Exec 保护
 
 默认情况下，`exec` 工具会阻止以下危险命令（其中硬性底线规则在 `enable_deny_patterns` 为 `false` 时仍会生效）：

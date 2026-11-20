@@ -22,7 +22,7 @@ This is the documentation home for the community-maintained fork of PicoClaw. Se
 | [Guides](guides/) | Setup, configuration, providers, chat apps, sessions, builds, hardware |
 | [Reference](reference/) | CLI, tools, MCP, cron, gateway API, config versioning, rate limiting |
 | [Operations](operations/) | Troubleshooting and debugging |
-| [Security](security/) | Hardening, credentials, sensitive data, provider auth |
+| [Security](security/) | Hardening, subprocess isolation, credentials, sensitive data, provider auth |
 | [Architecture](architecture/) | Runtime internals: sessions, Seahorse memory, routing, events, hooks, steering, sub-turns |
 | [Channels](guides/chat-apps.md) | Per-platform chat setup guides (`channels/<name>/README.md`) |
 | [Tools](tools/) | Documentation for every tool family, with switches and parameters |
