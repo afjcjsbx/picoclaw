@@ -155,6 +155,8 @@ When you send a command that needs a sub-command (for example `/list`), the usag
 
 Sending `/use` without arguments replies with a paginated skill picker. Tapping a skill runs `/use <skill>` and arms that skill for your next message.
 
+Sending `/switch model` (or `/list models`) replies with a paginated model picker. Tapping a model runs `/switch model <index>` and switches to it immediately.
+
 **4. Advanced Formatting**
 You can set use_markdown_v2: true to enable enhanced formatting options. This allows the bot to utilize the full range of Telegram MarkdownV2 features, including nested styles, spoilers, and custom fixed-width blocks.
 
