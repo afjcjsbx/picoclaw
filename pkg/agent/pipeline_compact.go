@@ -34,9 +34,9 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 	toolTokens := EstimateToolDefsTokens(toolDefs)
 	threshold := summarizeThresholdTokens(ts.agent)
 	for pass := 0; pass < maxCompactionPasses; pass++ {
-		promptTokens := toolTokens
-		for _, m := range exec.messages {
-			promptTokens += estimateMessageTokensForProvider(provider, m)
+		promptTokens, anchored := p.anchoredPromptTokens(ts, exec, toolTokens)
+		if !anchored {
+			promptTokens = estimatePromptTokens(provider, exec.messages, toolDefs)
 		}
 		// Assembly may already have evicted old items from the prompt. In that
 		// case promptTokens can be below the threshold while the stored context
@@ -67,6 +67,7 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 				"session_key":   ts.sessionKey,
 				"prompt_tokens": promptTokens,
 				"threshold":     threshold,
+				"usage_anchor":  anchored,
 				"pass":          pass + 1,
 			})
 		if err := p.ContextManager.Compact(ctx, &CompactRequest{
@@ -83,6 +84,10 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 			}
 			return
 		}
+		// The stored history changed: the reported prompt no longer describes
+		// the next prompt, so it must be measured from scratch until the next
+		// call reports real usage.
+		p.invalidateUsageAnchor(ts)
 
 		rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerThresholdRebuild)
 		if !rebuilt.assembled {

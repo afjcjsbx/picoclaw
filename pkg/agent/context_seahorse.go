@@ -234,16 +234,12 @@ func providerToCompleteFn(provider providers.LLMProvider, model string, retry ll
 	}
 }
 
-// staticPromptReserve estimates the prompt envelope (system prompt and tool
+// staticPromptReserveFor estimates the prompt envelope (system prompt and tool
 // definitions) that is added around assembled history. Keeping this out of the
 // history budget prevents an assembly that is within budget only until the
 // system prompt is prepended.
-func (m *seahorseContextManager) staticPromptReserve(sessionKey string) int {
-	if m == nil || m.al == nil {
-		return 0
-	}
-	agent := m.al.agentForSession(sessionKey)
-	if agent == nil {
+func (m *seahorseContextManager) staticPromptReserveFor(agent *AgentInstance) int {
+	if m == nil || agent == nil {
 		return 0
 	}
 	reserve := 0
@@ -257,14 +253,46 @@ func (m *seahorseContextManager) staticPromptReserve(sessionKey string) int {
 	return reserve
 }
 
+// sessionAgent resolves the agent that owns a session once, so callers that
+// need both the prompt reserve and the token calibration pay for one lookup.
+func (m *seahorseContextManager) sessionAgent(sessionKey string) *AgentInstance {
+	if m == nil || m.al == nil {
+		return nil
+	}
+	return m.al.agentForSession(sessionKey)
+}
+
 // ContextTokens reports the token size of the stored context, if the manager
 // can expose it. It lets the agent decide to compact based on storage rather
-// than only on the prompt after assembly eviction.
+// than only on the prompt after assembly eviction. The count is calibrated with
+// the session's real/heuristic token ratio when a provider-reported prompt
+// size exists, so code, JSON and tool output are not systematically
+// undercounted.
 func (m *seahorseContextManager) ContextTokens(ctx context.Context, sessionKey string) (int, error) {
 	if m == nil || m.engine == nil {
 		return 0, nil
 	}
-	return m.engine.ContextTokens(ctx, sessionKey)
+	tokens, err := m.engine.ContextTokens(ctx, sessionKey)
+	if err != nil {
+		return 0, err
+	}
+	ratio := 1.0
+	if m.al != nil {
+		ratio = m.al.usageAnchorRatioForSession(sessionKey)
+	}
+	return calibrateHeuristicTokens(tokens, ratio), nil
+}
+
+// tokenCalibrationFor returns the real/heuristic token ratio observed for the
+// session's last LLM call, or 1 when no usable anchor exists.
+func (m *seahorseContextManager) tokenCalibrationFor(
+	agent *AgentInstance,
+	sessionKey string,
+) float64 {
+	if m == nil || m.al == nil || agent == nil {
+		return 1
+	}
+	return m.al.usageAnchorRatio(agent.ID, sessionKey)
 }
 
 // Assemble builds budget-aware context from seahorse SQLite.
@@ -279,19 +307,28 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	}
 
 	// Reserve space for model response (spec lines 1400-1410)
-	effectiveBudget := budget - req.MaxTokens
-	if effectiveBudget <= 0 {
+	historyBudget := budget - req.MaxTokens
+	if historyBudget <= 0 {
 		// MaxTokens >= budget is a configuration problem
 		// Use 50% as minimum to avoid guaranteed overflow
 		logger.WarnCF("agent", "MaxTokens >= budget, using 50% fallback",
 			map[string]any{"budget": budget, "max_tokens": req.MaxTokens})
-		effectiveBudget = budget / 2
+		historyBudget = budget / 2
 	}
+
+	// Seahorse budgets are in heuristic token units, while the window and the
+	// output reserve are real tokens. Convert first, then subtract the static
+	// prompt envelope (itself a heuristic estimate).
+	agent := m.sessionAgent(req.SessionKey)
+	effectiveBudget := scaleHeuristicBudget(
+		historyBudget,
+		m.tokenCalibrationFor(agent, req.SessionKey),
+	)
 
 	// The assembly budget is for history only. Subtract the static system
 	// prompt and tool definitions here so the assembler does not fill the
 	// entire window with history and leave no room for the prompt envelope.
-	if reserve := m.staticPromptReserve(req.SessionKey); reserve > 0 {
+	if reserve := m.staticPromptReserveFor(agent); reserve > 0 {
 		effectiveBudget -= reserve
 		if effectiveBudget < 1 {
 			effectiveBudget = 1
@@ -321,12 +358,15 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 // compactBudget returns the target available to compaction. Assembly reserves
 // the static system/tool prompt on top of the output reserve, so compaction
 // must use the same history-only budget or it will settle above what assembly
-// can actually keep.
+// can actually keep. Real-token budgets are converted to seahorse's heuristic
+// units with the session's observed calibration.
 func (m *seahorseContextManager) compactBudget(sessionKey string, budget int) int {
 	if budget <= 0 {
 		return budget
 	}
-	if reserve := m.staticPromptReserve(sessionKey); reserve > 0 && reserve < budget {
+	agent := m.sessionAgent(sessionKey)
+	budget = scaleHeuristicBudget(budget, m.tokenCalibrationFor(agent, sessionKey))
+	if reserve := m.staticPromptReserveFor(agent); reserve > 0 && reserve < budget {
 		budget -= reserve
 		if budget < 1 {
 			budget = 1

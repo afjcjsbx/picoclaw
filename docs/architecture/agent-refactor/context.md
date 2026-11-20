@@ -92,6 +92,8 @@ Three automatic compression paths exist, in order of preference. A fourth, user-
 
 It estimates the prompt about to be sent (`exec.messages` plus tool definitions) and compares it with `summarize_token_percent` of the usable window, i.e. `(ContextWindow - MaxTokens) * summarize_token_percent / 100`. This is the same budget the proactive check enforces, so the soft threshold always sits at or below the hard one. Message count is not a trigger (`summarize_message_threshold` is deprecated and ignored). The same value is reported as `SummarizeAtTokens` in `/context` and the UI.
 
+When the provider reported `prompt_tokens` on an earlier call in the session, the prompt size comes from the session's [usage anchor](#usage-anchor-provider-reported-prompt-size) plus the messages appended since, not from the full heuristic. The heuristic remains the fallback: first call of a session, a changed model, a rebuilt prompt, or a report that cannot describe the full prompt.
+
 When the threshold is reached it calls `ContextManager.Compact` with `Reason: ContextCompressReasonThreshold`, **blocking the turn** until it returns. If the session changed, it re-reads history and summary through `Assemble` and rebuilds `exec.messages` around the active turn (the same rebuild as the context-error retry, via `reassembleActiveTurn`; the active turn's messages are never dropped). The turn then carries on from the compacted context. `ErrNothingToCompact` means nothing changed and the prompt is kept. Compaction is best effort: any failure leaves the prompt as is, and the hard checks below remain the safety net.
 
 - **legacy**: compaction runs synchronously on the turn's context, so a hard abort cancels it and a canceled summarization is never applied. It works in this order, stopping at the first step that changes the session:
@@ -154,6 +156,19 @@ Estimation uses a heuristic of ~2.5 characters per token (`chars * 2 / 5`).
 
 These are deliberately heuristic. The proactive check handles the common case; the reactive path catches estimation errors.
 
+### Usage anchor (provider-reported prompt size)
+
+The heuristic is reasonable for prose but undershoots code, JSON, tool output and images, where the real tokenizer can use far more tokens per character. Most providers already report the true prompt size as `prompt_tokens`, which `turnState.AddUsage` exposes as `turnUsage.ContextTokens`. The agent stores that value as a per-session **usage anchor** (`pkg/agent/context_usage_anchor.go`) the first time a call reports it.
+
+- The anchor records the reported `prompt_tokens`, the number of messages in that prompt, a cheap fingerprint of the non-system prefix, the heuristic size of the system/tool envelope, and the heuristic size of the non-system messages.
+- On the next `CompactBeforeLLM`, the prompt is estimated as `anchor.prompt_tokens - anchor.overhead_tokens + current_overhead + delta_tokens`, where `delta_tokens` covers only the messages appended after the anchored prompt. The delta carries the session's observed real/heuristic ratio, so a large JSON or code tool result is not counted at prose density.
+- The prefix fingerprint only reads roles and sizes (never message content), so validating an anchor over a large history stays cheap. The system message is excluded because its dynamic sections (time, session, summary) change every turn; its size is adjusted separately instead.
+- The anchor is ignored, and the full heuristic is used, when there is no report yet, the model changed (different tokenizer), the prompt no longer starts with the anchored messages (compaction, eviction, pruning, steering), or the report is at or below the estimated non-history overhead.
+- The store is memory-only, bounded to 64 sessions with LRU eviction, and stores no message content. After a restart the first call per session falls back to the heuristic and rebuilds the anchor from real usage.
+- Compaction invalidates the reported prompt baseline (the old prompt no longer describes the stored context) but keeps the observed real/heuristic ratio for seahorse calibration. `/clear` drops the entry entirely.
+
+Seahorse uses the anchor's real/heuristic ratio to calibrate its own heuristic accounting (`ContextTokenReporter.ContextTokens`) and to convert real-token assembly/compaction budgets into its heuristic units. Sessions heavy in code, JSON or images therefore compact at the right time instead of after the heuristic has undershot the window.
+
 `/context` and the usage metadata attached to outbound messages estimate the prompt returned by `ContextManager.Assemble`, not the raw session store. This matters for seahorse: compaction folds old messages into summaries in its SQLite context while the JSONL history stays untouched, so reading the session store directly would keep reporting the pre-compaction size. If assembly fails, the estimate falls back to session history.
 
 ---
@@ -178,7 +193,7 @@ These are recognized limitations in the current implementation, documented here 
 
 - **The newest tool rounds are never summarized.** A turn whose last two rounds alone exceed the threshold stays over it until those rounds age out; the context-error retry remains the safety net. Summarizing a turn needs more than two rounds.
 
-- **Token estimation is heuristic.** It does not account for provider-specific tokenization, exact system prompt size (assembled separately), or variable image token costs. The two-path design (proactive + reactive) is intended to tolerate this imprecision.
+- **Token estimation is heuristic until the provider reports usage.** The usage anchor corrects the prompt size for sessions whose provider returns `prompt_tokens`, but the first call of a session, providers that omit usage, and the image estimate (a flat 256 tokens per item) still use the `chars * 2 / 5` fallback. The two-path design (proactive + reactive) tolerates the remaining imprecision.
 
 - **Reactive retry does not preserve media.** When the reactive path rebuilds context after compression, it currently passes empty values for media references. This is a pre-existing issue in the main loop, not introduced by the budget system.
 

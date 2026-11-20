@@ -505,6 +505,8 @@ func (p *Pipeline) CallLLM(
 						"session_key": ts.sessionKey,
 						"error":       compactErr.Error(),
 					})
+				} else {
+					p.invalidateUsageAnchor(ts)
 				}
 				rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerContextRetryRebuild)
 				stableHistory, protectedTurnTail, buildMessages := rebuilt.stable, rebuilt.protected, rebuilt.build
@@ -660,6 +662,9 @@ func (p *Pipeline) CallLLM(
 		ts.SetLastFinishReason(exec.response.FinishReason)
 		ts.AddUsage(exec.llmModelName, exec.response.Usage)
 	}
+	// Remember the real prompt size so the next compaction decision extends it
+	// with only the appended messages instead of re-estimating all history.
+	p.recordUsageAnchor(ts, exec)
 
 	// Mid-turn routing guard: a light-model turn that grows too large or keeps
 	// requesting tools moves the remaining iterations to the primary model.
