@@ -1130,6 +1130,9 @@ func (c *TelegramChannel) handleCallbackQuery(ctx context.Context, query telego.
 	if kind, value, ok := telegramSkillCallback(query.Data); ok {
 		return c.handleSkillCallback(ctx, query, kind, value)
 	}
+	if kind, value, ok := telegramModelCallback(query.Data); ok {
+		return c.handleModelCallback(ctx, query, kind, value)
+	}
 
 	commandText, ok := telegramCallbackCommand(query.Data)
 	if !ok {
@@ -1186,7 +1189,7 @@ func (c *TelegramChannel) runCallbackCommand(
 func (c *TelegramChannel) handleSkillCallback(
 	ctx context.Context,
 	query telego.CallbackQuery,
-	kind telegramSkillCallbackKind,
+	kind telegramPickerCallbackKind,
 	value int,
 ) error {
 	if query.Message == nil {
@@ -1213,14 +1216,14 @@ func (c *TelegramChannel) handleSkillCallback(
 	}
 
 	switch kind {
-	case telegramSkillCallbackSelect:
+	case telegramPickerSelect:
 		if value < 0 || value >= len(skills) {
 			c.answerCallbackQuery(ctx, query.ID, "Skill not available.", true)
 			return nil
 		}
 		return c.runCallbackCommand(ctx, query, "/use "+skills[value])
 
-	case telegramSkillCallbackPage:
+	case telegramPickerPage:
 		markup := telegramSkillMenuMarkup(skills, value)
 		if markup == nil {
 			c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /use again.", true)
@@ -1236,6 +1239,71 @@ func (c *TelegramChannel) handleSkillCallback(
 		})
 		if err != nil && !strings.Contains(err.Error(), "message is not modified") {
 			logger.WarnCF("telegram", "Failed to edit skill menu", map[string]any{
+				"chat_id":    chat.ID,
+				"message_id": query.Message.GetMessageID(),
+				"error":      err.Error(),
+			})
+		}
+		return nil
+	}
+
+	c.answerCallbackQuery(ctx, query.ID, "", false)
+	return nil
+}
+
+func (c *TelegramChannel) handleModelCallback(
+	ctx context.Context,
+	query telego.CallbackQuery,
+	kind telegramPickerCallbackKind,
+	value int,
+) error {
+	if query.Message == nil {
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		return nil
+	}
+
+	sender := telegramCallbackSender(query.From)
+	if !c.IsAllowedSender(sender) {
+		c.answerCallbackQuery(ctx, query.ID, "You are not allowed to use this menu.", true)
+		return nil
+	}
+
+	msg := query.Message.Message()
+	if msg == nil || strings.TrimSpace(msg.Text) == "" {
+		c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /switch model again.", true)
+		return nil
+	}
+
+	models := telegramModelOptions(msg.Text)
+	if len(models) == 0 {
+		c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /switch model again.", true)
+		return nil
+	}
+
+	switch kind {
+	case telegramPickerSelect:
+		if value < 0 || value >= len(models) {
+			c.answerCallbackQuery(ctx, query.ID, "Model not available.", true)
+			return nil
+		}
+		return c.runCallbackCommand(ctx, query, fmt.Sprintf("/switch model %d", models[value].Index))
+
+	case telegramPickerPage:
+		markup := telegramModelMenuMarkup(models, value)
+		if markup == nil {
+			c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /switch model again.", true)
+			return nil
+		}
+
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		chat := query.Message.GetChat()
+		_, err := c.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+			ChatID:      tu.ID(chat.ID),
+			MessageID:   query.Message.GetMessageID(),
+			ReplyMarkup: markup,
+		})
+		if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+			logger.WarnCF("telegram", "Failed to edit model menu", map[string]any{
 				"chat_id":    chat.ID,
 				"message_id": query.Message.GetMessageID(),
 				"error":      err.Error(),

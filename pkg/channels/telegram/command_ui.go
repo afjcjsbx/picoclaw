@@ -20,6 +20,12 @@ const (
 	telegramSkillPageAction     = "p:"
 	telegramSkillSelectAction   = "s:"
 	telegramSkillButtonsPerPage = 12
+
+	telegramModelCallbackPrefix = "pm:"
+	telegramModelPageAction     = "p:"
+	telegramModelSelectAction   = "s:"
+	telegramModelButtonsPerPage = 10
+	telegramModelButtonsPerRow  = 2
 )
 
 var (
@@ -32,6 +38,10 @@ var (
 	// telegramUnknownOptionUsageRe matches the unknown-sub-command reply, e.g.
 	// "Unknown option: nope. Usage: /list [model|models|...]".
 	telegramUnknownOptionUsageRe = regexp.MustCompile(`^Unknown option: [^\n]*?\. Usage: /([a-z0-9_]+) \[`)
+
+	// telegramModelLineRe matches one numbered model line rendered by
+	// FormatModelOptions, e.g. "1. gpt-4.1 (Provider: openai)".
+	telegramModelLineRe = regexp.MustCompile(`(?m)^(\d+)\. (.+?) \(Provider: [^)]+\)$`)
 )
 
 // telegramCommandMenuMarkup builds an inline keyboard for a command usage
@@ -40,6 +50,9 @@ var (
 // executor. It returns nil when the text is not a command usage reply or when
 // no sub-command can be invoked without required arguments.
 func telegramCommandMenuMarkup(text string, defs []commands.Definition) *telego.InlineKeyboardMarkup {
+	if markup := telegramModelCommandMenuMarkup(text); markup != nil {
+		return markup
+	}
 	if markup := telegramUseCommandMenuMarkup(text); markup != nil {
 		return markup
 	}
@@ -124,15 +137,103 @@ func telegramSkillNames(text string) []string {
 	return names
 }
 
-// telegramSkillMenuMarkup renders one page of the skill picker. Skill
-// selection uses the global skill index, so callback data stays short even for
-// long skill names.
-func telegramSkillMenuMarkup(skills []string, page int) *telego.InlineKeyboardMarkup {
-	if len(skills) == 0 {
+type telegramModelOption struct {
+	Index int
+	Name  string
+}
+
+// telegramModelCommandMenuMarkup builds the paginated model picker for the
+// bare /switch model and /list models replies.
+func telegramModelCommandMenuMarkup(text string) *telego.InlineKeyboardMarkup {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "Configured Models:") ||
+		!strings.Contains(text, "/switch model <index>") {
 		return nil
 	}
 
-	totalPages := (len(skills) + telegramSkillButtonsPerPage - 1) / telegramSkillButtonsPerPage
+	models := telegramModelOptions(text)
+	if len(models) == 0 {
+		return nil
+	}
+	return telegramModelMenuMarkup(models, 0)
+}
+
+// telegramModelOptions extracts the numbered models from FormatModelOptions.
+func telegramModelOptions(text string) []telegramModelOption {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "Configured Models:") {
+		return nil
+	}
+
+	matches := telegramModelLineRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	options := make([]telegramModelOption, 0, len(matches))
+	for _, match := range matches {
+		index, err := strconv.Atoi(match[1])
+		if err != nil || index <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(match[2])
+		if name == "" {
+			continue
+		}
+		options = append(options, telegramModelOption{Index: index, Name: name})
+	}
+	return options
+}
+
+func telegramModelMenuMarkup(models []telegramModelOption, page int) *telego.InlineKeyboardMarkup {
+	if len(models) == 0 {
+		return nil
+	}
+
+	labels := make([]string, len(models))
+	for i, model := range models {
+		labels[i] = fmt.Sprintf("%d. %s", model.Index, telegramTruncateButtonText(model.Name, 40))
+	}
+	return telegramPaginatedMenu(
+		labels,
+		page,
+		telegramModelButtonsPerPage,
+		telegramModelButtonsPerRow,
+		telegramModelCallbackPrefix,
+		telegramModelPageAction,
+		telegramModelSelectAction,
+	)
+}
+
+func telegramSkillMenuMarkup(skills []string, page int) *telego.InlineKeyboardMarkup {
+	return telegramPaginatedMenu(
+		skills,
+		page,
+		telegramSkillButtonsPerPage,
+		telegramCommandButtonsPerRow,
+		telegramSkillCallbackPrefix,
+		telegramSkillPageAction,
+		telegramSkillSelectAction,
+	)
+}
+
+// telegramPaginatedMenu renders one page of a picker. Selection callbacks carry
+// the global item index, so labels can be long without affecting callback size.
+func telegramPaginatedMenu(
+	labels []string,
+	page, perPage, perRow int,
+	callbackPrefix, pageAction, selectAction string,
+) *telego.InlineKeyboardMarkup {
+	if len(labels) == 0 {
+		return nil
+	}
+	if perPage <= 0 {
+		perPage = len(labels)
+	}
+	if perRow <= 0 {
+		perRow = 1
+	}
+
+	totalPages := (len(labels) + perPage - 1) / perPage
 	if page < 0 {
 		page = 0
 	}
@@ -140,40 +241,51 @@ func telegramSkillMenuMarkup(skills []string, page int) *telego.InlineKeyboardMa
 		page = totalPages - 1
 	}
 
-	start := page * telegramSkillButtonsPerPage
-	end := min(start+telegramSkillButtonsPerPage, len(skills))
+	start := page * perPage
+	end := min(start+perPage, len(labels))
 
 	buttons := make([]telego.InlineKeyboardButton, 0, end-start)
 	for i := start; i < end; i++ {
 		buttons = append(buttons, telego.InlineKeyboardButton{
-			Text:         skills[i],
-			CallbackData: fmt.Sprintf("%s%s%d", telegramSkillCallbackPrefix, telegramSkillSelectAction, i),
+			Text:         labels[i],
+			CallbackData: fmt.Sprintf("%s%s%d", callbackPrefix, selectAction, i),
 		})
 	}
 
-	rows := chunkInlineButtons(buttons, telegramCommandButtonsPerRow)
+	rows := chunkInlineButtons(buttons, perRow)
 	if totalPages > 1 {
 		nav := make([]telego.InlineKeyboardButton, 0, 3)
 		if page > 0 {
 			nav = append(nav, telego.InlineKeyboardButton{
 				Text:         "◀ Prev",
-				CallbackData: fmt.Sprintf("%s%s%d", telegramSkillCallbackPrefix, telegramSkillPageAction, page-1),
+				CallbackData: fmt.Sprintf("%s%s%d", callbackPrefix, pageAction, page-1),
 			})
 		}
 		nav = append(nav, telego.InlineKeyboardButton{
 			Text:         fmt.Sprintf("%d/%d", page+1, totalPages),
-			CallbackData: fmt.Sprintf("%s%s%d", telegramSkillCallbackPrefix, telegramSkillPageAction, page),
+			CallbackData: fmt.Sprintf("%s%s%d", callbackPrefix, pageAction, page),
 		})
 		if page < totalPages-1 {
 			nav = append(nav, telego.InlineKeyboardButton{
 				Text:         "Next ▶",
-				CallbackData: fmt.Sprintf("%s%s%d", telegramSkillCallbackPrefix, telegramSkillPageAction, page+1),
+				CallbackData: fmt.Sprintf("%s%s%d", callbackPrefix, pageAction, page+1),
 			})
 		}
 		rows = append(rows, nav)
 	}
 
 	return &telego.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func telegramTruncateButtonText(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func chunkInlineButtons(
@@ -271,31 +383,53 @@ func telegramCallbackCommandAllowed(commandText string, defs []commands.Definiti
 	return false
 }
 
-type telegramSkillCallbackKind string
+type telegramPickerCallbackKind string
 
 const (
-	telegramSkillCallbackPage   telegramSkillCallbackKind = "page"
-	telegramSkillCallbackSelect telegramSkillCallbackKind = "select"
+	telegramPickerPage   telegramPickerCallbackKind = "page"
+	telegramPickerSelect telegramPickerCallbackKind = "select"
 )
 
 // telegramSkillCallback parses pagination and selection callbacks emitted by
 // telegramSkillMenuMarkup.
-func telegramSkillCallback(data string) (telegramSkillCallbackKind, int, bool) {
+func telegramSkillCallback(data string) (telegramPickerCallbackKind, int, bool) {
+	return telegramPickerCallback(
+		data,
+		telegramSkillCallbackPrefix,
+		telegramSkillPageAction,
+		telegramSkillSelectAction,
+	)
+}
+
+// telegramModelCallback parses pagination and selection callbacks emitted by
+// telegramModelMenuMarkup.
+func telegramModelCallback(data string) (telegramPickerCallbackKind, int, bool) {
+	return telegramPickerCallback(
+		data,
+		telegramModelCallbackPrefix,
+		telegramModelPageAction,
+		telegramModelSelectAction,
+	)
+}
+
+func telegramPickerCallback(
+	data, prefix, pageAction, selectAction string,
+) (telegramPickerCallbackKind, int, bool) {
 	data = strings.TrimSpace(data)
-	if !strings.HasPrefix(data, telegramSkillCallbackPrefix) {
+	if !strings.HasPrefix(data, prefix) {
 		return "", 0, false
 	}
 
-	rest := strings.TrimPrefix(data, telegramSkillCallbackPrefix)
+	rest := strings.TrimPrefix(data, prefix)
 	var action string
-	var kind telegramSkillCallbackKind
+	var kind telegramPickerCallbackKind
 	switch {
-	case strings.HasPrefix(rest, telegramSkillPageAction):
-		action = strings.TrimPrefix(rest, telegramSkillPageAction)
-		kind = telegramSkillCallbackPage
-	case strings.HasPrefix(rest, telegramSkillSelectAction):
-		action = strings.TrimPrefix(rest, telegramSkillSelectAction)
-		kind = telegramSkillCallbackSelect
+	case strings.HasPrefix(rest, pageAction):
+		action = strings.TrimPrefix(rest, pageAction)
+		kind = telegramPickerPage
+	case strings.HasPrefix(rest, selectAction):
+		action = strings.TrimPrefix(rest, selectAction)
+		kind = telegramPickerSelect
 	default:
 		return "", 0, false
 	}
