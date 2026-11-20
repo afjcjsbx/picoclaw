@@ -45,6 +45,21 @@ func isVisionUnsupportedError(err error) bool {
 		return true
 	}
 
+	// DeepSeek-style payload rejection.
+	if strings.Contains(msg, "uploaded an unsupported image") {
+		return true
+	}
+	if strings.Contains(msg, "unsupported image") {
+		return true
+	}
+
+	// Some gateways return a generic 400 telling the client to retry with a
+	// different image ("replace the image"), which still means the current
+	// model cannot consume the attachment.
+	if strings.Contains(msg, "replace the image") {
+		return true
+	}
+
 	return false
 }
 

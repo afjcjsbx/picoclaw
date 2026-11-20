@@ -180,7 +180,8 @@ func resolveMediaRefsWithOptions(
 			mime := detectMIME(localPath, meta)
 			pathTags = append(pathTags, buildPathTag(mime, localPath))
 
-			if m.Role == "tool" && idx >= currentTurnStart && strings.HasPrefix(mime, "image/") {
+			if m.Role == "tool" && idx >= currentTurnStart && strings.HasPrefix(mime, "image/") &&
+				inlineImageMIME(mime) {
 				dataURL, ok := encoded[localPath]
 				if !ok {
 					dataURL = encodeImageToDataURL(localPath, mime, info, opts)
@@ -206,6 +207,21 @@ func resolveMediaRefsWithOptions(
 	}
 
 	return result
+}
+
+// inlineImageMIME reports whether a detected image MIME type is a raster
+// format that LLM image endpoints accept. Vector formats (SVG) and anything
+// with a questionable codec are excluded: inlining them makes a text-only
+// fallback chain fail with an opaque 400 from the provider instead of a clear
+// "unsupported image" message. They still surface as [file:/path] tags, so
+// file tools remain available.
+func inlineImageMIME(mime string) bool {
+	switch mime {
+	case "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif":
+		return true
+	default:
+		return false
+	}
 }
 
 // encodeImageToDataURL base64-encodes an image file into a data URL, first
