@@ -38,6 +38,7 @@ func DefaultConfig() *Config {
 				SteeringMode:              "one-at-a-time",
 				MaxParallelTurns:          5,
 				MaxParallelToolCalls:      4,
+				ResumeInterruptedTurns:    true,
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:          false,
 					MaxArgsLength:    300,
