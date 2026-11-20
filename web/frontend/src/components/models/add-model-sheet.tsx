@@ -201,7 +201,7 @@ export function AddModelSheet({
     if (modelValidation?.level === "error") {
       errors.model = t(
         modelValidation.messageKey,
-        modelValidation.messageParams,
+        modelValidation.messageParams ?? {},
       )
     }
     setFieldErrors(errors)
@@ -521,7 +521,7 @@ export function AddModelSheet({
                     <span>
                       {t(
                         modelValidation.messageKey,
-                        modelValidation.messageParams,
+                        modelValidation.messageParams ?? {},
                       )}
                     </span>
                     {modelValidation.fix && (
