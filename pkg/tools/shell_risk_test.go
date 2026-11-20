@@ -177,6 +177,52 @@ func TestShellTool_DynamicDestructiveOperandNotExecuted(t *testing.T) {
 	}
 }
 
+// TestShellTool_ConstantIndirectionNotExecuted verifies that a command hidden
+// behind a variable or positional parameter is classified as the command it
+// expands to, so unknown_command_policy=allow cannot let it through.
+func TestShellTool_ConstantIndirectionNotExecuted(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	canary := filepath.Join(dir, "canary.txt")
+	if err := os.WriteFile(canary, []byte("must survive\n"), 0o600); err != nil {
+		t.Fatalf("write canary: %v", err)
+	}
+
+	tool := riskTestTool(t, config.ExecConfig{UnknownCommandPolicy: config.ExecUnknownCommandAllow})
+	ctx := WithToolContext(context.Background(), "cli", "test")
+	for _, command := range []string{
+		`R=rm; $R -rf ` + canary,
+		`set -- rm -rf; "$@" ` + canary,
+		`unlink ` + canary,
+	} {
+		result := tool.Execute(ctx, map[string]any{"action": "run", "command": command})
+		if !result.IsError {
+			t.Fatalf("execute should reject %q, got: %s", command, result.ForLLM)
+		}
+		if _, err := os.Stat(canary); err != nil {
+			t.Fatalf("blocked command %q removed the canary: %v", command, err)
+		}
+	}
+}
+
+// TestShellTool_ConstantIndirectionHitsHardline verifies the hardline patterns
+// see through a constant, so a critical risk threshold does not open a bypass.
+func TestShellTool_ConstantIndirectionHitsHardline(t *testing.T) {
+	t.Parallel()
+
+	tool := riskTestTool(t, config.ExecConfig{RiskThreshold: "critical"})
+	for _, command := range []string{
+		`R=rm; $R -rf /`,
+		`set -- rm -rf; "$@" /`,
+		`S='rm -rf /'; sh -c "$S"`,
+	} {
+		if got := tool.guardCommand(command, t.TempDir()); got == "" {
+			t.Errorf("command %q should be blocked, got no block", command)
+		}
+	}
+}
+
 func TestShellTool_RiskCalibration(t *testing.T) {
 	t.Parallel()
 

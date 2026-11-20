@@ -51,7 +51,8 @@ A command that is not in the table, a dynamic command name, a shell that reads c
 
 The classifier also:
 
-- classifies a command whose command word is dynamic (`"$cmd" -rf /`) as unknown; the default policy allows it;
+- resolves a constant the command assigned earlier at the top level of the script (`R=rm; $R -rf x`, `set -- rm -rf; "$@" x`) and classifies the command it expands to. Resolution stops at the first construct that could change a variable unseen (a function, `eval`, `read`, a loop or `if`, a conditional assignment, a custom `IFS`); later words stay dynamic;
+- classifies a command whose command word is dynamic and cannot be resolved (`"$cmd" -rf /`) as unknown, so `unknown_command_policy` decides;
 - parses a literal `sh -c '...'` / `bash -c '...'` script recursively, and treats a shell that reads commands from stdin or a script file as unknown;
 - parses a literal `trap '...'` action recursively, and treats an `xargs` invocation that launches a shell as unknown;
 - inspects common wrappers (`env`, `command`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `watch`, `flock`, `chrt`, `taskset`, `busybox`, `runuser`, `setpriv`, `capsh`, `machinectl`, `lxc`, `incus`) and classifies the command they launch; `runuser -c` and `flock -c` command strings are parsed as shell scripts;
@@ -112,7 +113,7 @@ The CLI (`picoclaw agent`, both one-shot and interactive) does not run the gatew
 
 Limits worth knowing:
 
-- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and follows `unknown_command_policy`. A dynamic operand for a destructive command (for example `rm "$TARGET"`) is still rejected.
+- The classifier is static. A dynamic argument that hides a flag (for example `curl "$FLAGS"`) cannot be inspected; a dynamic command word is treated as unknown and follows `unknown_command_policy`. An operand of a destructive command that comes from an expansion (for example `rm "$TARGET"`), even a resolved constant, is still rejected. Commands that run an interpreter (`python3 -c`, `perl -e`, `awk`) or rewrite files through other tools (`sed -i`, `cp /dev/null f`) are classified by name only; use [subprocess isolation](../security/isolation.md) to bound them.
 - External programs still run with the OS user's file permissions. Shell redirections are checked by the path guard, but a dynamically built redirection target and file access performed by an external binary are not sandboxed by this layer. See [Subprocess Isolation](../security/isolation.md) for the optional OS-level child-process boundary.
 - Windows is skipped because exec runs PowerShell there. The Windows-only regex floor keeps generic command patterns (`npm install -g`, `git push`, `docker run`, process kills, and so on) plus the PowerShell-specific checks described below.
 

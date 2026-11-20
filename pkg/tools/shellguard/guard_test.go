@@ -436,7 +436,7 @@ func TestGuardWrapperInspection(t *testing.T) {
 		{high, "machinectl -- shell user@m rm -rf /"},
 		{medium, "timeout -- 5 rm -rf /"},
 		{medium, "flock -- /tmp/lock rm -rf /"},
-		{critical, "runuser -c 'x=rm; $x -rf /'"},
+		{critical, "runuser -c 'x=$(echo rm); $x -rf /'"},
 	}
 	for _, tt := range blockedCommands {
 		if blocked := checkGuard(tt.guard, tt.command); blocked == nil {

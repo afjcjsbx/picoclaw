@@ -9,8 +9,9 @@ import (
 // CanonicalCommands returns one canonical form per simple command in command.
 // The parser removes quote boundaries and resolves concatenation, so a
 // quote-spliced name such as r”m -rf / becomes "rm -rf /". Words that contain
-// expansions contribute their literal prefix; a command with a dynamic name is
-// skipped because its argv cannot be represented statically.
+// expansions contribute their literal prefix, except constants the script
+// assigned earlier, which resolve (see constEnv); a command with a dynamic name
+// is skipped because its argv cannot be represented statically.
 //
 // Literal sh -c scripts and wrapper commands are inspected recursively, so the
 // returned forms include the commands they would execute. The forms are
@@ -40,6 +41,7 @@ func canonicalForms(file *syntax.File, depth int) []string {
 		return nil
 	}
 
+	resolved := resolveConstants(file)
 	var forms []string
 	syntax.Walk(file, func(node syntax.Node) bool {
 		stmt, ok := node.(*syntax.Stmt)
@@ -51,9 +53,12 @@ func canonicalForms(file *syntax.File, depth int) []string {
 			return true
 		}
 
-		words := make([]word, 0, len(call.Args))
-		for _, arg := range call.Args {
-			words = append(words, literalWord(arg))
+		words := resolved[call]
+		if words == nil {
+			words = make([]word, 0, len(call.Args))
+			for _, arg := range call.Args {
+				words = append(words, literalWord(arg))
+			}
 		}
 		forms = appendCanonicalCall(forms, words, stmt.Redirs, depth)
 		return true
