@@ -470,9 +470,11 @@ The workspace restriction only controls paths. To confine child processes at the
 |------------|------|---------|-------------|
 | `isolation.enabled` | bool | `false` | Sandbox child processes: `exec`, CLI providers, process hooks, MCP `stdio` servers and plugins |
 | `isolation.expose_paths` | array | `[]` | Host paths exposed inside the sandbox as `{source, target, mode}`, where `mode` is `ro` or `rw` |
-| `isolation.block_network` | bool | `false` | Isolate child processes from the host network namespace; Linux only |
+| `isolation.block_network` | bool | `false` | Isolate child processes from the host network namespace; Linux only. When `false`, sandboxed commands still reach host loopback, the LAN and cloud metadata endpoints |
 
 Linux requires `bwrap` (bubblewrap); macOS uses Seatbelt through `sandbox-exec`; Windows applies process-level restrictions. When isolation is enabled, `HOME`, `TMPDIR` and the XDG directories are redirected to the instance root, and only an allowlist of environment variables is inherited. The workspace restriction and process isolation complement each other and do not replace each other.
+
+> ⚠️ **Warning**: `block_network` defaults to `false`, so an isolated command can still reach `127.0.0.1`, scan the LAN and brute-force the host or other devices. Set it to `true` unless `exec`, MCP servers or CLI providers need `curl`, `wget`, `git` or other outbound network access. See [Network isolation](../security/isolation.md#network-isolation).
 
 For platform support, `expose_paths` rules, bubblewrap requirements, network isolation and troubleshooting, see [Subprocess Isolation](../security/isolation.md).
 

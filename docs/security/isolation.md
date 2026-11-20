@@ -102,19 +102,43 @@ Example:
 
 ### Network isolation
 
-By default (`block_network: false`) child processes share the host network namespace. Loopback services, cloud-instance metadata endpoints such as `http://169.254.169.254/`, sidecar daemons and local databases are reachable from inside the sandbox. Any network-capable runtime (`curl`, `python`, `node`, and so on) can exfiltrate data; the exec tool's command guards are not a network boundary.
+By default (`block_network: false`) bubblewrap runs without `--unshare-net`, so child processes share the host network namespace. The sandbox sees the same interfaces, addresses, routes and loopback as the host. Host-local services (`127.0.0.1`), the LAN, the router, sidecar daemons, local databases and cloud-instance metadata endpoints such as `http://169.254.169.254/` are all reachable from inside the sandbox. Any network-capable runtime (`curl`, `python`, `node`, and so on) can use them; the exec tool's command guards are not a network boundary.
 
-Setting `block_network: true` passes `--unshare-net` to bubblewrap and places child processes in a fresh network namespace with only a loopback interface (`lo`). Connections to host services or the internet fail with "connection refused" or "network unreachable".
+> ⚠️ **Warning**: `block_network: false` leaves the entire host network attack surface open to anything that can run a command inside the sandbox, including a prompt-injected or otherwise compromised agent. A child process can:
+>
+> - reach loopback-only services that are not exposed to the internet, such as the host SSH daemon, admin panels and local databases;
+> - scan and connect to other LAN hosts, including the router;
+> - brute-force credentials against the host or neighbouring devices;
+> - read cloud-instance metadata credentials;
+> - exfiltrate any data it can read inside the sandbox to an external host.
 
-What breaks when `block_network: true`:
+A concrete observation on a Raspberry Pi with isolation enabled and `block_network: false`:
 
-- `curl`, `wget` and other HTTP clients inside the sandbox
-- `git fetch`, `git clone`, `git push` and other network operations
-- package managers that download packages (`pip`, `npm`, `apt`, and so on)
-- MCP servers that need internet access
-- any agent tool that relies on outbound network calls from child processes
+- `/proc/self/ns/net` reports `net:[4026531833]`, the same network namespace as the host.
+- `wlan0` with `192.168.1.219/24` is visible inside the sandbox.
+- `127.0.0.1:22` answers with `SSH-2.0-OpenSSH_10.0p2 Raspbian-7+deb13u`.
+- The router at `192.168.1.1:80` is reachable.
 
-If agents need filtered outbound internet but must not reach host-local services, route their traffic through an egress proxy instead of using `block_network`.
+From that sandbox an attacker can therefore brute-force SSH against the Pi itself and scan the whole LAN.
+
+Setting `block_network: true` passes `--unshare-net` to bubblewrap and places child processes in a fresh network namespace with only a loopback interface (`lo`). Connections to host services, the LAN or the internet fail with "connection refused" or "network unreachable".
+
+#### Deciding whether the sandbox needs network
+
+Set `block_network: true` unless the commands and services running inside the sandbox actually need outbound access. `--unshare-net` closes loopback, LAN and internet in one step, so no additional firewall rules are required.
+
+Network access is required when the sandbox must run:
+
+- `curl`, `wget` and other HTTP clients;
+- `git fetch`, `git clone`, `git push` and other network operations;
+- package managers that download packages (`pip`, `npm`, `apt`, and so on);
+- MCP `stdio` servers that call remote APIs;
+- CLI providers, hooks or plugins that call remote services;
+- any agent tool that relies on outbound network calls from child processes.
+
+If the agent only edits files, runs local builds and tests, or executes local scripts, `block_network: true` costs nothing and removes a direct path from the sandbox to the host and the LAN.
+
+When only some spawn sites need network, prefer an egress proxy, or a separate PicoClaw instance with its own isolation settings, over leaving every child process on the host network. If agents need filtered outbound internet but must not reach host-local services, route their traffic through that proxy rather than relying on a shared host namespace.
 
 ## Platforms
 
