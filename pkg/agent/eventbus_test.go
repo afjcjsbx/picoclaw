@@ -596,6 +596,7 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 			},
 		},
 	}
+	legacyProtectionOff(&cfg.Agents.Defaults)
 
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "summary text"})

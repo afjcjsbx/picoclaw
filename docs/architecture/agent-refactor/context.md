@@ -95,12 +95,31 @@ It estimates the prompt about to be sent (`exec.messages` plus tool definitions)
 When the threshold is reached it calls `ContextManager.Compact` with `Reason: ContextCompressReasonThreshold`, **blocking the turn** until it returns. If the session changed, it re-reads history and summary through `Assemble` and rebuilds `exec.messages` around the active turn (the same rebuild as the context-error retry, via `reassembleActiveTurn`; the active turn's messages are never dropped). The turn then carries on from the compacted context. `ErrNothingToCompact` means nothing changed and the prompt is kept. Compaction is best effort: any failure leaves the prompt as is, and the hard checks below remain the safety net.
 
 - **legacy**: compaction runs synchronously on the turn's context, so a hard abort cancels it and a canceled summarization is never applied. It works in this order, stopping at the first step that changes the session:
-  1. `summarizeSession` summarizes earlier Turns. The cut point is a Turn boundary (`findSafeBoundary`), so the active turn stays whole.
+  1. `summarizeSession` summarizes the **middle** between the protected head and tail. The cut point is a Turn boundary (`findSafeBoundary`), so the active turn stays whole. The head is kept verbatim (see [Head and tail protection](#head-and-tail-protection-legacy)); the tail is selected by token budget and message/user-message floors, not by a fixed four-message count.
   2. `summarizeActiveTurn` summarizes the **middle of the active turn**. The turn's opening user message and its newest two tool rounds (an assistant message plus its tool results, never split) stay verbatim; the rounds in between, with their tool calls and bounded tool outputs, are folded into the session summary on top of the existing one. The newest round is never summarized because the model has not seen its results yet. It is skipped when the middle would reclaim less than a tenth of the threshold, so an LLM call is never spent on a few hundred tokens.
-  3. Old tool outputs are cleared (`pruneOldToolResults`) when neither step applies.
+  3. Old tool outputs are cleared (`pruneOldToolResults`) when neither step applies. The same head/tail bounds apply; when the protected tail itself exceeds its token budget, old tool outputs inside it are archived and replaced by a `read_file` stub, so one oversized result cannot force the whole history to be dropped.
 
   `CompactBeforeLLM` chains up to three passes per LLM call, so one call can both summarize earlier Turns and the turn's own middle. The turn then continues with the kept rounds, the summary in the system prompt, and its original user message first. The post-turn `Compact(summarize)` is a no-op for legacy: the work moved here, and being synchronous it can no longer race with messages appended while the summary is generated.
 - **seahorse**: unchanged policy. A leaf compaction pass runs through `Engine.Compact`; if it creates no summary, `ErrNothingToCompact` is returned. Seahorse still compacts after the turn as before.
+
+#### Head and tail protection (legacy)
+
+The legacy manager never summarizes the first configured messages or the newest tail. The policy is resolved per agent at construction time from `agents.defaults`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `protect_first_n` | `1` | Leading conversation messages kept verbatim (system prompt excluded). `0` disables. |
+| `protect_last_n` | `4` | Minimum trailing messages kept verbatim. The token budget can keep more. `0` disables the count floor. |
+| `min_tail_user_messages` | `1` | Minimum real `user` messages guaranteed in the tail. `0` disables. |
+| `tail_token_budget` | auto | Tokens walked backwards from the newest message. Auto is 10% of the usable window (`ContextWindow - MaxTokens`), clamped to 2,000-32,000 and to half the window. `0` disables the token budget. |
+
+The tail is the union of the three minimums: the manager walks backwards accumulating `estimateMessageTokensForProvider` until the token budget is met, then keeps extending until the user-message guarantee is met. `protect_last_n` is a floor, not a cap. The resulting cut is snapped back to the nearest Turn boundary so a tool-call sequence is never split; the protected head is aligned forward over tool results for the same reason.
+
+The tail is resolved against the full history, then capped at the active-turn boundary. A long active turn therefore does not cause older turns to be over-protected just because they fall inside the last N messages: the active turn is already protected whole.
+
+The same bounds drive tool-output pruning. Outputs outside the head and tail are archived under `<workspace>/.artifacts/evicted/` and replaced by a stub pointing at the file. If the protected tail itself exceeds `tail_token_budget`, its old tool outputs are archived too; the head is never touched. This keeps one huge tool result from making `forceCompression` drop half the conversation.
+
+Emergency compression (`forceCompression`) keeps the protected head and the newest half where possible, dropping the middle; it falls back to dropping the head only when there is no room for a middle.
 
 The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt.
 
@@ -118,7 +137,7 @@ This prevents wasted (and billed) LLM calls that would otherwise fail with a con
 
 `forceCompression` runs when the LLM returns a context-window error despite the proactive check.
 
-Drops the oldest ~50% of Turns. If the history is a single Turn with no safe split point (e.g. one user message followed by a massive tool response), falls back to keeping only the most recent user message — breaking Turn atomicity as a last resort to avoid a context-exceeded loop.
+Keeps the protected head and the newest ~50% of Turns, dropping the middle. If there is no room for a middle it falls back to dropping the head. If the history is a single Turn with no safe split point (e.g. one user message followed by a massive tool response), it falls back to keeping only the most recent user message — breaking Turn atomicity as a last resort to avoid a context-exceeded loop.
 
 Stores a compression note in the session summary (not in history messages) so `BuildMessages` can include it in the next system prompt.
 
@@ -130,7 +149,7 @@ This is the fallback for when the token estimate undershoots reality.
 
 Manual requests receive a `CompactOutcome` with a reason (`compacted`, `below_target`, `too_short`, `no_candidates`, `in_progress`), before/after history tokens, the target, and created summary counts. When nothing was summarized, the command explains the specific reason and the measured tokens; it suggests `/compact --force` for an already-fitting session instead of replying with a generic "Nothing to compact yet." Other errors are reported as "Failed to compact context: ...".
 
-- **legacy**: runs `summarizeSession` directly, so the cut point, the last-four-messages tail and the `agent.session.summarize` event match threshold compaction. It takes the same per-session dedup key; if a summarization is already in flight the command fails with "a summarization is already in progress" instead of racing it.
+- **legacy**: runs `summarizeSession` directly, so the cut point, the protected head/tail and the `agent.session.summarize` event match threshold compaction. It takes the same per-session dedup key; if a summarization is already in flight the command fails with "a summarization is already in progress" instead of racing it.
 - **seahorse**: calls `Engine.CompactNowWithBudget` by default, or `Engine.CompactNow` with `--force`, which runs one leaf pass followed by the condensed loop synchronously (the automatic path runs the condensed loop in a background goroutine). The fresh tail stays protected. It shares the `condensing` dedup map with the async loop and reports `in_progress` when that slot is busy.
 
 Both implementations leave the automatic prompts unchanged when no focus is given.

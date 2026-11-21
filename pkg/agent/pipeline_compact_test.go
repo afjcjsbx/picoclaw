@@ -95,6 +95,7 @@ func newMidTurnAgentLoop(t *testing.T, provider providers.LLMProvider, toolSize 
 			},
 		},
 	}
+	legacyProtectionOff(&cfg.Agents.Defaults)
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	al.RegisterTool(&bulkyTool{size: toolSize})
 	return al

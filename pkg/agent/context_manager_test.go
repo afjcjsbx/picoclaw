@@ -381,7 +381,7 @@ func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
 		t.Fatalf("SetHistory: %v", err)
 	}
 
-	result, ok := al.contextManager.(*legacyContextManager).forceCompression("session-prune-tools")
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression("session-prune-tools", nil)
 	if !ok {
 		t.Fatal("expected old tool output to be pruned")
 	}
@@ -540,6 +540,7 @@ func newSummarizeThresholdAgentLoop(t *testing.T, contextWindow int) *AgentLoop 
 			},
 		},
 	}
+	legacyProtectionOff(&cfg.Agents.Defaults)
 	return NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "summary"})
 }
 
@@ -1103,9 +1104,20 @@ func resetCMRegistry() func() {
 	}
 }
 
+// legacyProtectionOff reproduces the pre-head/tail-protection behavior for
+// tests that exercise compaction mechanics rather than the protection policy:
+// no head, exactly four trailing messages, no token budget or user guarantee.
+func legacyProtectionOff(d *config.AgentDefaults) {
+	zero, four := 0, 4
+	d.ProtectFirstN = &zero
+	d.ProtectLastN = &four
+	d.MinTailUserMessages = &zero
+	d.TailTokenBudget = &zero
+}
+
 func testConfig(t *testing.T) *config.Config {
 	t.Helper()
-	return &config.Config{
+	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         t.TempDir(),
@@ -1115,6 +1127,8 @@ func testConfig(t *testing.T) *config.Config {
 			},
 		},
 	}
+	legacyProtectionOff(&cfg.Agents.Defaults)
+	return cfg
 }
 
 func newCMTestAgentLoop(cfg *config.Config) *AgentLoop {

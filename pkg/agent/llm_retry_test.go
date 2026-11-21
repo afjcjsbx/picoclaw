@@ -154,6 +154,7 @@ func TestLegacySummarizer_RetriesOverloadedUpstream(t *testing.T) {
 			},
 		},
 	}
+	legacyProtectionOff(&cfg.Agents.Defaults)
 	provider := &overloadProvider{errs: []error{httpStatusError(502)}}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	agent := al.registry.GetDefaultAgent()

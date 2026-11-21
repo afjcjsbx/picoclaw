@@ -716,6 +716,25 @@ type AgentDefaults struct {
 	// serialized so an explicit false or empty list survives save and reload.
 	LLMRetryOnEmptyContent  bool     `json:"llm_retry_on_empty_content"  env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_EMPTY_CONTENT"`
 	LLMRetryOnFinishReasons []string `json:"llm_retry_on_finish_reasons" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_FINISH_REASONS"`
+
+	// Legacy context-manager head/tail protection.
+	//
+	// ProtectFirstN is the number of leading conversation messages kept verbatim
+	// by legacy compaction, in addition to the system prompt. nil uses the
+	// default (1); 0 disables head protection.
+	ProtectFirstN *int `json:"protect_first_n,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_PROTECT_FIRST_N"`
+	// ProtectLastN is the minimum number of trailing messages kept verbatim.
+	// The token budget below can protect more. nil uses the default (4);
+	// 0 disables the message-count floor.
+	ProtectLastN *int `json:"protect_last_n,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_PROTECT_LAST_N"`
+	// MinTailUserMessages is the minimum number of real user messages kept in
+	// the unprotected tail. nil uses the default (1); 0 disables the guarantee.
+	MinTailUserMessages *int `json:"min_tail_user_messages,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_MIN_TAIL_USER_MESSAGES"`
+	// TailTokenBudget is the token budget used to walk the tail backwards from
+	// the newest message. nil uses an automatic budget (10% of the usable
+	// context window, clamped to 2,000-32,000 tokens); 0 disables the token
+	// budget and leaves only the message-count/user-message floors.
+	TailTokenBudget *int `json:"tail_token_budget,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_TAIL_TOKEN_BUDGET"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
