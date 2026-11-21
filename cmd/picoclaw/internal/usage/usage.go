@@ -2,11 +2,13 @@ package usage
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/cliui"
 	"github.com/sipeed/picoclaw/pkg/memory"
@@ -16,6 +18,12 @@ import (
 
 // runUsage writes the usage report for the sessions stored under sessionsDir.
 func runUsage(out io.Writer, sessionsDir string, opts options) error {
+	if opts.Days < 0 {
+		return fmt.Errorf("--days must not be negative, got %d", opts.Days)
+	}
+	if opts.Days > 0 && strings.TrimSpace(opts.Session) != "" {
+		return errors.New("--days cannot be combined with --session")
+	}
 	entries, err := memory.ReadSessionUsage(sessionsDir)
 	if err != nil {
 		return err
@@ -28,6 +36,11 @@ func runUsage(out io.Writer, sessionsDir string, opts options) error {
 
 func runOverview(out io.Writer, sessionsDir string, entries []memory.SessionUsageEntry, opts options) error {
 	rep := usagereport.Overview(sessionsDir, entries)
+	if opts.Days > 0 {
+		if err := rep.AddPeriod(sessionsDir, opts.Days, time.Now()); err != nil {
+			return err
+		}
+	}
 	rows := rep.Sessions
 	limited := opts.Limit > 0 && opts.Limit < rep.SessionCount
 	if limited {
@@ -38,7 +51,7 @@ func runOverview(out io.Writer, sessionsDir string, entries []memory.SessionUsag
 		rep.Sessions = rows
 		return writeJSON(out, rep)
 	}
-	if rep.SessionCount == 0 {
+	if rep.SessionCount == 0 && (rep.Period == nil || rep.Period.TrackedSince == nil) {
 		fmt.Fprintf(out, "No token usage recorded under %s.\n", sessionsDir)
 		return nil
 	}
@@ -54,6 +67,7 @@ func runOverview(out io.Writer, sessionsDir string, entries []memory.SessionUsag
 		Models:       rep.Models,
 		Rows:         displayed,
 		Limited:      limited,
+		Period:       usagePeriod(rep.Period),
 	})
 	return nil
 }
@@ -136,6 +150,22 @@ func matchSession(
 		}
 	}
 	return memory.SessionUsageEntry{}, fmt.Errorf("session %q not found under %s", query, sessionsDir)
+}
+
+func usagePeriod(p *usagereport.Period) *cliui.UsagePeriod {
+	if p == nil {
+		return nil
+	}
+	period := &cliui.UsagePeriod{
+		Days:   p.Days,
+		Since:  p.Since,
+		Totals: p.Totals,
+		Daily:  p.Daily,
+	}
+	if p.TrackedSince != nil {
+		period.TrackedSince = *p.TrackedSince
+	}
+	return period
 }
 
 func writeJSON(out io.Writer, v any) error {

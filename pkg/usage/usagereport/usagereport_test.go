@@ -2,8 +2,10 @@ package usagereport
 
 import (
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/memory"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
@@ -78,5 +80,52 @@ func TestOverviewMergesModelsAcrossSessions(t *testing.T) {
 	}
 	if rep.Models[1].Model != "small" || rep.Models[1].TotalTokens != 10 {
 		t.Errorf("second model = %+v, want small with 10 tokens", rep.Models[1])
+	}
+}
+
+func TestAddPeriodWindowsLedgerByCalendarDays(t *testing.T) {
+	dir := t.TempDir()
+	store, err := memory.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	now := time.Date(2026, 11, 21, 15, 0, 0, 0, time.UTC)
+	for _, at := range []time.Time{
+		now.AddDate(0, 0, -10), // before the window, still sets TrackedSince
+		now.AddDate(0, 0, -2),  // first day of a 3-day window
+		now,
+	} {
+		msg := providers.Message{
+			Role:      "assistant",
+			ModelName: "m",
+			CreatedAt: &at,
+			Usage:     &providers.UsageInfo{PromptTokens: 10, CompletionTokens: 1, TotalTokens: 11},
+		}
+		if err := store.AddFullMessage(t.Context(), "s", msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rep := Overview(dir, nil)
+	if err := rep.AddPeriod(dir, 3, now); err != nil {
+		t.Fatalf("AddPeriod: %v", err)
+	}
+	p := rep.Period
+	if p.Totals.TotalTokens != 22 || len(p.Daily) != 2 {
+		t.Fatalf("period = %+v, want the 2 days inside the window", p)
+	}
+	if p.Daily[0].Date != "2026-11-19" || p.Daily[1].Date != "2026-11-21" {
+		t.Errorf("days = %s, %s", p.Daily[0].Date, p.Daily[1].Date)
+	}
+	if p.TrackedSince == nil || p.TrackedSince.Format(usage.DateLayout) != "2026-11-11" {
+		t.Errorf("TrackedSince = %v, want the oldest entry", p.TrackedSince)
+	}
+	if len(p.Models) != 1 || p.Models[0].Model != "m" {
+		t.Errorf("models = %+v", p.Models)
+	}
+	if err := rep.AddPeriod(dir, 0, now); err == nil {
+		t.Error("AddPeriod(0) must fail")
 	}
 }

@@ -3,6 +3,7 @@ package cliui
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/usage"
 )
@@ -19,6 +20,19 @@ type UsageOverview struct {
 	Rows []UsageRow
 	// Limited is true when Rows is only the first part of the sessions.
 	Limited bool
+	// Period is the recent history from the usage ledger, or nil when not asked for.
+	Period *UsagePeriod
+}
+
+// UsagePeriod is the usage of the last Days calendar days.
+type UsagePeriod struct {
+	Days  int
+	Since time.Time
+	// TrackedSince is when the usage ledger started; zero while it is empty.
+	TrackedSince time.Time
+	Totals       usage.Totals
+	// Daily has one row per day with usage, oldest first.
+	Daily []usage.DayTotals
 }
 
 // UsageRow is one session row of an overview.
@@ -40,10 +54,15 @@ func PrintUsageOverview(w io.Writer, overview UsageOverview) {
 	fmt.Fprintf(w, "Usage summary\n%s\n\nSessions: %d\n", overview.SessionsDir, overview.SessionCount)
 	printUsageTotals(w, overview.Totals)
 	printModelTable(w, overview.Models)
-	if len(overview.Rows) == 0 {
-		return
+	if len(overview.Rows) > 0 {
+		printUsageSessions(w, overview)
 	}
+	if overview.Period != nil {
+		printUsagePeriod(w, overview.Period)
+	}
+}
 
+func printUsageSessions(w io.Writer, overview UsageOverview) {
 	rows := make([][]string, 0, len(overview.Rows))
 	for _, row := range overview.Rows {
 		rows = append(rows, usageCells(row.Label, row.Totals))
@@ -58,6 +77,27 @@ func PrintUsageOverview(w io.Writer, overview UsageOverview) {
 	if overview.Limited {
 		fmt.Fprintf(w, "\nUse --limit 0 to list all %d sessions.\n", overview.SessionCount)
 	}
+}
+
+func printUsagePeriod(w io.Writer, period *UsagePeriod) {
+	fmt.Fprintf(w, "\nLast %d days (since %s)\n", period.Days, period.Since.Format(usage.DateLayout))
+	if period.TrackedSince.IsZero() {
+		fmt.Fprintln(w, "No history recorded yet; it starts with the next message that reports usage.")
+		return
+	}
+	fmt.Fprintf(w, "History recorded since %s\n", period.TrackedSince.Format(usage.DateLayout))
+	if period.Totals.Empty() {
+		fmt.Fprintln(w, "No token usage in this period.")
+		return
+	}
+	printUsageTotals(w, period.Totals)
+
+	rows := make([][]string, 0, len(period.Daily))
+	for _, day := range period.Daily {
+		rows = append(rows, usageCells(day.Date, day.Totals))
+	}
+	fmt.Fprintln(w)
+	printPlainTable(w, usageHeaders("Day"), rows)
 }
 
 // PrintUsageSession renders one session as plain text, with its per-model split.

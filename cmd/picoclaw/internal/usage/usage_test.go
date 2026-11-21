@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -281,5 +282,81 @@ func TestRunUsageSessionJSON(t *testing.T) {
 	first, _ := sessions[0].(map[string]any)
 	if first["key"] != "session-a" {
 		t.Fatalf("key = %v, want session-a", first["key"])
+	}
+}
+
+func TestRunUsageDaysTextShowsDailyHistory(t *testing.T) {
+	dir := seedOverview(t)
+
+	var out bytes.Buffer
+	if err := runUsage(&out, dir, options{Limit: 20, Days: 7}); err != nil {
+		t.Fatalf("runUsage: %v", err)
+	}
+	text := out.String()
+	today := time.Now().Format("2006-01-02")
+	for _, want := range []string{"Last 7 days", "History recorded since " + today, "Day", today} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("overview missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRunUsageDaysJSONHasPeriod(t *testing.T) {
+	dir := seedOverview(t)
+
+	var out bytes.Buffer
+	if err := runUsage(&out, dir, options{JSON: true, Limit: 20, Days: 7}); err != nil {
+		t.Fatalf("runUsage: %v", err)
+	}
+	period, ok := decodeReport(t, out.Bytes())["period"].(map[string]any)
+	if !ok {
+		t.Fatalf("period missing:\n%s", out.String())
+	}
+	if period["days"] != float64(7) {
+		t.Errorf("days = %v, want 7", period["days"])
+	}
+	if daily, _ := period["daily"].([]any); len(daily) != 1 {
+		t.Errorf("daily = %v, want one day", period["daily"])
+	}
+	if totals, _ := period["totals"].(map[string]any); totals["total_tokens"] != float64(1500) {
+		t.Errorf("period totals = %v, want 1500 total tokens", period["totals"])
+	}
+}
+
+func TestRunUsageWithoutDaysHasNoPeriod(t *testing.T) {
+	dir := seedOverview(t)
+
+	var out bytes.Buffer
+	if err := runUsage(&out, dir, options{JSON: true, Limit: 20}); err != nil {
+		t.Fatalf("runUsage: %v", err)
+	}
+	if _, ok := decodeReport(t, out.Bytes())["period"]; ok {
+		t.Fatalf("period must be omitted without --days:\n%s", out.String())
+	}
+}
+
+func TestRunUsageDaysRejectsBadCombinations(t *testing.T) {
+	dir := seedOverview(t)
+	if err := runUsage(&bytes.Buffer{}, dir, options{Days: -1}); err == nil {
+		t.Fatal("negative --days must fail")
+	}
+	if err := runUsage(&bytes.Buffer{}, dir, options{Days: 7, Session: "session-a"}); err == nil {
+		t.Fatal("--days with --session must fail")
+	}
+}
+
+func TestRunUsageDaysKeepsSpendOfDeletedSessions(t *testing.T) {
+	dir, store := openSessions(t)
+	addUsage(t, store, "gone", "model-a", 1000, 200)
+	if err := store.DeleteSession(context.Background(), "gone"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := runUsage(&out, dir, options{Limit: 20, Days: 7}); err != nil {
+		t.Fatalf("runUsage: %v", err)
+	}
+	if text := out.String(); !strings.Contains(text, "Last 7 days") || !strings.Contains(text, "1,200") {
+		t.Fatalf("history of the deleted session missing:\n%s", text)
 	}
 }
