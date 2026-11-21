@@ -209,6 +209,10 @@ type JSONLStore struct {
 	// power failure. Intended for flash-constrained devices where the
 	// per-message fsync cost and flash wear are not acceptable.
 	durableWrites bool
+
+	// ledgerMu serializes appends to the usage ledger, which every session
+	// shares. See usage_ledger.go.
+	ledgerMu sync.Mutex
 }
 
 // StoreOption configures a JSONLStore created by NewJSONLStore.
@@ -973,6 +977,7 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	meta.Count++
 	meta.UpdatedAt = now
 	s.recordUsage(sessionKey, &meta, msg)
+	s.recordLedger(sessionKey, msg)
 
 	return s.writeMeta(sessionKey, meta)
 }
