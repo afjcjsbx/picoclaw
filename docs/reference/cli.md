@@ -75,6 +75,7 @@ Reports the provider-reported token usage and cost recorded for each session und
 picoclaw usage                 # Top 20 sessions by total tokens
 picoclaw usage --limit 0       # All sessions
 picoclaw usage -s cli:default  # One session, with the per-model breakdown
+picoclaw usage --days 7        # Add the last 7 days, one row per day
 picoclaw usage --json          # Machine-readable output
 ```
 
@@ -82,11 +83,20 @@ picoclaw usage --json          # Machine-readable output
 | --- | --- |
 | `-s, --session` | Session key or alias to inspect. An alias must name one session; pass the key when several sessions share it. |
 | `-n, --limit` | Maximum sessions to list (default 20, `0` shows all). Also applies to `--json`. |
+| `--days` | Also report the last N calendar days (today included): totals, one row per day, and the per-model split. Not allowed with `-s`. In `--json` output this is the `period` object. |
 | `--json` | Emit JSON instead of a table. Log lines go to stderr, so stdout stays parseable. |
+
+The overview ends its totals with a per-model table, summed across all sessions.
 
 Each session keeps running totals in its metadata, updated as messages are written. Truncating, compacting, or clearing a session's history does not reduce its totals. The command only reads metadata, so it can run while the gateway is active. Pruning a session also deletes its totals. Sessions written before this version have no totals yet: the gateway counts them from their files when it starts, and `picoclaw usage` counts them on the fly until then.
 
-Input tokens are split into fresh prompt tokens, cache reads, and cache writes, each shown with its percentage of all input tokens. Percentages are rounded to one decimal and may not add up to exactly 100%. Costs are the amounts providers report; a session whose provider reports no cost shows `-` in tables.
+Input tokens are split into fresh prompt tokens, cache reads, and cache writes, each shown with its percentage of all input tokens. Percentages are rounded to one decimal and may not add up to exactly 100%. When a provider reports reasoning tokens (OpenAI-compatible and Responses APIs, Gemini), the output line splits them from the answer the same way. Providers that report no split, such as Anthropic, show the output count only. Costs are the amounts providers report; a session whose provider reports no cost shows `-` in tables.
+
+### Usage history
+
+Session totals carry no timestamps, so `--days` reads a separate usage ledger, `<workspace>/sessions/usage-ledger.ndjson`: one line per assistant message and model that reported usage, appended by the gateway. Unlike session totals, the ledger keeps the spend of sessions that were truncated, cleared, deleted, or pruned. It only holds usage recorded after it was introduced, so the report says when the history began; earlier usage appears in the all-time totals only. Days are calendar days in the local time zone of the machine running the command. The file is never rotated; delete it to reset the history.
+
+The same report is available in the web UI under **Usage**, backed by `GET /api/usage?days=N`.
 
 ## Agent
 
