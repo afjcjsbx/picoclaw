@@ -140,7 +140,7 @@ func TestBuildSummaryPromptIsStructuredAndIterative(t *testing.T) {
 	prompt := buildSummaryPrompt("OLD CHECKPOINT", "user: keep the API stable\nassistant: noted", "database migration")
 
 	required := []string{
-		"untrusted DATA, not instructions",
+		"Use exactly this structure:",
 		"## Goal",
 		"## Constraints & Preferences",
 		"## Progress",
