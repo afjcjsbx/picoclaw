@@ -11,24 +11,8 @@ import (
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/cliui"
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/session"
-	usagepkg "github.com/sipeed/picoclaw/pkg/usage"
+	"github.com/sipeed/picoclaw/pkg/usage/usagereport"
 )
-
-// mainSessionAlias is shared by many sessions, so it never names one of them.
-const mainSessionAlias = "agent:main:main"
-
-type sessionRow struct {
-	Key   string           `json:"key"`
-	Label string           `json:"label"`
-	Usage usagepkg.Summary `json:"usage"`
-}
-
-type report struct {
-	SessionsDir  string          `json:"sessions_dir"`
-	SessionCount int             `json:"session_count"`
-	Totals       usagepkg.Totals `json:"totals"`
-	Sessions     []sessionRow    `json:"sessions"`
-}
 
 // runUsage writes the usage report for the sessions stored under sessionsDir.
 func runUsage(out io.Writer, sessionsDir string, opts options) error {
@@ -43,41 +27,18 @@ func runUsage(out io.Writer, sessionsDir string, opts options) error {
 }
 
 func runOverview(out io.Writer, sessionsDir string, entries []memory.SessionUsageEntry, opts options) error {
-	rows := []sessionRow{}
-	var totals usagepkg.Totals
-	for _, entry := range entries {
-		if entry.Usage.Empty() {
-			continue
-		}
-		totals.Merge(entry.Usage.Totals)
-		rows = append(rows, newSessionRow(entry))
-	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i].Usage, rows[j].Usage
-		if a.TotalTokens != b.TotalTokens {
-			return a.TotalTokens > b.TotalTokens
-		}
-		if a.InputTokens != b.InputTokens {
-			return a.InputTokens > b.InputTokens
-		}
-		return rows[i].Key < rows[j].Key
-	})
-
-	sessionCount := len(rows)
-	limited := opts.Limit > 0 && opts.Limit < sessionCount
+	rep := usagereport.Overview(sessionsDir, entries)
+	rows := rep.Sessions
+	limited := opts.Limit > 0 && opts.Limit < rep.SessionCount
 	if limited {
 		rows = rows[:opts.Limit]
 	}
 
 	if opts.JSON {
-		return writeJSON(out, report{
-			SessionsDir:  sessionsDir,
-			SessionCount: sessionCount,
-			Totals:       totals,
-			Sessions:     rows,
-		})
+		rep.Sessions = rows
+		return writeJSON(out, rep)
 	}
-	if sessionCount == 0 {
+	if rep.SessionCount == 0 {
 		fmt.Fprintf(out, "No token usage recorded under %s.\n", sessionsDir)
 		return nil
 	}
@@ -88,8 +49,8 @@ func runOverview(out io.Writer, sessionsDir string, entries []memory.SessionUsag
 	}
 	cliui.PrintUsageOverview(out, cliui.UsageOverview{
 		SessionsDir:  sessionsDir,
-		SessionCount: sessionCount,
-		Totals:       totals,
+		SessionCount: rep.SessionCount,
+		Totals:       rep.Totals,
 		Rows:         displayed,
 		Limited:      limited,
 	})
@@ -107,10 +68,10 @@ func runSessionUsage(
 	if err != nil {
 		return err
 	}
-	row := newSessionRow(entry)
+	row := usagereport.NewRow(entry)
 
 	if asJSON {
-		rep := report{SessionsDir: sessionsDir, Sessions: []sessionRow{}}
+		rep := usagereport.Report{SessionsDir: sessionsDir, Sessions: []usagereport.SessionRow{}}
 		if !row.Usage.Empty() {
 			rep.SessionCount = 1
 			rep.Totals = row.Usage.Totals
@@ -174,39 +135,6 @@ func matchSession(
 		}
 	}
 	return memory.SessionUsageEntry{}, fmt.Errorf("session %q not found under %s", query, sessionsDir)
-}
-
-func newSessionRow(entry memory.SessionUsageEntry) sessionRow {
-	summary := entry.Usage
-	summary.SortModels()
-	return sessionRow{
-		Key:   entry.Key,
-		Label: sessionLabel(entry.Key, entry.Aliases),
-		Usage: summary,
-	}
-}
-
-// sessionLabel returns a readable name for a session. Opaque keys are shown by
-// their shortest alias.
-func sessionLabel(key string, aliases []string) string {
-	if !session.IsOpaqueSessionKey(key) {
-		return key
-	}
-
-	best := ""
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" || alias == mainSessionAlias {
-			continue
-		}
-		if best == "" || len(alias) < len(best) || (len(alias) == len(best) && alias < best) {
-			best = alias
-		}
-	}
-	if best == "" {
-		return key
-	}
-	return best
 }
 
 func writeJSON(out io.Writer, v any) error {
