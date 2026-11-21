@@ -153,6 +153,31 @@ func TestTotalsInputBreakdownOmitsSharesWithoutCache(t *testing.T) {
 	}
 }
 
+func TestTotalsOutputBreakdownShowsReasoningShare(t *testing.T) {
+	totals := Totals{OutputTokens: 1000, ReasoningTokens: 250}
+	want := "1,000 tokens — answer 750 (75.0%) · reasoning 250 (25.0%)"
+	if got := totals.OutputBreakdown(); got != want {
+		t.Fatalf("OutputBreakdown() = %q, want %q", got, want)
+	}
+}
+
+func TestTotalsOutputBreakdownOmitsSplitWithoutReasoning(t *testing.T) {
+	totals := Totals{OutputTokens: 300}
+	if got := totals.OutputBreakdown(); got != "300 tokens" {
+		t.Fatalf("OutputBreakdown() = %q, want no reasoning split", got)
+	}
+}
+
+func TestSummaryAddMessageCountsReasoning(t *testing.T) {
+	var summary Summary
+	summary.AddMessage("m", providers.UsageInfo{CompletionTokens: 100, ReasoningTokens: 40})
+	summary.AddMessage("m", providers.UsageInfo{CompletionTokens: 50, ReasoningTokens: 10})
+
+	if summary.ReasoningTokens != 50 || summary.Models[0].ReasoningTokens != 50 {
+		t.Fatalf("reasoning = %d (model %d), want 50", summary.ReasoningTokens, summary.Models[0].ReasoningTokens)
+	}
+}
+
 func TestFormatShare(t *testing.T) {
 	cases := []struct {
 		tokens, input int

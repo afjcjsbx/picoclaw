@@ -320,6 +320,7 @@ func parseResponse(apiResp *responses.Response) *protocoltypes.LLMResponse {
 			CompletionTokens: int(apiResp.Usage.OutputTokens),
 			TotalTokens:      int(apiResp.Usage.TotalTokens),
 			CacheReadTokens:  int(apiResp.Usage.InputTokensDetails.CachedTokens),
+			ReasoningTokens:  int(apiResp.Usage.OutputTokensDetails.ReasoningTokens),
 		}
 	}
 

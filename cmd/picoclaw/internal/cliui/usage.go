@@ -83,7 +83,7 @@ func printModelTable(w io.Writer, models []usage.ModelTotals) {
 func printUsageTotals(w io.Writer, totals usage.Totals) {
 	fmt.Fprintf(w, "LLM calls: %d · turns: %d\n", totals.Requests, totals.Turns)
 	fmt.Fprintf(w, "Input:  %s\n", totals.InputBreakdown())
-	fmt.Fprintf(w, "Output: %s tokens\n", usage.FormatTokens(totals.OutputTokens))
+	fmt.Fprintf(w, "Output: %s\n", totals.OutputBreakdown())
 	fmt.Fprintf(w, "Total:  %s tokens\n", usage.FormatTokens(totals.TotalTokens))
 	fmt.Fprintf(w, "Cost:   %s\n", usage.FormatCost(totals.CostUSD))
 }

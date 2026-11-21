@@ -73,6 +73,10 @@ type UsageInfo struct {
 	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`     // prompt tokens served from cache
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"` // prompt tokens written to cache (Anthropic)
 
+	// ReasoningTokens is the part of CompletionTokens spent on hidden reasoning.
+	// Zero means the provider did not report a split, not that none was used.
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+
 	// CostUSD is the provider-reported cost for the request in US dollars.
 	// Zero means the provider did not report a cost (for example most HTTP
 	// providers); the web UI falls back to an approximate list-price estimate.
@@ -100,7 +104,7 @@ type ModelUsage struct {
 // HasUsage reports whether the report carries any tokens or cost.
 func (u UsageInfo) HasUsage() bool {
 	return u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0 ||
-		u.CacheReadTokens > 0 || u.CacheCreationTokens > 0 || u.CostUSD > 0
+		u.CacheReadTokens > 0 || u.CacheCreationTokens > 0 || u.ReasoningTokens > 0 || u.CostUSD > 0
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.
