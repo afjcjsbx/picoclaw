@@ -13,6 +13,8 @@ type UsageOverview struct {
 	// SessionCount is the number of sessions that recorded usage.
 	SessionCount int
 	Totals       usage.Totals
+	// Models splits Totals by model, largest first.
+	Models []usage.ModelTotals
 	// Rows lists the sessions shown, largest consumer first.
 	Rows []UsageRow
 	// Limited is true when Rows is only the first part of the sessions.
@@ -37,6 +39,7 @@ type UsageSession struct {
 func PrintUsageOverview(w io.Writer, overview UsageOverview) {
 	fmt.Fprintf(w, "Usage summary\n%s\n\nSessions: %d\n", overview.SessionsDir, overview.SessionCount)
 	printUsageTotals(w, overview.Totals)
+	printModelTable(w, overview.Models)
 	if len(overview.Rows) == 0 {
 		return
 	}
@@ -61,12 +64,15 @@ func PrintUsageOverview(w io.Writer, overview UsageOverview) {
 func PrintUsageSession(w io.Writer, session UsageSession) {
 	fmt.Fprintf(w, "Usage for session %s\n%s\n\n", session.Label, session.SessionsDir)
 	printUsageTotals(w, session.Totals)
-	if len(session.Models) == 0 {
+	printModelTable(w, session.Models)
+}
+
+func printModelTable(w io.Writer, models []usage.ModelTotals) {
+	if len(models) == 0 {
 		return
 	}
-
-	rows := make([][]string, 0, len(session.Models))
-	for _, model := range session.Models {
+	rows := make([][]string, 0, len(models))
+	for _, model := range models {
 		rows = append(rows, usageCells(model.Model, model.Totals))
 	}
 	fmt.Fprintln(w)

@@ -78,6 +78,7 @@ func TestRunUsageOverviewText(t *testing.T) {
 		"Output: 300 tokens",
 		"Total:  1,500 tokens",
 		"Cost:   not reported",
+		"By model",
 		"session-a",
 		"session-b",
 	} {

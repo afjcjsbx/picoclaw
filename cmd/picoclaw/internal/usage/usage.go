@@ -51,6 +51,7 @@ func runOverview(out io.Writer, sessionsDir string, entries []memory.SessionUsag
 		SessionsDir:  sessionsDir,
 		SessionCount: rep.SessionCount,
 		Totals:       rep.Totals,
+		Models:       rep.Models,
 		Rows:         displayed,
 		Limited:      limited,
 	})

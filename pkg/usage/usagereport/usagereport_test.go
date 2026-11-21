@@ -52,3 +52,31 @@ func TestSessionLabelPrefersShortestAlias(t *testing.T) {
 		t.Errorf("label = %q, want the legacy key itself", got)
 	}
 }
+
+func TestOverviewMergesModelsAcrossSessions(t *testing.T) {
+	withModels := func(key string, models ...usage.ModelTotals) memory.SessionUsageEntry {
+		var summary usage.Summary
+		for _, m := range models {
+			summary.Merge(usage.Summary{Totals: m.Totals, Models: []usage.ModelTotals{m}})
+		}
+		return memory.SessionUsageEntry{Key: key, Usage: summary}
+	}
+	model := func(name string, total int) usage.ModelTotals {
+		return usage.ModelTotals{Model: name, Totals: usage.Totals{TotalTokens: total}}
+	}
+
+	rep := Overview("/sessions", []memory.SessionUsageEntry{
+		withModels("a", model("small", 10), model("big", 50)),
+		withModels("b", model("big", 40)),
+	})
+
+	if len(rep.Models) != 2 {
+		t.Fatalf("models = %d, want 2", len(rep.Models))
+	}
+	if rep.Models[0].Model != "big" || rep.Models[0].TotalTokens != 90 {
+		t.Errorf("first model = %+v, want big with 90 tokens", rep.Models[0])
+	}
+	if rep.Models[1].Model != "small" || rep.Models[1].TotalTokens != 10 {
+		t.Errorf("second model = %+v, want small with 10 tokens", rep.Models[1])
+	}
+}

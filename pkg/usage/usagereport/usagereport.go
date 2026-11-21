@@ -26,6 +26,8 @@ type Report struct {
 	SessionsDir  string       `json:"sessions_dir"`
 	SessionCount int          `json:"session_count"`
 	Totals       usage.Totals `json:"totals"`
+	// Models splits Totals by the model that served each call, largest first.
+	Models []usage.ModelTotals `json:"models"`
 	// Sessions lists the sessions, largest consumer first.
 	Sessions []SessionRow `json:"sessions"`
 }
@@ -43,15 +45,21 @@ func NewRow(entry memory.SessionUsageEntry) SessionRow {
 
 // Overview aggregates entries into a report. Sessions without usage are left out.
 func Overview(sessionsDir string, entries []memory.SessionUsageEntry) Report {
-	report := Report{SessionsDir: sessionsDir, Sessions: []SessionRow{}}
+	report := Report{SessionsDir: sessionsDir, Models: []usage.ModelTotals{}, Sessions: []SessionRow{}}
+	var all usage.Summary
 	for _, entry := range entries {
 		if entry.Usage.Empty() {
 			continue
 		}
-		report.Totals.Merge(entry.Usage.Totals)
+		all.Merge(entry.Usage)
 		report.Sessions = append(report.Sessions, NewRow(entry))
 	}
+	all.SortModels()
+	report.Totals = all.Totals
 	report.SessionCount = len(report.Sessions)
+	if len(all.Models) > 0 {
+		report.Models = all.Models
+	}
 
 	sort.SliceStable(report.Sessions, func(i, j int) bool {
 		a, b := report.Sessions[i].Usage, report.Sessions[j].Usage
