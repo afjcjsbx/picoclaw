@@ -49,7 +49,7 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 	switch req.Reason {
 	case ContextCompressReasonProactive, ContextCompressReasonRetry:
 		// Sync emergency compression — budget exceeded.
-		if result, ok := m.forceCompression(req.SessionKey); ok {
+		if result, ok := m.forceCompression(ctx, req.SessionKey); ok {
 			m.al.emitEvent(
 				runtimeevents.KindAgentContextCompress,
 				m.al.newTurnEventScope(
@@ -58,16 +58,25 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 					nil,
 				).meta(0, "forceCompression", "turn.context.compress"),
 				ContextCompressPayload{
-					Reason:            req.Reason,
-					DroppedMessages:   result.DroppedMessages,
-					RemainingMessages: result.RemainingMessages,
+					Reason:             req.Reason,
+					DroppedMessages:    result.DroppedMessages,
+					SummarizedMessages: result.SummarizedMessages,
+					RemainingMessages:  result.RemainingMessages,
+					Attempts:           result.Attempts,
+					Fallback:           result.Fallback,
+					ArchivedPath:       result.ArchivedPath,
 				},
 			)
-			m.al.notifyContextFeedbackFromCtx(
-				ctx,
-				req.SessionKey,
-				formatContextCompactFeedback(result.DroppedMessages, result.RemainingMessages),
-			)
+			// A successful summarization already published its own notice from
+			// summarizeSession/summarizeActiveTurn. Only the destructive
+			// fallback needs the emergency-compression wording.
+			if result.DroppedMessages > 0 {
+				m.al.notifyContextFeedbackFromCtx(
+					ctx,
+					req.SessionKey,
+					formatContextCompactFeedback(result.DroppedMessages, result.RemainingMessages),
+				)
+			}
 		}
 	case ContextCompressReasonSummarize:
 		// Legacy compacts synchronously right before an LLM call
@@ -100,12 +109,31 @@ func (m *legacyContextManager) compactSession(ctx context.Context, agent *AgentI
 	if agent == nil || agent.Sessions == nil {
 		return fmt.Errorf("sessions not initialized")
 	}
-	summarizeKey := agent.ID + ":" + req.SessionKey
+	return m.withSummarizeLock(agent, req.SessionKey, func() error {
+		return m.compactSessionLocked(ctx, agent, req)
+	})
+}
+
+// withSummarizeLock serializes every path that rewrites a session's summary or
+// history. Emergency overflow recovery uses it too, so a drop can never race a
+// /compact or threshold summarization.
+func (m *legacyContextManager) withSummarizeLock(agent *AgentInstance, sessionKey string, fn func() error) error {
+	if agent == nil || agent.Sessions == nil {
+		return fmt.Errorf("sessions not initialized")
+	}
+	summarizeKey := agent.ID + ":" + sessionKey
 	if _, loading := m.summarizing.LoadOrStore(summarizeKey, true); loading {
 		return fmt.Errorf("a summarization is already in progress")
 	}
 	defer m.summarizing.Delete(summarizeKey)
+	return fn()
+}
 
+func (m *legacyContextManager) compactSessionLocked(
+	ctx context.Context,
+	agent *AgentInstance,
+	req *CompactRequest,
+) error {
 	// /compact reports its own outcome; the threshold path notifies the turn's chat.
 	var ts *turnState
 	if req.Reason == ContextCompressReasonThreshold {
@@ -186,36 +214,157 @@ func (m *legacyContextManager) pruneSessionToolResults(
 }
 
 type compressionResult struct {
-	DroppedMessages   int
-	RemainingMessages int
+	DroppedMessages    int
+	RemainingMessages  int
+	SummarizedMessages int
+	// Attempts counts the bounded recovery steps tried in this call: lossless
+	// tool pruning, summarization of earlier turns, summarization of the
+	// active turn's middle, and the destructive drop fallback.
+	Attempts int
+	// Fallback is true when summarization was impossible and the oldest turns
+	// had to be dropped.
+	Fallback bool
+	// ArchivedPath is the pre-compression transcript archive written before a
+	// destructive fallback.
+	ArchivedPath string
 }
 
-// forceCompression aggressively reduces context when the limit is hit.
-// It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
-// cycle, as defined in #1316), so tool-call sequences are never split.
-func (m *legacyContextManager) forceCompression(sessionKey string) (compressionResult, bool) {
+// storedHistoryLen returns the persisted history length, falling back to the
+// caller's count when the store cannot be read.
+func storedHistoryLen(agent *AgentInstance, sessionKey string, fallback int) int {
+	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		warnSessionStoreError(sessionKey, "get history", err)
+		return fallback
+	}
+	return len(history)
+}
+
+// forceCompression reduces context when the limit is hit, least destructively
+// first. It tries lossless tool-output pruning, then summarizes earlier Turns
+// and the middle of the active Turn. Only when neither can make progress does
+// it archive the full transcript and drop the oldest ~50% of Turns (a Turn is
+// a complete user→LLM→response cycle, as defined in #1316), so tool-call
+// sequences are never split and the dropped content stays recoverable.
+func (m *legacyContextManager) forceCompression(ctx context.Context, sessionKey string) (compressionResult, bool) {
 	agent := m.al.agentForSession(sessionKey)
-	if agent == nil {
+	if agent == nil || agent.Sessions == nil {
 		return compressionResult{}, false
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	// forceCompression has no context of its own: it only reads and writes the
-	// local session store, so a background context is sufficient.
-	history, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	// Hold the same per-session lock as /compact and threshold compaction for
+	// the whole recovery, including the destructive fallback: a drop must not
+	// race a summarization that is rewriting the same session.
+	var result compressionResult
+	var ok bool
+	if err := m.withSummarizeLock(agent, sessionKey, func() error {
+		result, ok = m.forceCompressionLocked(ctx, agent, sessionKey)
+		return nil
+	}); err != nil {
+		logger.WarnCF("agent", "Overflow compression skipped; another summarization is in progress", map[string]any{
+			"session_key": sessionKey,
+			"error":       err.Error(),
+		})
+		return compressionResult{}, false
+	}
+	return result, ok
+}
+
+func (m *legacyContextManager) forceCompressionLocked(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+) (compressionResult, bool) {
+	history, err := agent.Sessions.GetHistory(ctx, sessionKey)
 	if err != nil {
 		warnSessionStoreError(sessionKey, "get history", err)
 		history = []providers.Message{}
 	}
+	// Keep the pre-prune transcript: if the fallback has to drop turns, this is
+	// the copy written to disk before the session loses them.
+	originalHistory := cloneMessagesForArchive(history)
+	result := compressionResult{Attempts: 1}
+
+	// 1. Lossless tool-output pruning: no LLM call, no message loss.
 	if pruneOldToolResults(history, agent.Workspace) {
 		warnSessionStoreError(
 			sessionKey,
 			"set history",
-			agent.Sessions.SetHistory(context.Background(), sessionKey, history),
+			agent.Sessions.SetHistory(ctx, sessionKey, history),
 		)
-		warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(context.Background(), sessionKey))
-		return compressionResult{RemainingMessages: len(history)}, true
+		warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
+		result.RemainingMessages = len(history)
+		logger.InfoCF("agent", "Overflow compression pruned old tool outputs", map[string]any{
+			"session_key": sessionKey,
+			"attempts":    result.Attempts,
+			"new_count":   len(history),
+		})
+		return result, true
+	}
+
+	// 2. Summarize earlier Turns, then the active Turn's middle. This mirrors
+	// threshold compaction and never splits a tool-call sequence.
+	ts := turnStateFromContext(ctx)
+	if ts == nil {
+		ts = m.al.getActiveTurnState(sessionKey)
+	}
+	result.Attempts = 2
+	if m.summarizeSession(ctx, agent, sessionKey, ts, "") {
+		remaining := storedHistoryLen(agent, sessionKey, len(originalHistory))
+		result.RemainingMessages = remaining
+		if remaining < len(originalHistory) {
+			result.SummarizedMessages = len(originalHistory) - remaining
+		}
+		logger.InfoCF("agent", "Overflow compression summarized history before dropping turns", map[string]any{
+			"session_key": sessionKey,
+			"attempts":    result.Attempts,
+			"summarized":  result.SummarizedMessages,
+			"remaining":   remaining,
+		})
+		return result, true
+	}
+	if ts != nil {
+		result.Attempts = 3
+		if m.summarizeActiveTurn(ctx, agent, sessionKey, ts) {
+			remaining := storedHistoryLen(agent, sessionKey, len(originalHistory))
+			result.RemainingMessages = remaining
+			if remaining < len(originalHistory) {
+				result.SummarizedMessages = len(originalHistory) - remaining
+			}
+			logger.InfoCF(
+				"agent",
+				"Overflow compression summarized the active turn before dropping turns",
+				map[string]any{
+					"session_key": sessionKey,
+					"attempts":    result.Attempts,
+					"summarized":  result.SummarizedMessages,
+					"remaining":   remaining,
+				},
+			)
+			return result, true
+		}
+	}
+	if ctx.Err() != nil {
+		// The caller was canceled (hard abort): a half-finished recovery must
+		// not turn into a destructive drop.
+		return compressionResult{}, false
 	}
 	if len(history) <= 2 {
+		return compressionResult{}, false
+	}
+
+	// 3. Last resort: archive the full pre-compression transcript, then drop
+	// the oldest ~50% of Turns. Without a durable archive we refuse to drop.
+	result.Attempts++
+	archivedPath, archiveErr := archiveOverflowHistory(agent.Workspace, sessionKey, originalHistory)
+	if archiveErr != nil {
+		logger.WarnCF("agent", "Refusing destructive overflow compression: transcript archive failed", map[string]any{
+			"session_key": sessionKey,
+			"error":       archiveErr.Error(),
+		})
 		return compressionResult{}, false
 	}
 
@@ -240,14 +389,16 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 
 	droppedCount := len(history) - len(keptHistory)
 
-	existingSummary, err := agent.Sessions.GetSummary(context.Background(), sessionKey)
+	existingSummary, err := agent.Sessions.GetSummary(ctx, sessionKey)
 	if err != nil {
 		warnSessionStoreError(sessionKey, "get summary", err)
 		existingSummary = ""
 	}
 	compressionNote := fmt.Sprintf(
-		"[Emergency compression dropped %d oldest messages due to context limit]",
-		droppedCount,
+		"[Emergency compression dropped %d oldest messages due to context limit; "+
+			"the full transcript was archived at %s before the drop. "+
+			"Read it with read_file if details are needed.]",
+		droppedCount, archivedPath,
 	)
 	if existingSummary != "" {
 		compressionNote = existingSummary + "\n\n" + compressionNote
@@ -255,26 +406,29 @@ func (m *legacyContextManager) forceCompression(sessionKey string) (compressionR
 	warnSessionStoreError(
 		sessionKey,
 		"set summary",
-		agent.Sessions.SetSummary(context.Background(), sessionKey, compressionNote),
+		agent.Sessions.SetSummary(ctx, sessionKey, compressionNote),
 	)
 
 	warnSessionStoreError(
 		sessionKey,
 		"set history",
-		agent.Sessions.SetHistory(context.Background(), sessionKey, keptHistory),
+		agent.Sessions.SetHistory(ctx, sessionKey, keptHistory),
 	)
-	warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(context.Background(), sessionKey))
+	warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
 
 	logger.WarnCF("agent", "Forced compression executed", map[string]any{
-		"session_key":  sessionKey,
-		"dropped_msgs": droppedCount,
-		"new_count":    len(keptHistory),
+		"session_key":   sessionKey,
+		"attempts":      result.Attempts,
+		"dropped_msgs":  droppedCount,
+		"new_count":     len(keptHistory),
+		"archived_path": archivedPath,
 	})
 
-	return compressionResult{
-		DroppedMessages:   droppedCount,
-		RemainingMessages: len(keptHistory),
-	}, true
+	result.DroppedMessages = droppedCount
+	result.RemainingMessages = len(keptHistory)
+	result.Fallback = true
+	result.ArchivedPath = archivedPath
+	return result, true
 }
 
 // summarizeSession summarizes all but the most recent messages, synchronously. focus, when
