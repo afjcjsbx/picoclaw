@@ -60,7 +60,8 @@ func (p *midTurnProvider) Chat(
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(messages) == 1 && (strings.HasPrefix(messages[0].Content, "Provide a concise summary") ||
+	if len(messages) == 1 && (strings.HasPrefix(messages[0].Content, "You are a context-compaction summarizer") ||
+		strings.HasPrefix(messages[0].Content, "Provide a concise summary") ||
 		strings.HasPrefix(messages[0].Content, "Merge these two")) {
 		p.summaryCalls++
 		p.summaryReqs = append(p.summaryReqs, messages[0].Content)
@@ -303,7 +304,7 @@ func TestCompactBeforeLLM_SummarizesMiddleOfSingleTurn(t *testing.T) {
 		!strings.Contains(provider.summaryReqs[0], "[bulky_tool result] round-1") {
 		t.Fatalf("summarizer must see the tool calls and results of the middle:\n%.400s", provider.summaryReqs[0])
 	}
-	if !strings.Contains(provider.summaryReqs[1], "Existing context: "+midTurnSummary) {
+	if !strings.Contains(provider.summaryReqs[1], "EXISTING CHECKPOINT:\n"+midTurnSummary) {
 		t.Fatal("the second summary must be rolled into the first")
 	}
 

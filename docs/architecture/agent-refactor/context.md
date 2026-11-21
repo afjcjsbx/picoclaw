@@ -95,7 +95,7 @@ It estimates the prompt about to be sent (`exec.messages` plus tool definitions)
 When the threshold is reached it calls `ContextManager.Compact` with `Reason: ContextCompressReasonThreshold`, **blocking the turn** until it returns. If the session changed, it re-reads history and summary through `Assemble` and rebuilds `exec.messages` around the active turn (the same rebuild as the context-error retry, via `reassembleActiveTurn`; the active turn's messages are never dropped). The turn then carries on from the compacted context. `ErrNothingToCompact` means nothing changed and the prompt is kept. Compaction is best effort: any failure leaves the prompt as is, and the hard checks below remain the safety net.
 
 - **legacy**: compaction runs synchronously on the turn's context, so a hard abort cancels it and a canceled summarization is never applied. It works in this order, stopping at the first step that changes the session:
-  1. `summarizeSession` summarizes earlier Turns. The cut point is a Turn boundary (`findSafeBoundary`), so the active turn stays whole.
+  1. `summarizeSession` summarizes earlier Turns. The cut point is a Turn boundary (`findSafeBoundary`), so the active turn stays whole. Completed Turns are rendered with their assistant tool calls and tool results, so the checkpoint keeps the files, commands, and errors the tools produced.
   2. `summarizeActiveTurn` summarizes the **middle of the active turn**. The turn's opening user message and its newest two tool rounds (an assistant message plus its tool results, never split) stay verbatim; the rounds in between, with their tool calls and bounded tool outputs, are folded into the session summary on top of the existing one. The newest round is never summarized because the model has not seen its results yet. It is skipped when the middle would reclaim less than a tenth of the threshold, so an LLM call is never spent on a few hundred tokens.
   3. Old tool outputs are cleared (`pruneOldToolResults`) when neither step applies.
 
@@ -104,7 +104,9 @@ When the threshold is reached it calls `ContextManager.Compact` with `Reason: Co
 
 The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt.
 
-Summarization requests (legacy and seahorse) retry transient failures (rate limits, 5xx, timeouts, network errors: the `transientLLMRetryReason` classification the main loop uses) with the same `max_llm_retries` and `llm_retry_backoff_secs` backoff, and stop waiting when the turn is canceled. Other failures are not retried this way: legacy keeps its short retries and then falls back to a truncated transcript, and a failed seahorse pass leaves the turn to continue uncompacted.
+Legacy checkpoints use a fixed structure (`Goal`, `Constraints & Preferences`, `Progress`, `Key Decisions`, `Relevant Files`, `Commands and Tool Results`, `Errors`, `Next Steps`, `Critical Context`). A multi-batch compaction feeds each batch the checkpoint produced by the previous one, so the summary is rewritten iteratively instead of being restarted. The checkpoint is capped at `min(ContextWindow / 20, 12_000)` tokens (and never above the agent's own `MaxTokens`); the same cap is enforced on the stored text in case a provider ignores `max_tokens`. Credential-looking values are redacted before rendering and again before storing, including in the deterministic fallback used when the summarizer call fails.
+
+Summarization requests (legacy and seahorse) retry transient failures (rate limits, 5xx, timeouts, network errors: the `transientLLMRetryReason` classification the main loop uses) with the same `max_llm_retries` and `llm_retry_backoff_secs` backoff, and stop waiting when the turn is canceled. Other failures are not retried this way: legacy keeps its short retries and then falls back to a structured, redacted transcript checkpoint, and a failed seahorse pass leaves the turn to continue uncompacted.
 
 ### 2. Proactive budget check
 
