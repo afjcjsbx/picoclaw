@@ -116,13 +116,16 @@ This prevents wasted (and billed) LLM calls that would otherwise fail with a con
 
 ### 3. Emergency compression (reactive)
 
-`forceCompression` runs when the LLM returns a context-window error despite the proactive check.
+`forceCompression` runs when the LLM returns a context-window error despite the proactive check. It reduces the context least destructively first, and counts the bounded attempts it makes:
 
-Drops the oldest ~50% of Turns. If the history is a single Turn with no safe split point (e.g. one user message followed by a massive tool response), falls back to keeping only the most recent user message — breaking Turn atomicity as a last resort to avoid a context-exceeded loop.
+1. `pruneOldToolResults` archives old tool outputs and replaces them with per-tool stubs; no LLM call and no message loss.
+2. `summarizeSession` summarizes earlier Turns at a Turn boundary.
+3. `summarizeActiveTurn` summarizes the middle of the Turn in progress, keeping its opening user message and newest tool rounds.
+4. Only when neither summarization can make progress does it drop turns. Before dropping, it writes the full pre-compression transcript to `<workspace>/.artifacts/context/session_overflow_*.json` and puts that path in the session summary. If the archive cannot be written, it refuses to drop and leaves the transcript intact. It then drops the oldest ~50% of Turns. If the history is a single Turn with no safe split point (e.g. one user message followed by a massive tool response), it falls back to keeping only the most recent user message — breaking Turn atomicity as a last resort to avoid a context-exceeded loop.
 
-Stores a compression note in the session summary (not in history messages) so `BuildMessages` can include it in the next system prompt.
+The summary note (not a history message) records how many messages were dropped and where the original transcript was archived, so `BuildMessages` can include it in the next system prompt and the model can read the archive with `read_file`.
 
-This is the fallback for when the token estimate undershoots reality.
+This is the fallback for when the token estimate undershoots reality. The `agent.context.compress` event carries `summarized_messages`, `attempts`, `fallback`, and `archived_path` alongside the existing drop/remaining counts.
 
 ### 4. Manual compaction (`/compact`)
 
@@ -182,7 +185,7 @@ These are recognized limitations in the current implementation, documented here 
 
 - **Reactive retry does not preserve media.** When the reactive path rebuilds context after compression, it currently passes empty values for media references. This is a pre-existing issue in the main loop, not introduced by the budget system.
 
-- **Evicted outputs are retained, not permanent.** Archived tool outputs live under `.artifacts/evicted`, and reused spills live under the tool's artifact directory (for example `.artifacts/tool` or `.artifacts/mcp`). Both are bounded by the artifact retention policy, and a spill capped by the tool is not a complete copy. Outputs dropped together with their messages by summarization or forced compression are not archived.
+- **Evicted outputs are retained, not permanent.** Archived tool outputs live under `.artifacts/evicted`, reused spills live under the tool's artifact directory (for example `.artifacts/tool` or `.artifacts/mcp`), and the emergency drop fallback archives the full pre-compression transcript under `.artifacts/context`. All are bounded by the artifact retention policy; a spill capped by the tool is not a complete copy, and the context archive is a recovery aid, not a permanent backup. Normal summarization still replaces old turns with a summary rather than archiving the originals. Outputs dropped together with their messages by summarization or forced compression are not archived.
 
 ---
 

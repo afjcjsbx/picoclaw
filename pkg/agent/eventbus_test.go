@@ -572,8 +572,15 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	if payload.Reason != ContextCompressReasonRetry {
 		t.Fatalf("expected retry compress reason, got %q", payload.Reason)
 	}
-	if payload.DroppedMessages == 0 {
-		t.Fatal("expected dropped messages to be recorded")
+	if payload.DroppedMessages != 0 || payload.Fallback {
+		t.Fatalf("expected a non-destructive recovery, got dropped=%d fallback=%v",
+			payload.DroppedMessages, payload.Fallback)
+	}
+	if payload.SummarizedMessages == 0 {
+		t.Fatal("expected summarized messages to be recorded")
+	}
+	if payload.Attempts < 2 {
+		t.Fatalf("attempts = %d, want at least 2", payload.Attempts)
 	}
 }
 
