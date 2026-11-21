@@ -56,6 +56,14 @@ type AgentInstance struct {
 	Candidates              []providers.FallbackCandidate
 	ImageCandidates         []providers.FallbackCandidate
 
+	// ProtectFirstN, ProtectLastN, MinTailUserMessages and TailTokenBudget
+	// configure the legacy context manager's head/tail protection. They are
+	// resolved from agents.defaults at construction time.
+	ProtectFirstN       int
+	ProtectLastN        int
+	MinTailUserMessages int
+	TailTokenBudget     int
+
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
 	// whether to route to LightCandidates or stay with Candidates.
@@ -297,6 +305,23 @@ func NewAgentInstance(
 		summarizeTokenPercent = 75
 	}
 
+	protectFirstN := defaultProtectFirstN
+	if defaults.ProtectFirstN != nil {
+		protectFirstN = max(0, *defaults.ProtectFirstN)
+	}
+	protectLastN := defaultProtectLastN
+	if defaults.ProtectLastN != nil {
+		protectLastN = max(0, *defaults.ProtectLastN)
+	}
+	minTailUserMessages := defaultMinTailUserMessages
+	if defaults.MinTailUserMessages != nil {
+		minTailUserMessages = max(0, *defaults.MinTailUserMessages)
+	}
+	tailTokenBudget := autoTailTokenBudget(contextWindow, maxTokens)
+	if defaults.TailTokenBudget != nil {
+		tailTokenBudget = max(0, *defaults.TailTokenBudget)
+	}
+
 	// Resolve fallback candidates
 	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
 	usesInjectedPrimary := provider != nil &&
@@ -404,6 +429,10 @@ func NewAgentInstance(
 		ThinkingLevelConfigured: thinkingLevelConfigured,
 		ContextWindow:           contextWindow,
 		SummarizeTokenPercent:   summarizeTokenPercent,
+		ProtectFirstN:           protectFirstN,
+		ProtectLastN:            protectLastN,
+		MinTailUserMessages:     minTailUserMessages,
+		TailTokenBudget:         tailTokenBudget,
 		LoopDetection:           defaults.LoopDetection.Normalized(),
 		Provider:                provider,
 		Sessions:                sessions,
