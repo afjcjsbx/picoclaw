@@ -394,60 +394,17 @@ func (m *legacyContextManager) summarizeSession(
 	keepCount := len(history) - safeCut
 	toSummarize := history[:safeCut]
 
-	maxMessageTokens := agent.ContextWindow / 2
-	validMessages := make([]providers.Message, 0)
-	omitted := false
-
-	for _, msg := range toSummarize {
-		if msg.Role != "user" && msg.Role != "assistant" {
-			continue
-		}
-		msgTokens := len(msg.Content) / 2
-		if msgTokens > maxMessageTokens {
-			omitted = true
-			continue
-		}
-		validMessages = append(validMessages, msg)
-	}
-
-	if len(validMessages) == 0 {
+	// Completed turns include tool calls and tool results: files read or
+	// modified, commands run, and errors encountered are often the only record
+	// of what happened. turnTranscript renders them, labels tool results by
+	// name, and clips one oversized payload so the summarizer prompt stays
+	// bounded.
+	transcript := m.turnTranscript(toSummarize)
+	if len(transcript) == 0 {
 		return false
 	}
 
-	const (
-		maxSummarizationMessages = 10
-		llmMaxRetries            = 3
-	)
-
-	var finalSummary string
-	if len(validMessages) > maxSummarizationMessages {
-		mid := len(validMessages) / 2
-		mid = m.findNearestUserMessage(validMessages, mid)
-
-		part1 := validMessages[:mid]
-		part2 := validMessages[mid:]
-
-		s1, _ := m.summarizeBatch(ctx, agent, part1, "", focus)
-		s2, _ := m.summarizeBatch(ctx, agent, part2, "", focus)
-
-		mergePrompt := fmt.Sprintf(
-			"Merge these two conversation summaries into one cohesive summary:%s\n\n1: %s\n\n2: %s",
-			focusInstruction(focus), s1, s2,
-		)
-
-		resp, err := m.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
-		if err == nil && resp.Content != "" {
-			finalSummary = resp.Content
-		} else {
-			finalSummary = s1 + " " + s2
-		}
-	} else {
-		finalSummary, _ = m.summarizeBatch(ctx, agent, validMessages, summary, focus)
-	}
-
-	if omitted && finalSummary != "" {
-		finalSummary += "\n[Note: Some oversized messages were omitted from this summary for efficiency.]"
-	}
+	finalSummary := m.summarizeTranscript(ctx, agent, transcript, summary, focus)
 
 	// A canceled caller (hard abort) must not turn a half-finished summarization
 	// into a degraded summary that replaces the real history.
@@ -467,42 +424,18 @@ func (m *legacyContextManager) summarizeSession(
 			runtimeevents.KindAgentSessionSummarize,
 			m.al.newTurnEventScope(agent.ID, sessionKey, nil).meta(0, "summarizeSession", "turn.session.summarize"),
 			SessionSummarizePayload{
-				SummarizedMessages: len(validMessages),
+				SummarizedMessages: len(toSummarize),
 				KeptMessages:       keepCount,
 				SummaryLen:         len(finalSummary),
-				OmittedOversized:   omitted,
 			},
 		)
 		m.al.notifyContextFeedback(
 			ts,
-			formatContextSummarizeFeedback(len(validMessages), keepCount),
+			formatContextSummarizeFeedback(len(toSummarize), keepCount),
 		)
 		return true
 	}
 	return false
-}
-
-func (m *legacyContextManager) findNearestUserMessage(messages []providers.Message, mid int) int {
-	originalMid := mid
-
-	for mid > 0 && messages[mid].Role != "user" {
-		mid--
-	}
-
-	if messages[mid].Role == "user" {
-		return mid
-	}
-
-	mid = originalMid
-	for mid < len(messages) && messages[mid].Role != "user" {
-		mid++
-	}
-
-	if mid < len(messages) {
-		return mid
-	}
-
-	return originalMid
 }
 
 func (m *legacyContextManager) retryLLMCall(
@@ -510,8 +443,13 @@ func (m *legacyContextManager) retryLLMCall(
 	agent *AgentInstance,
 	prompt string,
 	maxRetries int,
+	maxTokens int,
 ) (*providers.LLMResponse, error) {
 	const llmTemperature = 0.3
+
+	if maxTokens <= 0 {
+		maxTokens = agent.MaxTokens
+	}
 
 	var resp *providers.LLMResponse
 	var err error
@@ -529,7 +467,7 @@ func (m *legacyContextManager) retryLLMCall(
 				nil,
 				model,
 				map[string]any{
-					"max_tokens":       agent.MaxTokens,
+					"max_tokens":       maxTokens,
 					"temperature":      llmTemperature,
 					"prompt_cache_key": agent.ID,
 				},
@@ -559,71 +497,33 @@ func (m *legacyContextManager) summarizeBatch(
 	existingSummary string,
 	focus string,
 ) (string, error) {
-	const (
-		llmMaxRetries             = 3
-		fallbackMinContentLength  = 200
-		fallbackMaxContentPercent = 10
-	)
+	const llmMaxRetries = 3
 
-	var sb strings.Builder
-	sb.WriteString("Provide a concise summary of this conversation segment, preserving core context and key points.")
-	sb.WriteString(focusInstruction(focus))
-	sb.WriteString("\n")
-	if existingSummary != "" {
-		sb.WriteString("Existing context: ")
-		sb.WriteString(existingSummary)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\nCONVERSATION:\n")
+	existingSummary = strings.TrimSpace(m.redactSummaryText(existingSummary))
+	existingSummary = clipSummaryText(existingSummary, summaryMaxRunes(agent))
+	focus = strings.TrimSpace(m.redactSummaryText(focus))
+
+	var conversation strings.Builder
 	for _, msg := range batch {
-		fmt.Fprintf(&sb, "%s: %s\n", msg.Role, msg.Content)
-	}
-	prompt := sb.String()
-
-	response, err := m.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
-	if err == nil && response.Content != "" {
-		return strings.TrimSpace(response.Content), nil
-	}
-
-	var fallback strings.Builder
-	if existingSummary != "" {
-		fallback.WriteString(existingSummary)
-		fallback.WriteString("\n\n")
-	}
-	fallback.WriteString("Conversation summary: ")
-	for i, msg := range batch {
-		if i > 0 {
-			fallback.WriteString(" | ")
-		}
-		content := strings.TrimSpace(msg.Content)
-		runes := []rune(content)
-		if len(runes) == 0 {
-			fallback.WriteString(fmt.Sprintf("%s: ", msg.Role))
+		content := strings.TrimSpace(m.redactSummaryText(msg.Content))
+		if content == "" {
 			continue
 		}
-
-		keepLength := len(runes) * fallbackMaxContentPercent / 100
-		if keepLength < fallbackMinContentLength {
-			keepLength = fallbackMinContentLength
-		}
-		if keepLength > len(runes) {
-			keepLength = len(runes)
-		}
-
-		content = string(runes[:keepLength])
-		if keepLength < len(runes) {
-			content += "..."
-		}
-		fallback.WriteString(fmt.Sprintf("%s: %s", msg.Role, content))
+		fmt.Fprintf(&conversation, "%s: %s\n", msg.Role, content)
 	}
-	return fallback.String(), nil
-}
 
-// focusInstruction renders the user's /compact focus as a prompt sentence
-// (empty when no focus was given).
-func focusInstruction(focus string) string {
-	if focus == "" {
-		return ""
+	prompt := buildSummaryPrompt(existingSummary, conversation.String(), focus)
+
+	response, err := m.retryLLMCall(ctx, agent, prompt, llmMaxRetries, summaryMaxTokens(agent))
+	if err == nil && response != nil && strings.TrimSpace(response.Content) != "" {
+		summary := strings.TrimSpace(m.redactSummaryText(response.Content))
+		summary = clipSummaryText(summary, summaryMaxRunes(agent))
+		if summary != "" {
+			return summary, nil
+		}
 	}
-	return " Pay particular attention to preserving details about: " + focus + "."
+
+	fallback := m.fallbackSummary(batch, existingSummary)
+	fallback = clipSummaryText(fallback, summaryMaxRunes(agent))
+	return fallback, nil
 }

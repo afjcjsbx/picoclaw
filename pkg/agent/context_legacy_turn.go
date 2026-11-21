@@ -81,7 +81,7 @@ func (m *legacyContextManager) summarizeActiveTurn(
 		warnSessionStoreError(sessionKey, "get summary", err)
 		summary = ""
 	}
-	finalSummary := m.summarizeTranscript(ctx, agent, turnTranscript(middle), summary)
+	finalSummary := m.summarizeTranscript(ctx, agent, m.turnTranscript(middle), summary, activeTurnFocus)
 
 	// A canceled caller (hard abort) must not turn a half-finished summarization
 	// into a degraded summary that replaces the real messages.
@@ -113,23 +113,34 @@ func (m *legacyContextManager) summarizeActiveTurn(
 
 // summarizeTranscript folds the transcript into the existing summary in rolling
 // batches, each sized to a quarter of the context window, so the summarizer
-// prompt never outgrows the window it is meant to relieve.
+// prompt never outgrows the window it is meant to relieve. Every batch receives
+// the summary produced by the previous one, so a multi-batch compaction keeps
+// the earlier checkpoint instead of restarting from scratch.
 func (m *legacyContextManager) summarizeTranscript(
 	ctx context.Context,
 	agent *AgentInstance,
 	transcript []providers.Message,
 	summary string,
+	focus string,
 ) string {
+	if len(transcript) == 0 {
+		return summary
+	}
+
 	maxBatchChars := agent.ContextWindow * 5 / 8 // a quarter of the window at 2.5 chars per token
+	if maxBatchChars <= 0 {
+		maxBatchChars = 24000
+	}
 	batchStart, batchChars := 0, 0
 	for i, msg := range transcript {
-		if batchChars > 0 && batchChars+len(msg.Content) > maxBatchChars {
-			summary, _ = m.summarizeBatch(ctx, agent, transcript[batchStart:i], summary, activeTurnFocus)
+		msgChars := utf8.RuneCountInString(msg.Content)
+		if batchChars > 0 && batchChars+msgChars > maxBatchChars {
+			summary, _ = m.summarizeBatch(ctx, agent, transcript[batchStart:i], summary, focus)
 			batchStart, batchChars = i, 0
 		}
-		batchChars += len(msg.Content)
+		batchChars += msgChars
 	}
-	summary, _ = m.summarizeBatch(ctx, agent, transcript[batchStart:], summary, activeTurnFocus)
+	summary, _ = m.summarizeBatch(ctx, agent, transcript[batchStart:], summary, focus)
 	return summary
 }
 
@@ -173,8 +184,10 @@ func flattenRounds(rounds [][]providers.Message) []providers.Message {
 
 // turnTranscript renders messages as plain text for the summarizer: assistant
 // tool calls with their arguments and tool results labeled by tool, each bound
-// to maxTranscriptRunes.
-func turnTranscript(msgs []providers.Message) []providers.Message {
+// to maxTranscriptRunes. Content and arguments are redacted before clipping, so
+// a credential that crosses the truncation cut is masked in full instead of
+// leaving a recognizable fragment behind.
+func (m *legacyContextManager) turnTranscript(msgs []providers.Message) []providers.Message {
 	toolNames := make(map[string]string)
 	out := make([]providers.Message, 0, len(msgs))
 	for _, msg := range msgs {
@@ -185,16 +198,16 @@ func turnTranscript(msgs []providers.Message) []providers.Message {
 			if name == "" {
 				name = "tool"
 			}
-			fmt.Fprintf(&sb, "[%s result] %s", name, clipTranscript(msg.Content))
+			fmt.Fprintf(&sb, "[%s result] %s", name, clipTranscript(m.redactSummaryText(msg.Content)))
 		default:
-			sb.WriteString(clipTranscript(msg.Content))
+			sb.WriteString(clipTranscript(m.redactSummaryText(msg.Content)))
 			for _, tc := range msg.ToolCalls {
 				name, args := tc.Name, ""
 				if tc.Function != nil {
 					name, args = tc.Function.Name, tc.Function.Arguments
 				}
 				toolNames[tc.ID] = name
-				fmt.Fprintf(&sb, "\n[called %s(%s)]", name, clipTranscript(args))
+				fmt.Fprintf(&sb, "\n[called %s(%s)]", name, clipTranscript(m.redactSummaryText(args)))
 			}
 		}
 		out = append(out, providers.Message{Role: msg.Role, Content: sb.String()})
