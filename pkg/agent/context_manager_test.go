@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -671,6 +672,300 @@ func TestPruneToolResultsFallsBackWhenArchiveFails(t *testing.T) {
 	}
 }
 
+// The archive stub carries the tool that produced the output and its key
+// details, so the model can decide whether to read the archive or re-run it.
+func TestPruneToolResultStubCarriesToolDetails(t *testing.T) {
+	workspace := t.TempDir()
+	original := "[exec] {\"exitCode\":2,\"timedOut\":false,\"totalBytes\":2500}\n" +
+		strings.Repeat("FAIL ", 500)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "exec", Arguments: `{"command":"go test ./..."}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "c1", Content: original},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the bulky result to be evicted")
+	}
+	stub := history[1].Content
+	if !strings.HasPrefix(stub, archivedToolResultPrefix) {
+		t.Fatalf("stub = %q, want an archive stub", stub)
+	}
+	for _, want := range []string{"exec", "go test ./...", "exit=2", "KB"} {
+		if !strings.Contains(stub, want) {
+			t.Fatalf("stub %q missing %q", stub, want)
+		}
+	}
+	if data := readArchivedToolResult(t, stub); string(data) != original {
+		t.Fatalf("archived output = %q, want the original", data)
+	}
+}
+
+// A tool result that already spilled its full payload keeps that pointer
+// instead of writing a second bounded copy under .artifacts/evicted.
+func TestPruneToolResultReusesExistingArtifact(t *testing.T) {
+	workspace := t.TempDir()
+	spillDir := filepath.Join(workspace, ".artifacts", "tool")
+	if err := os.MkdirAll(spillDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	spill := filepath.Join(spillDir, "full.log")
+	full := strings.Repeat("full output line\n", 100)
+	if err := os.WriteFile(spill, []byte(full), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := fmt.Sprintf(
+		"[exec] {\"exitCode\":0,\"artifactPath\":%q}\n%s\n\nLocal artifact paths: [file:%s]\nUse send_file.",
+		spill,
+		strings.Repeat("preview line\n", 30),
+		spill,
+	)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "exec", Arguments: `{"command":"cat full.log"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "c1", Content: original},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the result to be evicted")
+	}
+	stub := history[1].Content
+	if !strings.Contains(stub, spill) {
+		t.Fatalf("stub = %q, want the existing spill path %q", stub, spill)
+	}
+	if data := readArchivedToolResult(t, stub); string(data) != full {
+		t.Fatalf("spill content = %q, want the full output", data)
+	}
+	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("archive dir: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("evicted archive files = %d, want 0 (reused spill)", len(files))
+	}
+}
+
+// Providers may reuse a tool-call id across turns (for example "call_0").
+// The stub must describe the call in the same turn, not the newest call with
+// that id.
+func TestPruneToolResultStubResolvesReusedCallIDs(t *testing.T) {
+	workspace := t.TempDir()
+	first := strings.Repeat("first output ", 60)
+	second := strings.Repeat("second output ", 60)
+	history := []providers.Message{
+		{Role: "user", Content: "run the first command"},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "call_0",
+				Function: &providers.FunctionCall{Name: "exec", Arguments: `{"command":"first-command"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call_0", Content: first},
+		{Role: "user", Content: "read the second file"},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "call_0",
+				Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"second.txt"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call_0", Content: second},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected both results to be evicted")
+	}
+	if !strings.Contains(history[2].Content, "first-command") {
+		t.Fatalf("first stub = %q, want the first command", history[2].Content)
+	}
+	if !strings.Contains(history[5].Content, "second.txt") {
+		t.Fatalf("second stub = %q, want the second path", history[5].Content)
+	}
+}
+
+// Identical old outputs are collapsed into a back-reference instead of being
+// archived once per copy. The newest copy keeps the archive pointer.
+func TestPruneToolResultsDedupesIdenticalOutputs(t *testing.T) {
+	workspace := t.TempDir()
+	bulky := strings.Repeat("same output ", 100)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "old",
+				Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"a.txt"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "old", Content: bulky},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "new",
+				Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"a.txt"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "new", Content: bulky},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the duplicates to be pruned")
+	}
+	if !strings.HasPrefix(history[1].Content, duplicateToolResultPrefix) {
+		t.Fatalf("older duplicate = %q, want a duplicate stub", history[1].Content)
+	}
+	if !strings.Contains(history[1].Content, "archived") {
+		t.Fatalf("older duplicate = %q, want the archive pointer", history[1].Content)
+	}
+	if !strings.HasPrefix(history[3].Content, archivedToolResultPrefix) {
+		t.Fatalf("newest copy = %q, want an archive stub", history[3].Content)
+	}
+	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if err != nil {
+		t.Fatalf("archive dir: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("archive files = %d, want 1", len(files))
+	}
+	if data := readArchivedToolResult(t, history[3].Content); string(data) != bulky {
+		t.Fatalf("archived output = %q, want the original", data)
+	}
+}
+
+// A duplicate that points at a full copy in the protected tail is safe to
+// collapse without writing an archive: the newer copy remains in the prompt.
+func TestPruneToolResultsDedupesAgainstProtectedTail(t *testing.T) {
+	workspace := t.TempDir()
+	bulky := strings.Repeat("same output ", 100)
+	history := []providers.Message{
+		{Role: "tool", Content: bulky},
+		{Role: "assistant", Content: "boundary"},
+		{Role: "tool", Content: bulky},
+	}
+	if !pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("expected the older duplicate to be pruned")
+	}
+	if !strings.HasPrefix(history[0].Content, duplicateToolResultPrefix) {
+		t.Fatalf("older duplicate = %q, want a duplicate stub", history[0].Content)
+	}
+	if history[2].Content != bulky {
+		t.Fatalf("protected copy changed: %q", history[2].Content)
+	}
+	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("archive dir: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("archive files = %d, want 0", len(files))
+	}
+}
+
+// Oversized tool-call arguments are archived and replaced by a compact, valid
+// JSON object that still carries the original key names and an archive pointer.
+func TestPruneToolCallArgumentsArchivesOversizedArgs(t *testing.T) {
+	workspace := t.TempDir()
+	content := strings.Repeat("a", maxToolCallArgsChars+100)
+	argsBytes, err := json.Marshal(map[string]any{"path": "big.txt", "content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(argsBytes)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "write_file", Arguments: args},
+			}},
+		},
+	}
+	if !pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("expected the oversized arguments to be compacted")
+	}
+	compact := history[0].ToolCalls[0].Function.Arguments
+	if len(compact) >= len(args) {
+		t.Fatalf("compact arguments = %d chars, want fewer than %d", len(compact), len(args))
+	}
+	var parsed map[string]any
+	if unmarshalErr := json.Unmarshal([]byte(compact), &parsed); unmarshalErr != nil {
+		t.Fatalf("compact arguments are not valid JSON: %v", unmarshalErr)
+	}
+	if parsed["path"] != "big.txt" {
+		t.Fatalf("compact arguments lost path: %+v", parsed)
+	}
+	archivePath, ok := parsed[archivedArgsKey].(string)
+	if !ok || archivePath == "" {
+		t.Fatalf("compact arguments lack %s: %+v", archivedArgsKey, parsed)
+	}
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read archived arguments: %v", err)
+	}
+	if string(data) != args {
+		t.Fatalf("archived arguments = %q, want the original", data)
+	}
+	value, ok := parsed["content"].(string)
+	if !ok || len(value) > maxToolArgValueChars+len("...") {
+		t.Fatalf("content value was not compacted: %q", value)
+	}
+}
+
+// A tool round whose result sits at the prune boundary is still unread: its
+// arguments must not be rewritten.
+func TestPruneToolCallArgumentsKeepsBoundaryToolRound(t *testing.T) {
+	workspace := t.TempDir()
+	content := strings.Repeat("a", maxToolCallArgsChars+100)
+	argsBytes, err := json.Marshal(map[string]any{"path": "big.txt", "content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(argsBytes)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "write_file", Arguments: args},
+			}},
+		},
+		{Role: "tool", ToolCallID: "c1", Content: "short result"},
+	}
+	if pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("boundary tool round must not be pruned")
+	}
+	if got := history[0].ToolCalls[0].Function.Arguments; got != args {
+		t.Fatalf("boundary arguments changed: %q", got)
+	}
+}
+
+// Invalid JSON cannot be rewritten without breaking the provider payload, so
+// the arguments stay byte-exact.
+func TestPruneToolCallArgumentsLeavesInvalidJSON(t *testing.T) {
+	workspace := t.TempDir()
+	args := `{"content":"` + strings.Repeat("a", maxToolCallArgsChars+100)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "write_file", Arguments: args},
+			}},
+		},
+	}
+	if pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("invalid JSON arguments must not be pruned")
+	}
+	if got := history[0].ToolCalls[0].Function.Arguments; got != args {
+		t.Fatalf("arguments changed: %q", got)
+	}
+}
+
 // With nothing older than the active turn to summarize, the threshold path
 // clears old tool outputs instead, and reports a clean session as nothing to do.
 func TestLegacyCompact_Threshold_PrunesToolOutputsOfSingleTurn(t *testing.T) {
@@ -681,14 +976,16 @@ func TestLegacyCompact_Threshold_PrunesToolOutputsOfSingleTurn(t *testing.T) {
 	}
 
 	bulky := strings.Repeat("z", 500)
+	recent := strings.Repeat("y", 500)
+	newest := strings.Repeat("x", 500)
 	history := []providers.Message{
 		{Role: "user", Content: "do the thing"},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c1", Name: "t"}}},
 		{Role: "tool", ToolCallID: "c1", Content: bulky},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c2", Name: "t"}}},
-		{Role: "tool", ToolCallID: "c2", Content: bulky},
+		{Role: "tool", ToolCallID: "c2", Content: recent},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c3", Name: "t"}}},
-		{Role: "tool", ToolCallID: "c3", Content: bulky},
+		{Role: "tool", ToolCallID: "c3", Content: newest},
 	}
 	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-single-turn", history); err != nil {
 		t.Fatalf("SetHistory: %v", err)
@@ -709,7 +1006,7 @@ func TestLegacyCompact_Threshold_PrunesToolOutputsOfSingleTurn(t *testing.T) {
 	if data := readArchivedToolResult(t, got[2].Content); string(data) != bulky {
 		t.Fatalf("archived output = %q, want the original", data)
 	}
-	if got[6].Content != bulky {
+	if got[6].Content != newest {
 		t.Fatalf("recent tool output must be kept, got %q", got[6].Content)
 	}
 
