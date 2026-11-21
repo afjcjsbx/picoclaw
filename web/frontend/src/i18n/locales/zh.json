@@ -10,6 +10,8 @@
     "tools": "工具",
     "subagents": "子代理",
     "mcp": "MCP",
+    "cron": "定时任务",
+    "usage": "用量统计",
     "services": "服务",
     "channels_group": "频道",
     "show_more_channels": "更多",
@@ -894,6 +896,54 @@
           "requires_spawn": "需要先启用 `tools.spawn` 或 `tools.spawn_status`，`subagent` 工具才能运行。"
         },
         "automatic": "自动"
+      },
+      "usage": {
+        "title": "Token 用量",
+        "description": "跨会话、模型和时间维度的全时段及近期 Token 消耗统计。",
+        "refresh": "刷新",
+        "retry": "重试",
+        "load_error": "加载用量数据失败。",
+        "empty": "暂无 Token 用量记录。",
+        "range_7": "7 天",
+        "range_30": "30 天",
+        "range_90": "90 天",
+        "section_alltime": "全时段统计",
+        "section_period": "近 {{days}} 天",
+        "section_models": "按模型",
+        "section_sessions": "会话",
+        "history_since": "历史记录从 {{date}} 起开始计入，之前的用量仅包含在全时段统计中。",
+        "no_history": "暂无每日历史记录。",
+        "stats": {
+          "total_tokens": "总 Token",
+          "input": "输入",
+          "output": "输出",
+          "cost": "费用",
+          "llm_calls": "模型调用次数"
+        },
+        "categories": {
+          "title": "Token 分类",
+          "fresh_input": "新鲜输入",
+          "cache_read": "缓存读取",
+          "cache_write": "缓存写入",
+          "answer": "回复",
+          "reasoning": "推理",
+          "cache_hit_rate": "缓存命中率："
+        },
+        "table": {
+          "model": "模型",
+          "session": "会话",
+          "calls": "调用次数",
+          "input": "输入",
+          "output": "输出",
+          "cache_read": "缓存读取",
+          "total": "合计",
+          "cost": "费用",
+          "show_all": "显示全部（{{count}}）",
+          "show_less": "收起"
+        },
+        "chart": {
+          "aria_label": "近 {{days}} 天的每日 Token 用量图表"
+        }
       },
       "mcp": {
         "title": "MCP 服务器",

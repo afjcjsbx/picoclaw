@@ -1,5 +1,6 @@
 import {
   IconAtom,
+  IconChartBar,
   IconKey,
   IconListDetails,
   IconMessageCircle,
@@ -57,6 +58,7 @@ type PagePath =
   | "/agent/tools"
   | "/agent/subagents"
   | "/agent/mcp"
+  | "/agent/usage"
   | "/config"
   | "/logs"
 
@@ -79,6 +81,7 @@ const PALETTE_PAGES: PalettePage[] = [
     icon: IconUsers,
   },
   { labelKey: "navigation.mcp", to: "/agent/mcp", icon: IconPlugConnected },
+  { labelKey: "navigation.usage", to: "/agent/usage", icon: IconChartBar },
   { labelKey: "navigation.config", to: "/config", icon: IconSettings },
   { labelKey: "navigation.logs", to: "/logs", icon: IconListDetails },
 ]

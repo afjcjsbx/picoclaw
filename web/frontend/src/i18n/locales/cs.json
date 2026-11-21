@@ -11,6 +11,7 @@
     "subagents": "Subagenti",
     "mcp": "MCP",
     "cron": "Plánované úlohy",
+    "usage": "Spotřeba",
     "services": "Služby",
     "channels_group": "Kanály",
     "show_more_channels": "Více",
@@ -1038,6 +1039,54 @@
         "toggle_error": "Plánovanou úlohu se nepodařilo upravit.",
         "delete_success": "Plánovaná úloha byla smazána.",
         "delete_error": "Plánovanou úlohu se nepodařilo smazat."
+      },
+      "usage": {
+        "title": "Spotřeba tokenů",
+        "description": "Celková a nedávná spotřeba tokenů napříč sezeními, modely a časem.",
+        "refresh": "Obnovit",
+        "retry": "Zkusit znovu",
+        "load_error": "Načtení dat o spotřebě selhalo.",
+        "empty": "Zatím nejsou zaznamenána žádná data o spotřebě tokenů.",
+        "range_7": "7 dní",
+        "range_30": "30 dní",
+        "range_90": "90 dní",
+        "section_alltime": "Celkové součty",
+        "section_period": "Posledních {{days}} dní",
+        "section_models": "Podle modelu",
+        "section_sessions": "Sezení",
+        "history_since": "Historie se zaznamenává od {{date}}; dřívější spotřeba je zahrnuta pouze v celkových součtech.",
+        "no_history": "Zatím žádná denní historie.",
+        "stats": {
+          "total_tokens": "Celkem tokenů",
+          "input": "Vstup",
+          "output": "Výstup",
+          "cost": "Náklady",
+          "llm_calls": "Volání LLM"
+        },
+        "categories": {
+          "title": "Kategorie tokenů",
+          "fresh_input": "Čerstvý vstup",
+          "cache_read": "Čtení z cache",
+          "cache_write": "Zápis do cache",
+          "answer": "Odpověď",
+          "reasoning": "Uvažování",
+          "cache_hit_rate": "Míra zásahu cache:"
+        },
+        "table": {
+          "model": "Model",
+          "session": "Sezení",
+          "calls": "Volání",
+          "input": "Vstup",
+          "output": "Výstup",
+          "cache_read": "Čtení z cache",
+          "total": "Celkem",
+          "cost": "Náklady",
+          "show_all": "Zobrazit vše ({{count}})",
+          "show_less": "Zobrazit méně"
+        },
+        "chart": {
+          "aria_label": "Denní spotřeba tokenů za posledních {{days}} dní"
+        }
       },
       "mcp": {
         "title": "Servery MCP",

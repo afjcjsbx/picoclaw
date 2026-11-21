@@ -11,6 +11,7 @@
     "subagents": "Subagents",
     "mcp": "MCP",
     "cron": "Cron",
+    "usage": "Usage",
     "services": "Services",
     "channels_group": "Channels",
     "show_more_channels": "More",
@@ -1038,6 +1039,54 @@
         "toggle_error": "Could not update the cron job.",
         "delete_success": "Cron job deleted.",
         "delete_error": "Could not delete the cron job."
+      },
+      "usage": {
+        "title": "Token Usage",
+        "description": "All-time and recent token consumption across sessions, models, and time.",
+        "refresh": "Refresh",
+        "retry": "Retry",
+        "load_error": "Failed to load usage data.",
+        "empty": "No token usage recorded yet.",
+        "range_7": "7 days",
+        "range_30": "30 days",
+        "range_90": "90 days",
+        "section_alltime": "All-time totals",
+        "section_period": "Last {{days}} days",
+        "section_models": "By model",
+        "section_sessions": "Sessions",
+        "history_since": "History is recorded since {{date}}; earlier usage is only in the all-time totals.",
+        "no_history": "No daily history yet.",
+        "stats": {
+          "total_tokens": "Total tokens",
+          "input": "Input",
+          "output": "Output",
+          "cost": "Cost",
+          "llm_calls": "LLM calls"
+        },
+        "categories": {
+          "title": "Token categories",
+          "fresh_input": "Fresh input",
+          "cache_read": "Cache read",
+          "cache_write": "Cache write",
+          "answer": "Answer",
+          "reasoning": "Reasoning",
+          "cache_hit_rate": "Cache hit rate:"
+        },
+        "table": {
+          "model": "Model",
+          "session": "Session",
+          "calls": "Calls",
+          "input": "Input",
+          "output": "Output",
+          "cache_read": "Cache read",
+          "total": "Total",
+          "cost": "Cost",
+          "show_all": "Show all ({{count}})",
+          "show_less": "Show fewer"
+        },
+        "chart": {
+          "aria_label": "Daily token usage for the last {{days}} days"
+        }
       },
       "mcp": {
         "title": "MCP Servers",
