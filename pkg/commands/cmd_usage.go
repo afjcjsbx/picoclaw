@@ -39,7 +39,7 @@ func FormatUsageReply(summary *usage.Summary) string {
 		"Usage for this session",
 		fmt.Sprintf("LLM calls: %d · turns: %d", summary.Requests, summary.Turns),
 		"Input: " + summary.InputBreakdown(),
-		"Output: " + usage.FormatTokens(summary.OutputTokens) + " tokens",
+		"Output: " + summary.OutputBreakdown(),
 		"Total: " + usage.FormatTokens(summary.TotalTokens) + " tokens",
 		"Cost: " + usage.FormatCost(summary.CostUSD),
 	}

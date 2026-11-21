@@ -54,7 +54,8 @@ func TestGeminiProvider_ChatSeparatesThoughtAndToolCall(t *testing.T) {
 			"usageMetadata": map[string]any{
 				"promptTokenCount":     2,
 				"candidatesTokenCount": 3,
-				"totalTokenCount":      5,
+				"thoughtsTokenCount":   4,
+				"totalTokenCount":      9,
 			},
 		})
 	}))
@@ -80,8 +81,12 @@ func TestGeminiProvider_ChatSeparatesThoughtAndToolCall(t *testing.T) {
 	if resp.FinishReason != "tool_calls" {
 		t.Fatalf("FinishReason = %q, want %q", resp.FinishReason, "tool_calls")
 	}
-	if resp.Usage == nil || resp.Usage.TotalTokens != 5 {
-		t.Fatalf("Usage = %#v, expected total tokens = 5", resp.Usage)
+	if resp.Usage == nil || resp.Usage.TotalTokens != 9 {
+		t.Fatalf("Usage = %#v, expected total tokens = 9", resp.Usage)
+	}
+	// Gemini reports thoughts apart from the candidates; both are output.
+	if resp.Usage.CompletionTokens != 7 || resp.Usage.ReasoningTokens != 4 {
+		t.Fatalf("Usage = %#v, expected 7 completion tokens including 4 reasoning", resp.Usage)
 	}
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("ToolCalls len = %d, want 1", len(resp.ToolCalls))
