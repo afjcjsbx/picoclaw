@@ -182,7 +182,7 @@ These are recognized limitations in the current implementation, documented here 
 
 - **Reactive retry does not preserve media.** When the reactive path rebuilds context after compression, it currently passes empty values for media references. This is a pre-existing issue in the main loop, not introduced by the budget system.
 
-- **Evicted outputs are retained, not permanent.** Archived tool outputs live under `.artifacts/evicted` and are bounded by the artifact retention policy. Outputs dropped together with their messages by summarization or forced compression are not archived.
+- **Evicted outputs are retained, not permanent.** Archived tool outputs live under `.artifacts/evicted`, and reused spills live under the tool's artifact directory (for example `.artifacts/tool` or `.artifacts/mcp`). Both are bounded by the artifact retention policy, and a spill capped by the tool is not a complete copy. Outputs dropped together with their messages by summarization or forced compression are not archived.
 
 ---
 

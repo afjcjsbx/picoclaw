@@ -209,7 +209,7 @@ type canonicalToolResult struct {
 // write failure, or a stub no shorter than the output (a deep workspace path)
 // falls back to prunedToolResult with no path.
 func archiveToolResult(workspace, toolName, toolArgs, content string) (string, string) {
-	if path := existingArtifactPath(content); path != "" {
+	if path := existingArtifactPath(toolName, content); path != "" {
 		stub := archivedToolResultStub(path, toolName, toolArgs, content)
 		if len(stub) < len(content) {
 			return stub, path
@@ -231,41 +231,68 @@ func archiveToolResult(workspace, toolName, toolArgs, content string) (string, s
 	return stub, path
 }
 
+// artifactNoteMarker starts the note ToolResult.ContentForLLM appends to a
+// result with spilled artifacts.
+const artifactNoteMarker = "Local artifact paths: "
+
 // existingArtifactPath returns a readable file the tool already spilled. The
-// exec header is trusted (the tool writes it); the appended artifact note is
-// parsed from its LAST occurrence, because the runtime appends it after the
-// tool-controlled body.
-func existingArtifactPath(content string) string {
-	if meta, ok := parseExecResultMeta(content); ok && meta.ArtifactPath != "" {
-		if info, err := os.Stat(meta.ArtifactPath); err == nil && info.Mode().IsRegular() {
+// exec header is trusted only for exec results; the runtime artifact note is
+// parsed from the exact suffix the runtime appends, so a note-like string in
+// the tool-controlled body cannot forge a pointer.
+func existingArtifactPath(toolName, content string) string {
+	if strings.EqualFold(toolName, "exec") {
+		if meta, ok := parseExecResultMeta(content); ok && isRegularFile(meta.ArtifactPath) {
 			return meta.ArtifactPath
 		}
 	}
-	const notePrefix = "\n\nLocal artifact paths: "
-	idx := strings.LastIndex(content, notePrefix)
-	if idx < 0 {
+	return runtimeArtifactPath(content)
+}
+
+// runtimeArtifactPath extracts the first readable artifact path from the note
+// ContentForLLM appends at the very end of a result:
+//
+//	\nLocal artifact paths: [file:...] [file:...]\n<ArtifactPathsLLMNote>
+//
+// Requiring that suffix keeps a tool-controlled body from forging a note.
+func runtimeArtifactPath(content string) string {
+	suffix := "\n" + toolshared.ArtifactPathsLLMNote
+	if !strings.HasSuffix(content, suffix) {
 		return ""
 	}
-	line := content[idx+len(notePrefix):]
-	if end := strings.IndexByte(line, '\n'); end >= 0 {
-		line = line[:end]
+	body := strings.TrimSuffix(content, suffix)
+	note := body
+	if idx := strings.LastIndex(body, "\n"+artifactNoteMarker); idx >= 0 {
+		note = body[idx+1:]
+	} else if !strings.HasPrefix(body, artifactNoteMarker) {
+		return ""
+	}
+	if strings.Contains(note, "\n") {
+		return ""
 	}
 	for {
-		start := strings.Index(line, "[file:")
+		start := strings.Index(note, "[file:")
 		if start < 0 {
 			return ""
 		}
-		rest := line[start+len("[file:"):]
+		rest := note[start+len("[file:"):]
 		end := strings.IndexByte(rest, ']')
 		if end < 0 {
 			return ""
 		}
 		path := rest[:end]
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		if isRegularFile(path) {
 			return path
 		}
-		line = rest[end+1:]
+		note = rest[end+1:]
 	}
+}
+
+func isRegularFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func archivedToolResultStub(path, toolName, toolArgs, content string) string {

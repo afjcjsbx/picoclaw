@@ -18,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // ---------------------------------------------------------------------------
@@ -702,6 +703,46 @@ func TestPruneToolResultStubCarriesToolDetails(t *testing.T) {
 	}
 	if data := readArchivedToolResult(t, stub); string(data) != original {
 		t.Fatalf("archived output = %q, want the original", data)
+	}
+}
+
+// ContentForLLM appends the artifact note with a single newline. The parser
+// must recognize that exact suffix, not only a double-newline variant.
+func TestExistingArtifactPathReadsRuntimeArtifactNote(t *testing.T) {
+	workspace := t.TempDir()
+	spill := filepath.Join(workspace, ".artifacts", "tool", "full.log")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(spill, []byte("full payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	content := (&toolshared.ToolResult{
+		ForLLM:       `{"url":"https://example.test","text":"preview"}`,
+		ArtifactTags: []string{"[file:" + spill + "]"},
+	}).ContentForLLM()
+	if !strings.Contains(content, "\nLocal artifact paths: ") {
+		t.Fatalf("content = %q, want the runtime note", content)
+	}
+	if got := existingArtifactPath("web_fetch", content); got != spill {
+		t.Fatalf("existingArtifactPath = %q, want %q", got, spill)
+	}
+
+	// A note in the middle of the body is not the runtime suffix.
+	middle := "body\n\nLocal artifact paths: [file:" + spill + "]\n" +
+		toolshared.ArtifactPathsLLMNote + "\nmore body"
+	if got := existingArtifactPath("web_fetch", middle); got != "" {
+		t.Fatalf("existingArtifactPath(middle note) = %q, want no reuse", got)
+	}
+
+	// Only exec may use the exec status header.
+	fakeExec := fmt.Sprintf("[exec] {\"artifactPath\":%q}\nbody", spill)
+	if got := existingArtifactPath("read_file", fakeExec); got != "" {
+		t.Fatalf("existingArtifactPath(non-exec header) = %q, want no reuse", got)
+	}
+	if got := existingArtifactPath("exec", fakeExec); got != spill {
+		t.Fatalf("existingArtifactPath(exec header) = %q, want %q", got, spill)
 	}
 }
 
