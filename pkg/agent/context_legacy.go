@@ -391,8 +391,15 @@ func (m *legacyContextManager) forceCompressionLocked(
 
 	existingSummary, err := agent.Sessions.GetSummary(ctx, sessionKey)
 	if err != nil {
+		// Without the existing summary the archive note would overwrite context
+		// we cannot reconstruct, so the transcript stays intact.
 		warnSessionStoreError(sessionKey, "get summary", err)
-		existingSummary = ""
+		return compressionResult{}, false
+	}
+	if ctx.Err() != nil {
+		// Cancellation can arrive while the archive is written; a canceled
+		// recovery must not turn into a destructive drop.
+		return compressionResult{}, false
 	}
 	compressionNote := fmt.Sprintf(
 		"[Emergency compression dropped %d oldest messages due to context limit; "+
@@ -403,17 +410,35 @@ func (m *legacyContextManager) forceCompressionLocked(
 	if existingSummary != "" {
 		compressionNote = existingSummary + "\n\n" + compressionNote
 	}
-	warnSessionStoreError(
-		sessionKey,
-		"set summary",
-		agent.Sessions.SetSummary(ctx, sessionKey, compressionNote),
-	)
 
-	warnSessionStoreError(
-		sessionKey,
-		"set history",
-		agent.Sessions.SetHistory(ctx, sessionKey, keptHistory),
-	)
+	// Persist the pointer before dropping the messages it points at. Without
+	// this note the model cannot find the archive, so a failed write keeps the
+	// transcript.
+	if err := agent.Sessions.SetSummary(ctx, sessionKey, compressionNote); err != nil {
+		warnSessionStoreError(sessionKey, "set summary", err)
+		return compressionResult{}, false
+	}
+	if ctx.Err() != nil {
+		// The summary was written but the caller is gone: undo the note and keep
+		// the transcript.
+		warnSessionStoreError(
+			sessionKey,
+			"restore summary",
+			agent.Sessions.SetSummary(context.WithoutCancel(ctx), sessionKey, existingSummary),
+		)
+		return compressionResult{}, false
+	}
+	if err := agent.Sessions.SetHistory(ctx, sessionKey, keptHistory); err != nil {
+		warnSessionStoreError(sessionKey, "set history", err)
+		// A summary that announces a drop must not outlive a failed history
+		// write.
+		warnSessionStoreError(
+			sessionKey,
+			"restore summary",
+			agent.Sessions.SetSummary(context.WithoutCancel(ctx), sessionKey, existingSummary),
+		)
+		return compressionResult{}, false
+	}
 	warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
 
 	logger.WarnCF("agent", "Forced compression executed", map[string]any{
