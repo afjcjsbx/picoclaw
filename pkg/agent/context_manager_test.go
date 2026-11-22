@@ -928,9 +928,10 @@ func TestPruneToolResultsDedupesIdenticalOutputs(t *testing.T) {
 	}
 }
 
-// A duplicate that points at a full copy in the protected tail is safe to
-// collapse without writing an archive: the newer copy remains in the prompt.
-func TestPruneToolResultsDedupesAgainstProtectedTail(t *testing.T) {
+// A copy in the protected tail is not a durable dedupe target: it may be
+// summarized away later. The older copy is archived instead, so its stub has
+// a path of its own.
+func TestPruneToolResultsArchivesDuplicateBeforeProtectedTail(t *testing.T) {
 	workspace := t.TempDir()
 	bulky := strings.Repeat("same output ", 100)
 	history := []providers.Message{
@@ -941,18 +942,21 @@ func TestPruneToolResultsDedupesAgainstProtectedTail(t *testing.T) {
 	if !pruneToolResultsBefore(history, 1, workspace) {
 		t.Fatal("expected the older duplicate to be pruned")
 	}
-	if !strings.HasPrefix(history[0].Content, duplicateToolResultPrefix) {
-		t.Fatalf("older duplicate = %q, want a duplicate stub", history[0].Content)
+	if !strings.HasPrefix(history[0].Content, archivedToolResultPrefix) {
+		t.Fatalf("older duplicate = %q, want an archive stub", history[0].Content)
 	}
 	if history[2].Content != bulky {
 		t.Fatalf("protected copy changed: %q", history[2].Content)
 	}
 	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil {
 		t.Fatalf("archive dir: %v", err)
 	}
-	if len(files) != 0 {
-		t.Fatalf("archive files = %d, want 0", len(files))
+	if len(files) != 1 {
+		t.Fatalf("archive files = %d, want 1", len(files))
+	}
+	if data := readArchivedToolResult(t, history[0].Content); string(data) != bulky {
+		t.Fatalf("archived output = %q, want the original", data)
 	}
 }
 

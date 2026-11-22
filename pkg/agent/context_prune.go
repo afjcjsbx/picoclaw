@@ -84,21 +84,10 @@ func pruneToolResultsBefore(history []providers.Message, end int, workspace stri
 		end = 0
 	}
 
-	canonicals := make(map[[sha256.Size]byte]canonicalToolResult)
-	// A full copy in the protected tail is a safe dedupe target: it stays
-	// available even when older identical rows are collapsed into stubs.
-	for i := end; i < len(history); i++ {
-		if !isPruneCandidate(history[i]) {
-			continue
-		}
-		sum := sha256.Sum256([]byte(history[i].Content))
-		if _, exists := canonicals[sum]; !exists {
-			canonicals[sum] = canonicalToolResult{
-				callID:   history[i].ToolCallID,
-				toolName: toolCallInfoForResult(history, i).name,
-			}
-		}
-	}
+	// Only an archived copy is a durable dedupe target. A copy still in the
+	// protected tail has no archive of its own and may be summarized away later,
+	// leaving an older back-reference with nothing to point at.
+	dedupeTargets := make(map[[sha256.Size]byte]dedupeTarget)
 
 	pruned := false
 	for i := end - 1; i >= 0; i-- {
@@ -108,8 +97,8 @@ func pruneToolResultsBefore(history []providers.Message, end int, workspace stri
 		}
 		call := toolCallInfoForResult(history, i)
 		sum := sha256.Sum256([]byte(msg.Content))
-		if canonical, ok := canonicals[sum]; ok {
-			stub := duplicateToolResultStub(canonical, call.name)
+		if target, ok := dedupeTargets[sum]; ok {
+			stub := duplicateToolResultStub(target, call.name)
 			if len(stub) >= resultLen(msg.Content) {
 				stub = duplicateToolResultShort
 			}
@@ -120,11 +109,10 @@ func pruneToolResultsBefore(history []providers.Message, end int, workspace stri
 
 		stub, archivePath := archiveToolResult(workspace, call.name, call.args, msg.Content)
 		msg.Content = stub
-		canonicals[sum] = canonicalToolResult{
+		dedupeTargets[sum] = dedupeTarget{
 			callID:      msg.ToolCallID,
 			toolName:    call.name,
 			archivePath: archivePath,
-			evicted:     true,
 		}
 		pruned = true
 	}
@@ -194,11 +182,10 @@ func toolCallInfoFromCall(tc providers.ToolCall) toolCallInfo {
 	return info
 }
 
-type canonicalToolResult struct {
+type dedupeTarget struct {
 	callID      string
 	toolName    string
 	archivePath string
-	evicted     bool
 }
 
 // archiveToolResult replaces a tool output with a stub that points at the full
@@ -303,8 +290,11 @@ func archivedToolResultStub(path, toolName, toolArgs, content string) string {
 	return archivedToolResultPrefix + path + "; " + details + "; read_file it, or re-run the tool]"
 }
 
-func duplicateToolResultStub(canonical canonicalToolResult, fallbackName string) string {
-	name := canonical.toolName
+func duplicateToolResultStub(target dedupeTarget, fallbackName string) string {
+	if target.archivePath == "" {
+		return prunedToolResult
+	}
+	name := target.toolName
 	if name == "" {
 		name = fallbackName
 	}
@@ -313,28 +303,16 @@ func duplicateToolResultStub(canonical canonicalToolResult, fallbackName string)
 		label = name
 	}
 	call := ""
-	if canonical.callID != "" {
-		call = " (call " + canonical.callID + ")"
+	if target.callID != "" {
+		call = " (call " + target.callID + ")"
 	}
-	switch {
-	case canonical.archivePath != "":
-		return fmt.Sprintf(
-			"%ssame content as the archived %s result%s at %s; read_file it, or re-run the tool]",
-			duplicateToolResultPrefix,
-			label,
-			call,
-			canonical.archivePath,
-		)
-	case canonical.evicted:
-		return prunedToolResult
-	default:
-		return fmt.Sprintf(
-			"%ssame content as the newer %s result%s; read that copy, or re-run the tool]",
-			duplicateToolResultPrefix,
-			label,
-			call,
-		)
-	}
+	return fmt.Sprintf(
+		"%ssame content as the archived %s result%s at %s; read_file it, or re-run the tool]",
+		duplicateToolResultPrefix,
+		label,
+		call,
+		target.archivePath,
+	)
 }
 
 // toolResultDetails renders the per-tool part of an archive stub: the command,
