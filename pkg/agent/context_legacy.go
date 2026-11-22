@@ -13,12 +13,295 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
+const (
+	// maxIneffectiveCompactions disables automatic threshold compaction after
+	// this many attempts fail to bring the prompt below the threshold. Manual
+	// /compact always bypasses the breaker and gives the session a fresh start.
+	maxIneffectiveCompactions = 2
+
+	// maxCompactionHealthEntries bounds the per-session health map. Losing an
+	// entry only re-enables automatic compaction, so clearing the map is safe.
+	maxCompactionHealthEntries = 256
+
+	// Failure cooldowns escalate with consecutive failed automatic attempts.
+	compactionCooldownFirst  = time.Minute
+	compactionCooldownSecond = 5 * time.Minute
+	compactionCooldownMax    = 15 * time.Minute
+)
+
+// compactionHealthState tracks automatic threshold compaction for one session.
+// It is guarded by legacyContextManager.healthMu.
+type compactionHealthState struct {
+	lastAttempt time.Time
+	// turnID is the turn that produced the failure and ineffective counters.
+	// The verdict does not necessarily hold for the next turn: while a turn
+	// runs, compaction cannot fold its protected tail, so a prompt that stays
+	// over the threshold may be structural, but once the turn ends that tail is
+	// ordinary history and can be summarized.
+	turnID string
+	// failureCount counts consecutive automatic attempts that errored or made
+	// no progress. It drives the cooldown.
+	failureCount int
+	// ineffectiveCount counts consecutive measured compactions that left the
+	// prompt at or above the threshold. It drives the automatic-compaction
+	// breaker.
+	ineffectiveCount int
+	cooldownUntil    time.Time
+}
+
 // legacyContextManager wraps the existing summarization/compression logic
 // as a ContextManager implementation. It is the default when no other
 // ContextManager is configured.
 type legacyContextManager struct {
 	al          *AgentLoop
 	summarizing sync.Map // dedup so /compact and threshold compaction never truncate one session concurrently
+
+	// now is overridable in tests; nil means time.Now.
+	now func() time.Time
+
+	healthMu sync.Mutex
+	health   map[string]*compactionHealthState
+}
+
+func (m *legacyContextManager) currentTime() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
+func compactionHealthKey(agent *AgentInstance, sessionKey string) string {
+	if agent != nil && agent.ID != "" {
+		return agent.ID + ":" + sessionKey
+	}
+	return sessionKey
+}
+
+// healthStateLocked returns the state for key, creating it (and bounding the
+// map) when absent. The caller must hold healthMu.
+func (m *legacyContextManager) healthStateLocked(key string) *compactionHealthState {
+	if m.health == nil {
+		m.health = make(map[string]*compactionHealthState)
+	}
+	state := m.health[key]
+	if state == nil {
+		if len(m.health) >= maxCompactionHealthEntries {
+			m.health = make(map[string]*compactionHealthState)
+		}
+		state = &compactionHealthState{}
+		m.health[key] = state
+	}
+	return state
+}
+
+func (m *legacyContextManager) resetCompactionHealth(agent *AgentInstance, sessionKey string) {
+	key := compactionHealthKey(agent, sessionKey)
+	m.healthMu.Lock()
+	delete(m.health, key)
+	m.healthMu.Unlock()
+}
+
+// turnForSession returns the turn in progress for a session, preferring the one
+// carried by ctx so a caller inside a turn cannot observe a newer one.
+func (m *legacyContextManager) turnForSession(ctx context.Context, sessionKey string) *turnState {
+	if ts := turnStateFromContext(ctx); ts != nil && ts.sessionKey == sessionKey {
+		return ts
+	}
+	return m.al.getActiveTurnState(sessionKey)
+}
+
+// noteThresholdTurn records which turn owns an automatic threshold attempt and
+// drops health produced by an earlier turn. While a turn runs, compaction cannot
+// fold its protected tail; once the turn ends that tail is ordinary history, so
+// the old verdict must not throttle a context it was never measured against. The
+// turn ID (not the active-message count) is the signal: summarizeActiveTurn
+// shrinks the turn's own record within the same turn.
+func (m *legacyContextManager) noteThresholdTurn(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+) {
+	ts := m.turnForSession(ctx, sessionKey)
+	if ts == nil || ts.turnID == "" {
+		return
+	}
+
+	key := compactionHealthKey(agent, sessionKey)
+	m.healthMu.Lock()
+	state := m.healthStateLocked(key)
+	if state.turnID != "" && state.turnID != ts.turnID {
+		state.failureCount = 0
+		state.ineffectiveCount = 0
+		state.cooldownUntil = time.Time{}
+	}
+	state.turnID = ts.turnID
+	m.healthMu.Unlock()
+}
+
+func compactionFailureCooldown(failures int) time.Duration {
+	switch {
+	case failures <= 1:
+		return compactionCooldownFirst
+	case failures == 2:
+		return compactionCooldownSecond
+	default:
+		return compactionCooldownMax
+	}
+}
+
+// thresholdCompactionBlocked reports whether automatic threshold compaction
+// must be skipped for this session, and why. Hard-budget paths (proactive and
+// context-error retry) deliberately bypass this gate: they are the safety net
+// that must still run when the provider is about to reject the request.
+func (m *legacyContextManager) thresholdCompactionBlocked(
+	agent *AgentInstance,
+	sessionKey string,
+) (bool, string) {
+	key := compactionHealthKey(agent, sessionKey)
+	now := m.currentTime()
+
+	m.healthMu.Lock()
+	state := m.health[key]
+	if state == nil {
+		m.healthMu.Unlock()
+		return false, ""
+	}
+	ineffective := state.ineffectiveCount
+	failures := state.failureCount
+	cooldownUntil := state.cooldownUntil
+	lastAttempt := state.lastAttempt
+	m.healthMu.Unlock()
+
+	if ineffective >= maxIneffectiveCompactions {
+		return true, fmt.Sprintf(
+			"context compaction did not reduce the prompt below the threshold after %d attempts (last attempt %s); run /compact to force it",
+			ineffective,
+			healthAge(now, lastAttempt),
+		)
+	}
+	if now.Before(cooldownUntil) {
+		return true, fmt.Sprintf(
+			"context compaction is cooling down for %s after %d failed attempts",
+			cooldownUntil.Sub(now).Round(time.Second),
+			failures,
+		)
+	}
+	return false, ""
+}
+
+func healthAge(now, then time.Time) string {
+	if then.IsZero() {
+		return "unknown"
+	}
+	age := now.Sub(then)
+	if age < 0 {
+		age = 0
+	}
+	return age.Round(time.Second).String() + " ago"
+}
+
+func (m *legacyContextManager) recordCompactionFailure(
+	agent *AgentInstance,
+	sessionKey string,
+	cause error,
+) {
+	key := compactionHealthKey(agent, sessionKey)
+	now := m.currentTime()
+
+	m.healthMu.Lock()
+	state := m.healthStateLocked(key)
+	state.failureCount++
+	state.lastAttempt = now
+	cooldown := compactionFailureCooldown(state.failureCount)
+	state.cooldownUntil = now.Add(cooldown)
+	failures := state.failureCount
+	cooldownUntil := state.cooldownUntil
+	m.healthMu.Unlock()
+
+	logger.WarnCF("agent", "Automatic context compaction failed; cooldown armed", map[string]any{
+		"session_key":    sessionKey,
+		"error":          cause.Error(),
+		"failures":       failures,
+		"cooldown":       cooldown.String(),
+		"cooldown_until": cooldownUntil.Format(time.RFC3339),
+	})
+}
+
+// recordCompactionSuccess clears the failure cooldown after a hard-budget
+// recovery made progress. It leaves the ineffective breaker alone: only a
+// threshold compaction measured below the threshold (or a manual reset) does
+// that.
+func (m *legacyContextManager) recordCompactionSuccess(agent *AgentInstance, sessionKey string) {
+	key := compactionHealthKey(agent, sessionKey)
+	now := m.currentTime()
+
+	m.healthMu.Lock()
+	if state := m.health[key]; state != nil {
+		state.lastAttempt = now
+		state.failureCount = 0
+		state.cooldownUntil = time.Time{}
+	}
+	m.healthMu.Unlock()
+}
+
+// RecordCompactionHealth implements CompactionHealthReporter. It is called by
+// CompactBeforeLLM after the rebuilt prompt has been measured.
+func (m *legacyContextManager) RecordCompactionHealth(
+	_ context.Context,
+	sessionKey string,
+	outcome CompactionHealthOutcome,
+) {
+	var key string
+	if outcome.AgentID != "" {
+		key = outcome.AgentID + ":" + sessionKey
+	} else {
+		key = compactionHealthKey(m.al.agentForSession(sessionKey), sessionKey)
+	}
+	now := m.currentTime()
+
+	m.healthMu.Lock()
+	if !outcome.Attempted {
+		state := m.health[key]
+		if state == nil {
+			m.healthMu.Unlock()
+			return
+		}
+		if outcome.Effective && (state.ineffectiveCount > 0 || state.failureCount > 0 ||
+			!state.cooldownUntil.IsZero()) {
+			state.ineffectiveCount = 0
+			state.failureCount = 0
+			state.cooldownUntil = time.Time{}
+		}
+		m.healthMu.Unlock()
+		return
+	}
+
+	state := m.healthStateLocked(key)
+	state.lastAttempt = now
+	if outcome.Effective {
+		state.ineffectiveCount = 0
+		state.failureCount = 0
+		state.cooldownUntil = time.Time{}
+		m.healthMu.Unlock()
+		return
+	}
+	state.ineffectiveCount++
+	ineffective := state.ineffectiveCount
+	m.healthMu.Unlock()
+
+	logger.WarnCF("agent", "Context compaction did not bring the prompt below the threshold", map[string]any{
+		"session_key":          sessionKey,
+		"prompt_tokens":        outcome.PromptTokens,
+		"threshold":            outcome.Threshold,
+		"ineffective_attempts": ineffective,
+	})
+	if ineffective >= maxIneffectiveCompactions {
+		logger.WarnCF("agent", "Automatic context compaction disabled for this session", map[string]any{
+			"session_key":          sessionKey,
+			"ineffective_attempts": ineffective,
+			"remedy":               "run /compact to force a new attempt or /clear to reset",
+		})
+	}
 }
 
 func (m *legacyContextManager) Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error) {
@@ -46,10 +329,21 @@ func (m *legacyContextManager) Assemble(ctx context.Context, req *AssembleReques
 }
 
 func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest) error {
+	agent := m.al.agentForSession(req.SessionKey)
+	if req.Reason == ContextCompressReasonThreshold {
+		// A new turn changes what compaction can summarize; drop the previous
+		// turn's verdict before consulting the throttle.
+		m.noteThresholdTurn(ctx, agent, req.SessionKey)
+		if blocked, reason := m.thresholdCompactionBlocked(agent, req.SessionKey); blocked {
+			return fmt.Errorf("%w: %s", ErrCompactionThrottled, reason)
+		}
+	}
 	switch req.Reason {
 	case ContextCompressReasonProactive, ContextCompressReasonRetry:
-		// Sync emergency compression — budget exceeded.
+		// Sync emergency compression — budget exceeded. Hard-budget paths bypass
+		// the threshold throttle so a provider overflow can still recover.
 		if result, ok := m.forceCompression(ctx, req.SessionKey); ok {
+			m.recordCompactionSuccess(agent, req.SessionKey)
 			m.al.emitEvent(
 				runtimeevents.KindAgentContextCompress,
 				m.al.newTurnEventScope(
@@ -83,9 +377,19 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		// (ContextCompressReasonThreshold), never after the turn.
 	case ContextCompressReasonThreshold:
 		// Same agent as Assemble, so the rebuilt prompt reads what was compacted.
-		return m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
+		err := m.compactSession(ctx, agent, req)
+		if err != nil && !errors.Is(err, ErrCompactionInProgress) && ctx.Err() == nil {
+			m.recordCompactionFailure(agent, req.SessionKey, err)
+		}
+		return err
 	case ContextCompressReasonManual:
-		err := m.compactSession(ctx, m.al.agentForSession(req.SessionKey), req)
+		// Manual compaction is the operator's escape hatch: it always bypasses
+		// the cooldown and the ineffective breaker, and gives automatic
+		// compaction a fresh start.
+		err := m.compactSession(ctx, agent, req)
+		if !errors.Is(err, ErrCompactionInProgress) {
+			m.resetCompactionHealth(agent, req.SessionKey)
+		}
 		if req.Outcome != nil {
 			switch {
 			case err == nil:
@@ -123,7 +427,7 @@ func (m *legacyContextManager) withSummarizeLock(agent *AgentInstance, sessionKe
 	}
 	summarizeKey := agent.ID + ":" + sessionKey
 	if _, loading := m.summarizing.LoadOrStore(summarizeKey, true); loading {
-		return fmt.Errorf("a summarization is already in progress")
+		return ErrCompactionInProgress
 	}
 	defer m.summarizing.Delete(summarizeKey)
 	return fn()
@@ -137,9 +441,7 @@ func (m *legacyContextManager) compactSessionLocked(
 	// /compact reports its own outcome; the threshold path notifies the turn's chat.
 	var ts *turnState
 	if req.Reason == ContextCompressReasonThreshold {
-		if ts = turnStateFromContext(ctx); ts == nil {
-			ts = m.al.getActiveTurnState(req.SessionKey)
-		}
+		ts = m.turnForSession(ctx, req.SessionKey)
 	}
 	if m.summarizeSession(ctx, agent, req.SessionKey, ts, req.Instructions) {
 		return nil
@@ -174,6 +476,7 @@ func (m *legacyContextManager) Clear(ctx context.Context, sessionKey string) err
 	if agent == nil || agent.Sessions == nil {
 		return fmt.Errorf("sessions not initialized")
 	}
+	m.resetCompactionHealth(agent, sessionKey)
 	warnSessionStoreError(sessionKey, "set history", agent.Sessions.SetHistory(ctx, sessionKey, []providers.Message{}))
 	warnSessionStoreError(sessionKey, "set summary", agent.Sessions.SetSummary(ctx, sessionKey, ""))
 	return agent.Sessions.Save(ctx, sessionKey)
