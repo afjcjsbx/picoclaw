@@ -33,11 +33,34 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 	}
 	toolTokens := EstimateToolDefsTokens(toolDefs)
 	threshold := summarizeThresholdTokens(ts.agent)
-	for pass := 0; pass < maxCompactionPasses; pass++ {
-		promptTokens := toolTokens
+	promptTokensNow := func() int {
+		total := toolTokens
 		for _, m := range exec.messages {
-			promptTokens += estimateMessageTokensForProvider(provider, m)
+			total += estimateMessageTokensForProvider(provider, m)
 		}
+		return total
+	}
+
+	var health CompactionHealthReporter
+	if reporter, ok := p.ContextManager.(CompactionHealthReporter); ok {
+		health = reporter
+	}
+	reportHealth := func(attempted, effective bool, promptTokens int) {
+		if health == nil {
+			return
+		}
+		health.RecordCompactionHealth(ctx, ts.sessionKey, CompactionHealthOutcome{
+			AgentID:      ts.agent.ID,
+			Attempted:    attempted,
+			Effective:    effective,
+			PromptTokens: promptTokens,
+			Threshold:    threshold,
+		})
+	}
+
+	attempted := false
+	for pass := 0; pass < maxCompactionPasses; pass++ {
+		promptTokens := promptTokensNow()
 		// Assembly may already have evicted old items from the prompt. In that
 		// case promptTokens can be below the threshold while the stored context
 		// is still huge; compacting based only on the prompt would let the
@@ -49,6 +72,9 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 			}
 		}
 		if promptTokens < threshold && storedTokens < threshold {
+			// Also clears stale cooldown/breaker state when a session drops back
+			// under the threshold without a compaction.
+			reportHealth(attempted, true, promptTokens)
 			return
 		}
 		if storedTokens > promptTokens {
@@ -75,7 +101,22 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 			Budget:             usableContextTokens(ts.agent),
 			ActiveTurnMessages: activeTurnMessageCount(ts, exec),
 		}); err != nil {
-			if !errors.Is(err, ErrNothingToCompact) {
+			switch {
+			case errors.Is(err, ErrCompactionThrottled):
+				logger.WarnCF("agent", "Threshold compaction skipped", map[string]any{
+					"session_key": ts.sessionKey,
+					"reason":      err.Error(),
+				})
+			case errors.Is(err, ErrCompactionInProgress):
+				logger.DebugCF("agent", "Threshold compaction skipped; another summarization is in progress",
+					map[string]any{"session_key": ts.sessionKey})
+			case errors.Is(err, ErrNothingToCompact):
+				logger.WarnCF("agent", "Threshold compaction made no progress", map[string]any{
+					"session_key":   ts.sessionKey,
+					"prompt_tokens": promptTokens,
+					"threshold":     threshold,
+				})
+			default:
 				logger.WarnCF("agent", "Threshold compaction failed", map[string]any{
 					"session_key": ts.sessionKey,
 					"error":       err.Error(),
@@ -83,6 +124,7 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 			}
 			return
 		}
+		attempted = true
 
 		rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerThresholdRebuild)
 		if !rebuilt.assembled {
@@ -91,6 +133,18 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 		}
 		exec.messages = rebuilt.build(rebuilt.stable)
 		exec.currentTurnStart = len(exec.messages) - len(rebuilt.protected) - len(exec.loopWarnings)
+	}
+	if attempted {
+		finalTokens := promptTokensNow()
+		reportHealth(true, finalTokens < threshold, finalTokens)
+		if finalTokens >= threshold {
+			logger.WarnCF("agent", "Context still above summarize threshold after compaction", map[string]any{
+				"session_key":   ts.sessionKey,
+				"prompt_tokens": finalTokens,
+				"threshold":     threshold,
+				"passes":        maxCompactionPasses,
+			})
+		}
 	}
 }
 
