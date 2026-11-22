@@ -2444,6 +2444,19 @@ func TestToolFeedbackArgsPreview_UsesJSONAndTruncates(t *testing.T) {
 	}
 }
 
+func TestToolFeedbackArgsPreview_DoesNotHTMLEscapeJSON(t *testing.T) {
+	got := toolFeedbackArgsPreview(map[string]any{
+		"command": "ls -d */ 2>/dev/null; true && echo done",
+	}, 512)
+	want := "{\n  \"command\": \"ls -d */ 2>/dev/null; true && echo done\"\n}"
+	if got != want {
+		t.Fatalf("toolFeedbackArgsPreview() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, `\u003c`) || strings.Contains(got, `\u003e`) || strings.Contains(got, `\u0026`) {
+		t.Fatalf("toolFeedbackArgsPreview() = %q, want no HTML-escaped runes", got)
+	}
+}
+
 type picoInterleavedContentProvider struct {
 	calls int
 }
