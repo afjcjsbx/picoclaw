@@ -340,16 +340,18 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 		t.Fatalf("expected compressed history, got %d messages (was %d)", len(newHistory), len(history))
 	}
 
-	// Summary should contain compression note
+	// Overflow recovery should summarize before it drops anything.
 	summary, err := defaultAgent.Sessions.GetSummary(context.Background(), "session-overflow")
 	if err != nil {
 		t.Fatalf("GetSummary: %v", err)
 	}
-	if !strings.Contains(summary, "Emergency compression") {
-		t.Fatalf("expected compression note in summary, got %q", summary)
+	if summary == "" {
+		t.Fatal("expected a summary after overflow recovery")
+	}
+	if strings.Contains(summary, "Emergency compression") {
+		t.Fatalf("overflow recovery dropped turns even though summarization was possible: %q", summary)
 	}
 
-	// Event should carry the proactive reason
 	events := collectRuntimeEventStream(runtimeCh)
 	compressEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentContextCompress)
 	if !ok {
@@ -361,6 +363,16 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 	}
 	if payload.Reason != ContextCompressReasonRetry {
 		t.Fatalf("expected retry reason, got %q", payload.Reason)
+	}
+	if payload.DroppedMessages != 0 || payload.Fallback {
+		t.Fatalf("expected a non-destructive recovery, got dropped=%d fallback=%v",
+			payload.DroppedMessages, payload.Fallback)
+	}
+	if payload.SummarizedMessages == 0 {
+		t.Fatal("expected summarized_messages > 0")
+	}
+	if payload.Attempts < 2 {
+		t.Fatalf("attempts = %d, want at least 2 (prune then summarize)", payload.Attempts)
 	}
 }
 
@@ -383,7 +395,10 @@ func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
 		t.Fatalf("SetHistory: %v", err)
 	}
 
-	result, ok := al.contextManager.(*legacyContextManager).forceCompression("session-prune-tools")
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression(
+		context.Background(),
+		"session-prune-tools",
+	)
 	if !ok {
 		t.Fatal("expected old tool output to be pruned")
 	}
@@ -487,6 +502,186 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 	}
 	if len(newHistory) != len(history) {
 		t.Fatalf("expected history unchanged, got %d messages (was %d)", len(newHistory), len(history))
+	}
+}
+
+func TestLegacyCompact_Overflow_ArchivesTranscriptBeforeFallback(t *testing.T) {
+	cfg := testConfig(t)
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "latest question"},
+	}
+	const sessionKey = "session-archive-fallback"
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression(context.Background(), sessionKey)
+	if !ok {
+		t.Fatal("expected the drop fallback to run")
+	}
+	if !result.Fallback || result.DroppedMessages == 0 {
+		t.Fatalf("expected a destructive fallback, got %+v", result)
+	}
+	if result.ArchivedPath == "" {
+		t.Fatal("expected the pre-compression transcript archive path")
+	}
+	if result.Attempts < 3 {
+		t.Fatalf("attempts = %d, want at least 3 (prune, summarize, drop)", result.Attempts)
+	}
+
+	data, err := os.ReadFile(result.ArchivedPath)
+	if err != nil {
+		t.Fatalf("read transcript archive: %v", err)
+	}
+	var archived overflowArchive
+	if decodeErr := json.Unmarshal(data, &archived); decodeErr != nil {
+		t.Fatalf("decode transcript archive: %v", decodeErr)
+	}
+	if archived.SessionKey != sessionKey {
+		t.Fatalf("archived session = %q, want %q", archived.SessionKey, sessionKey)
+	}
+	if len(archived.Messages) != len(history) {
+		t.Fatalf("archived messages = %d, want %d", len(archived.Messages), len(history))
+	}
+	if archived.Messages[0].Content != "first question" {
+		t.Fatalf("archived first message = %q", archived.Messages[0].Content)
+	}
+
+	summary, err := agent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
+	if !strings.Contains(summary, "archived at "+result.ArchivedPath) {
+		t.Fatalf("summary does not point at the archive: %q", summary)
+	}
+
+	kept, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(kept) != 1 || kept[0].Content != "latest question" {
+		t.Fatalf("kept history = %+v, want only the latest user message", kept)
+	}
+}
+
+func TestLegacyCompact_Overflow_CanceledTurnDoesNotDrop(t *testing.T) {
+	cfg := testConfig(t)
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "latest question"},
+	}
+	const sessionKey = "session-canceled-overflow"
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := al.contextManager.(*legacyContextManager).forceCompression(ctx, sessionKey); ok {
+		t.Fatal("expected a canceled turn to keep the transcript intact")
+	}
+
+	kept, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(kept) != len(history) {
+		t.Fatalf("history changed after cancellation: got %d messages, want %d", len(kept), len(history))
+	}
+}
+
+func TestLegacyCompact_Overflow_RefusesDropWhenArchiveFails(t *testing.T) {
+	cfg := testConfig(t)
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	// An empty workspace cannot hold the archive, so the destructive fallback
+	// must refuse rather than lose the transcript.
+	agent.Workspace = ""
+
+	history := []providers.Message{
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "latest question"},
+	}
+	const sessionKey = "session-archive-unavailable"
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	if _, ok := al.contextManager.(*legacyContextManager).forceCompression(context.Background(), sessionKey); ok {
+		t.Fatal("expected the fallback to be refused without a transcript archive")
+	}
+
+	kept, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(kept) != len(history) {
+		t.Fatalf("history changed without an archive: got %d messages, want %d", len(kept), len(history))
+	}
+}
+
+// The emergency prune must use the active-turn boundary and keep the turn's
+// persisted-message record in sync, otherwise the retry rebuild protects only
+// the unpruned tail and can later trim messages of the turn in progress.
+func TestLegacyCompact_Overflow_PruneKeepsActiveTurnSnapshot(t *testing.T) {
+	al, agent, ts, turn := activeTurnFixture(t, 4)
+	prior := []providers.Message{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer"},
+	}
+	const sessionKey = "active-turn"
+	history := append(append([]providers.Message(nil), prior...), turn...)
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression(
+		withTurnState(context.Background(), ts),
+		sessionKey,
+	)
+	if !ok {
+		t.Fatal("expected old tool outputs to be pruned")
+	}
+	if result.DroppedMessages != 0 || result.Fallback {
+		t.Fatalf("pruning must not drop messages, got %+v", result)
+	}
+
+	stored, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	persisted := ts.persistedMessagesSnapshot()
+	if got := matchingTurnMessageTail(stored, persisted); got != len(persisted) {
+		t.Fatalf("turn snapshot stale after emergency prune: matched %d of %d", got, len(persisted))
+	}
+	// The two newest rounds stay verbatim; the older ones become stubs.
+	if !strings.HasPrefix(stored[8].Content, "round-3 ") {
+		t.Fatalf("newest round 3 was pruned: %q", stored[8].Content)
+	}
+	if !strings.HasPrefix(stored[10].Content, "round-4 ") {
+		t.Fatalf("newest round 4 was pruned: %q", stored[10].Content)
+	}
+	if strings.HasPrefix(stored[4].Content, "round-1 ") {
+		t.Fatalf("old round 1 was not pruned: %q", stored[4].Content)
 	}
 }
 
@@ -1654,11 +1849,11 @@ func TestLegacyCompact_PublishesFeedbackWhenToolFeedbackEnabled(t *testing.T) {
 		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
 			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
 		}
-		if !strings.Contains(out.Content, contextFeedbackToolCompact) {
-			t.Fatalf("content = %q, want compaction notice", out.Content)
+		if !strings.Contains(out.Content, contextFeedbackToolSummarize) {
+			t.Fatalf("content = %q, want summarization notice", out.Content)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected compaction feedback outbound")
+		t.Fatal("expected summarization feedback outbound")
 	}
 }
 

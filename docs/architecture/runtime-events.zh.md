@@ -96,7 +96,7 @@ PICOCLAW_EVENTS_LOGGING_INCLUDE_PAYLOAD=false
 | `agent.llm.delta` | 预留给流式 LLM delta；当前实现已定义但没有自然发送点 | `content_delta_len`, `reasoning_delta_len` |
 | `agent.llm.response` | LLM provider 返回完整响应后 | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | LLM 请求因上下文、限流、临时错误等原因准备重试前 | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
-| `agent.context.compress` | 上下文历史被压缩时，例如主动预算检查或 LLM retry 处理 | `reason`, `dropped_messages`, `remaining_messages` |
+| `agent.context.compress` | 上下文历史被压缩时，例如主动预算检查或 LLM retry 处理 | `reason`, `dropped_messages`, `summarized_messages`, `remaining_messages`, `attempts`, `fallback`, `archived_path` |
 | `agent.session.summarize` | 会话历史异步摘要完成时 | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
 | `agent.tool.exec_start` | agent 准备执行一个工具调用前 | `tool`, `args_count`; 默认不打印完整参数 |
 | `agent.tool.exec_end` | 工具调用完成后，包括成功、工具错误和 async 结果 | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
@@ -196,7 +196,7 @@ agent 事件还会追加 payload 摘要字段：
 | `agent.llm.delta` | `content_delta_len`, `reasoning_delta_len` |
 | `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
-| `agent.context.compress` | `reason`, `dropped_messages`, `remaining_messages` |
+| `agent.context.compress` | `reason`, `dropped_messages`, `summarized_messages`, `remaining_messages`, `attempts`, `fallback`, `archived_path` |
 | `agent.session.summarize` | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
 | `agent.tool.exec_start` | `tool`, `args_count` |
 | `agent.tool.exec_end` | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |

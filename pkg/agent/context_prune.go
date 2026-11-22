@@ -48,18 +48,13 @@ func resultLen(content string) int {
 	return n
 }
 
-// pruneOldToolResults evicts tool outputs longer than minToolResultChars that
-// sit before the last protectedTail messages, in place: each is archived under
-// workspace and replaced by a per-tool stub pointing at the file. Media-carrying
-// results are kept. It reports whether anything changed.
-func pruneOldToolResults(history []providers.Message, workspace string) bool {
-	return pruneToolResultsBefore(history, len(history)-protectedTail, workspace)
-}
-
-// pruneToolResultsBefore is pruneOldToolResults for history[:end]. It also
-// collapses older identical outputs into a back-reference stub and compacts
-// oversized tool-call arguments, so pruning is lossless: the model can still
-// recover the original text from the archive.
+// pruneToolResultsBefore evicts tool outputs longer than minToolResultChars
+// that sit before end, in place: each is archived under workspace and replaced
+// by a per-tool stub pointing at the file. Media-carrying results are kept. It
+// also collapses older identical outputs into a back-reference stub and
+// compacts oversized tool-call arguments, so pruning is lossless: the model can
+// still recover the original text from the archive. It reports whether anything
+// changed.
 func pruneToolResultsBefore(history []providers.Message, end int, workspace string) bool {
 	if len(history) == 0 {
 		return false

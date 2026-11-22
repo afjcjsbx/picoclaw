@@ -97,9 +97,11 @@ When the threshold is reached it calls `ContextManager.Compact` with `Reason: Co
 - **legacy**: compaction runs synchronously on the turn's context, so a hard abort cancels it and a canceled summarization is never applied. It works in this order, stopping at the first step that changes the session:
   1. `summarizeSession` summarizes earlier Turns. The cut point is a Turn boundary (`findSafeBoundary`), so the active turn stays whole.
   2. `summarizeActiveTurn` summarizes the **middle of the active turn**. The turn's opening user message and its newest two tool rounds (an assistant message plus its tool results, never split) stay verbatim; the rounds in between, with their tool calls and bounded tool outputs, are folded into the session summary on top of the existing one. The newest round is never summarized because the model has not seen its results yet. It is skipped when the middle would reclaim less than a tenth of the threshold, so an LLM call is never spent on a few hundred tokens.
-  3. Old tool outputs are archived (`pruneOldToolResults`) when neither step applies. Each evicted result points at the tool's existing spill artifact when it has one, or is written under `<workspace>/.artifacts/evicted`; it is then replaced by a per-tool stub that names the command/path/query, the size and the file. Identical outputs are deduplicated against their archived copy: the newest archived copy stays canonical, and older copies point at its archive path. A copy still in the protected tail is not used as a dedupe target because it may be summarized later. Oversized historical tool-call arguments outside the protected region are archived and replaced by a compact, valid JSON object with a recovery pointer. If no archive can be written (empty workspace, write failure, or a stub that would not be shorter), the old placeholder is used.
+  3. Old tool outputs are archived (`pruneSessionToolResults`) when neither step applies. Each evicted result points at the tool's existing spill artifact when it has one, or is written under `<workspace>/.artifacts/evicted`; it is then replaced by a per-tool stub that names the command/path/query, the size and the file. Identical outputs are deduplicated against their archived copy: the newest archived copy stays canonical, and older copies point at its archive path. A copy still in the protected tail is not used as a dedupe target because it may be summarized later. Oversized historical tool-call arguments outside the protected region are archived and replaced by a compact, valid JSON object with a recovery pointer. If no archive can be written (empty workspace, write failure, or a stub that would not be shorter), the old placeholder is used.
 
   `CompactBeforeLLM` chains up to three passes per LLM call, so one call can both summarize earlier Turns and the turn's own middle. The turn then continues with the kept rounds, the summary in the system prompt, and its original user message first. The post-turn `Compact(summarize)` is a no-op for legacy: the work moved here, and being synchronous it can no longer race with messages appended while the summary is generated.
+
+  Automatic threshold compaction is throttled per session. A failed attempt (an error or no progress) arms an escalating cooldown (1m, 5m, then 15m). Two consecutive attempts that leave the prompt at or above the threshold disable automatic threshold compaction for that session. Manual `/compact` bypasses both and resets the state; `/clear` and a naturally below-threshold prompt also clear it. The state is scoped to the turn that produced it: the first threshold check of a new turn clears the cooldown and the breaker, because the previous turn's protected tail is ordinary history by then and can be summarized. The turn ID is the signal, so compaction shrinking the active-turn message count within one turn does not reset the state. A successful hard-budget recovery clears only the failure cooldown, leaving the ineffective breaker for the next threshold measurement. The proactive and context-error retry paths bypass the throttle because they are the hard safety net.
 - **seahorse**: unchanged policy. A leaf compaction pass runs through `Engine.Compact`; if it creates no summary, `ErrNothingToCompact` is returned. Seahorse still compacts after the turn as before.
 
 The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt.
@@ -110,19 +112,22 @@ Summarization requests (legacy and seahorse) retry transient failures (rate limi
 
 `isOverContextBudget` runs before each LLM call.
 
-Uses the full budget formula: `message_tokens + tool_def_tokens + MaxTokens > ContextWindow`. If over budget, triggers `forceCompression` and rebuilds messages before calling the LLM.
+Uses the full budget formula: `message_tokens + tool_def_tokens + MaxTokens > ContextWindow`. If over budget, triggers `forceCompression` and rebuilds messages before calling the LLM. The proactive path uses the same least-destructive recovery as the reactive one, so it can also prune and summarize (including a summarizer LLM call) before dropping turns.
 
 This prevents wasted (and billed) LLM calls that would otherwise fail with a context-window error.
 
 ### 3. Emergency compression (reactive)
 
-`forceCompression` runs when the LLM returns a context-window error despite the proactive check.
+`forceCompression` runs from the proactive budget check or when the LLM returns a context-window error despite it. It reduces the context least destructively first, and counts the bounded attempts it makes:
 
-Drops the oldest ~50% of Turns. If the history is a single Turn with no safe split point (e.g. one user message followed by a massive tool response), falls back to keeping only the most recent user message — breaking Turn atomicity as a last resort to avoid a context-exceeded loop.
+1. `pruneSessionToolResults` applies the same active-turn-aware pruning as threshold compaction: it keeps the turn's newest tool rounds verbatim and keeps the turn's persisted-message record in sync with the session, so the retry rebuild and later summarization see the same active-turn boundary. It archives old tool outputs and replaces them with per-tool stubs; no LLM call and no message loss.
+2. `summarizeSession` summarizes earlier Turns at a Turn boundary.
+3. `summarizeActiveTurn` summarizes the middle of the Turn in progress, keeping its opening user message and newest tool rounds.
+4. Only when neither summarization can make progress does it drop turns. Before dropping, it writes the full pre-compression transcript to `<workspace>/.artifacts/context/session_overflow_*.json` and puts that path in the session summary. If the archive cannot be written, it refuses to drop and leaves the transcript intact. Cancellation is re-checked immediately before each mutation. A failed summary write also keeps the transcript, and a failed history write rolls the summary back, so the archive pointer cannot outlive a drop that never happened, and the summary cannot announce one. It then drops the oldest ~50% of Turns. If the history is a single Turn with no safe split point (e.g. one user message followed by a massive tool response), it falls back to keeping only the most recent user message — breaking Turn atomicity as a last resort to avoid a context-exceeded loop.
 
-Stores a compression note in the session summary (not in history messages) so `BuildMessages` can include it in the next system prompt.
+The summary note (not a history message) records how many messages were dropped and where the original transcript was archived, so `BuildMessages` can include it in the next system prompt and the model can read the archive with `read_file`.
 
-This is the fallback for when the token estimate undershoots reality.
+This is the fallback for when the token estimate undershoots reality. The `agent.context.compress` event carries `summarized_messages`, `attempts`, `fallback`, and `archived_path` alongside the existing drop/remaining counts.
 
 ### 4. Manual compaction (`/compact`)
 
@@ -182,7 +187,7 @@ These are recognized limitations in the current implementation, documented here 
 
 - **Reactive retry does not preserve media.** When the reactive path rebuilds context after compression, it currently passes empty values for media references. This is a pre-existing issue in the main loop, not introduced by the budget system.
 
-- **Evicted outputs are retained, not permanent.** Archived tool outputs live under `.artifacts/evicted`, and reused spills live under the tool's artifact directory (for example `.artifacts/tool` or `.artifacts/mcp`). Both are bounded by the artifact retention policy, and a spill capped by the tool is not a complete copy. Outputs dropped together with their messages by summarization or forced compression are not archived.
+- **Evicted outputs are retained, not permanent.** Archived tool outputs live under `.artifacts/evicted`, reused spills live under the tool's artifact directory (for example `.artifacts/tool` or `.artifacts/mcp`), and the emergency drop fallback archives the full pre-compression transcript under `.artifacts/context`. All are bounded by the artifact retention policy; a spill capped by the tool is not a complete copy, and the context archive is a recovery aid, not a permanent backup. Normal summarization still replaces old turns with a summary rather than archiving the originals. Outputs dropped together with their messages by summarization or forced compression are not archived.
 
 ---
 

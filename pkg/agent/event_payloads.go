@@ -111,9 +111,19 @@ const (
 
 // ContextCompressPayload describes a forced history compression.
 type ContextCompressPayload struct {
-	Reason            ContextCompressReason
-	DroppedMessages   int
-	RemainingMessages int
+	Reason             ContextCompressReason
+	DroppedMessages    int
+	SummarizedMessages int
+	RemainingMessages  int
+	// Attempts is how many bounded recovery steps were tried; the destructive
+	// drop fallback, when used, is always the last one.
+	Attempts int
+	// Fallback is true when summarization was impossible and the oldest turns
+	// were dropped.
+	Fallback bool
+	// ArchivedPath is the pre-compression transcript written before a
+	// destructive fallback.
+	ArchivedPath string
 }
 
 // SessionSummarizePayload describes a completed session summarization.
