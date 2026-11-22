@@ -56,8 +56,16 @@ picoclaw config reset --force
 ```bash
 picoclaw status    # Show configuration, model, and runtime status (alias: s)
 picoclaw version   # Show version information (alias: v)
-picoclaw update    # Check and apply updates from GitHub releases
+picoclaw update    # Check for a newer release and ask before applying it
 ```
+
+`update` queries the latest GitHub release first and prints the current and
+latest versions. When no newer release exists, it exits without downloading.
+When one exists, it asks for confirmation before downloading and replacing the
+binary; a non-interactive stdin (for example in a script) applies the update
+without prompting. Development builds created by the Makefile (`v0.5.4-128-g…`)
+are compared by the tag they are based on. Do not restart or power off the
+device while the update is downloading or being applied.
 
 `update` flags:
 
@@ -66,6 +74,8 @@ picoclaw update    # Check and apply updates from GitHub releases
 | `--platform` | Target platform (default: current `GOOS`) |
 | `--arch` | Target architecture (default: current `GOARCH`) |
 | `-u, --url` | Direct URL to a release asset or release page |
+| `--check` | Only check for a newer release; never download or apply it |
+| `-y, --yes` | Apply the update without asking for confirmation |
 
 ## Usage
 
