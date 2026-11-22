@@ -746,25 +746,74 @@ func TestExistingArtifactPathReadsRuntimeArtifactNote(t *testing.T) {
 	}
 }
 
-// A tool result that already spilled its full payload keeps that pointer
-// instead of writing a second bounded copy under .artifacts/evicted.
-func TestPruneToolResultReusesExistingArtifact(t *testing.T) {
+// A non-exec result that already spilled its full payload keeps the runtime
+// note pointer instead of writing a second bounded copy under .artifacts/evicted.
+func TestPruneToolResultReusesRuntimeArtifactNote(t *testing.T) {
 	workspace := t.TempDir()
-	spillDir := filepath.Join(workspace, ".artifacts", "tool")
-	if err := os.MkdirAll(spillDir, 0o750); err != nil {
+	spill := filepath.Join(workspace, ".artifacts", "tool", "full.log")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	spill := filepath.Join(spillDir, "full.log")
 	full := strings.Repeat("full output line\n", 100)
 	if err := os.WriteFile(spill, []byte(full), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	original := fmt.Sprintf(
-		"[exec] {\"exitCode\":0,\"artifactPath\":%q}\n%s\n\nLocal artifact paths: [file:%s]\nUse send_file.",
-		spill,
-		strings.Repeat("preview line\n", 30),
-		spill,
-	)
+	original := (&toolshared.ToolResult{
+		ForLLM:       `{"url":"https://example.test","status":200,"text":"` + strings.Repeat("preview line ", 30) + `"}`,
+		ArtifactTags: []string{"[file:" + spill + "]"},
+	}).ContentForLLM()
+	if !strings.Contains(original, "\nLocal artifact paths: ") {
+		t.Fatalf("content = %q, want the runtime note", original)
+	}
+	if strings.Contains(original, "\n\nLocal artifact paths: ") {
+		t.Fatalf("content = %q, want the single-newline runtime note", original)
+	}
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "web_fetch", Arguments: `{"url":"https://example.test"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "c1", Content: original},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the result to be evicted")
+	}
+	stub := history[1].Content
+	if !strings.Contains(stub, spill) {
+		t.Fatalf("stub = %q, want the existing spill path %q", stub, spill)
+	}
+	if !strings.Contains(stub, "web_fetch") || !strings.Contains(stub, "example.test") {
+		t.Fatalf("stub = %q, want the tool and URL details", stub)
+	}
+	if data := readArchivedToolResult(t, stub); string(data) != full {
+		t.Fatalf("spill content = %q, want the full output", data)
+	}
+	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("archive dir: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("evicted archive files = %d, want 0 (reused spill)", len(files))
+	}
+}
+
+// The exec status header is a separate reuse path: it carries artifactPath
+// without the runtime note, and only exec results may use it.
+func TestPruneToolResultReusesExecArtifactHeader(t *testing.T) {
+	workspace := t.TempDir()
+	spill := filepath.Join(workspace, ".artifacts", "tool", "full.log")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	full := strings.Repeat("full output line\n", 100)
+	if err := os.WriteFile(spill, []byte(full), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := fmt.Sprintf("[exec] {\"exitCode\":0,\"artifactPath\":%q}\n%s",
+		spill, strings.Repeat("preview line\n", 30))
 	history := []providers.Message{
 		{
 			Role: "assistant",
@@ -779,8 +828,8 @@ func TestPruneToolResultReusesExistingArtifact(t *testing.T) {
 		t.Fatal("expected the result to be evicted")
 	}
 	stub := history[1].Content
-	if !strings.Contains(stub, spill) {
-		t.Fatalf("stub = %q, want the existing spill path %q", stub, spill)
+	if !strings.Contains(stub, spill) || !strings.Contains(stub, "exit=0") {
+		t.Fatalf("stub = %q, want the exec spill path and status", stub)
 	}
 	if data := readArchivedToolResult(t, stub); string(data) != full {
 		t.Fatalf("spill content = %q, want the full output", data)
