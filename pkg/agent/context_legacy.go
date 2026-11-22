@@ -179,7 +179,7 @@ func (m *legacyContextManager) Clear(ctx context.Context, sessionKey string) err
 	return agent.Sessions.Save(ctx, sessionKey)
 }
 
-// pruneSessionToolResults applies pruneOldToolResults to the stored history and
+// pruneSessionToolResults applies the pruning pass to the stored history and
 // reports the resulting message count. When ts is the turn in progress, its
 // newest keepActiveRounds rounds are kept whole as well: the newest round holds
 // results the model has not seen yet.
@@ -288,29 +288,29 @@ func (m *legacyContextManager) forceCompressionLocked(
 	originalHistory := cloneMessagesForArchive(history)
 	result := compressionResult{Attempts: 1}
 
+	// Resolve the turn in progress before pruning. pruneSessionToolResults both
+	// protects the turn's newest rounds and keeps its persisted-message record
+	// in sync with the session, so the rebuild and any later summarization see
+	// the same active-turn boundary as the store. Ignore a turn state carried by
+	// ctx for a different session.
+	ts := turnStateFromContext(ctx)
+	if ts == nil || ts.sessionKey != sessionKey {
+		ts = m.al.getActiveTurnState(sessionKey)
+	}
+
 	// 1. Lossless tool-output pruning: no LLM call, no message loss.
-	if pruneOldToolResults(history, agent.Workspace) {
-		warnSessionStoreError(
-			sessionKey,
-			"set history",
-			agent.Sessions.SetHistory(ctx, sessionKey, history),
-		)
-		warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
-		result.RemainingMessages = len(history)
+	if remaining, pruned := m.pruneSessionToolResults(ctx, agent, sessionKey, ts); pruned {
+		result.RemainingMessages = remaining
 		logger.InfoCF("agent", "Overflow compression pruned old tool outputs", map[string]any{
 			"session_key": sessionKey,
 			"attempts":    result.Attempts,
-			"new_count":   len(history),
+			"new_count":   remaining,
 		})
 		return result, true
 	}
 
 	// 2. Summarize earlier Turns, then the active Turn's middle. This mirrors
 	// threshold compaction and never splits a tool-call sequence.
-	ts := turnStateFromContext(ctx)
-	if ts == nil {
-		ts = m.al.getActiveTurnState(sessionKey)
-	}
 	result.Attempts = 2
 	if m.summarizeSession(ctx, agent, sessionKey, ts, "") {
 		remaining := storedHistoryLen(agent, sessionKey, len(originalHistory))

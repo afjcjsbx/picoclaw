@@ -639,6 +639,52 @@ func TestLegacyCompact_Overflow_RefusesDropWhenArchiveFails(t *testing.T) {
 	}
 }
 
+// The emergency prune must use the active-turn boundary and keep the turn's
+// persisted-message record in sync, otherwise the retry rebuild protects only
+// the unpruned tail and can later trim messages of the turn in progress.
+func TestLegacyCompact_Overflow_PruneKeepsActiveTurnSnapshot(t *testing.T) {
+	al, agent, ts, turn := activeTurnFixture(t, 4)
+	prior := []providers.Message{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer"},
+	}
+	const sessionKey = "active-turn"
+	history := append(append([]providers.Message(nil), prior...), turn...)
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression(
+		withTurnState(context.Background(), ts),
+		sessionKey,
+	)
+	if !ok {
+		t.Fatal("expected old tool outputs to be pruned")
+	}
+	if result.DroppedMessages != 0 || result.Fallback {
+		t.Fatalf("pruning must not drop messages, got %+v", result)
+	}
+
+	stored, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	persisted := ts.persistedMessagesSnapshot()
+	if got := matchingTurnMessageTail(stored, persisted); got != len(persisted) {
+		t.Fatalf("turn snapshot stale after emergency prune: matched %d of %d", got, len(persisted))
+	}
+	// The two newest rounds stay verbatim; the older ones become stubs.
+	if !strings.HasPrefix(stored[8].Content, "round-3 ") {
+		t.Fatalf("newest round 3 was pruned: %q", stored[8].Content)
+	}
+	if !strings.HasPrefix(stored[10].Content, "round-4 ") {
+		t.Fatalf("newest round 4 was pruned: %q", stored[10].Content)
+	}
+	if strings.HasPrefix(stored[4].Content, "round-1 ") {
+		t.Fatalf("old round 1 was not pruned: %q", stored[4].Content)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Legacy Compact post-turn tests
 // ---------------------------------------------------------------------------
