@@ -746,6 +746,34 @@ func TestExistingArtifactPathReadsRuntimeArtifactNote(t *testing.T) {
 	}
 }
 
+// The tool batch appends budget notices after the runtime artifact note, so the
+// note is still last but no longer the literal end of the result.
+func TestExistingArtifactPathIgnoresTrailingBudgetNotices(t *testing.T) {
+	workspace := t.TempDir()
+	spill := filepath.Join(workspace, ".artifacts", "tool", "full.log")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(spill, []byte("full payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content := (&toolshared.ToolResult{
+		ForLLM:       `{"url":"https://example.test","text":"preview"}`,
+		ArtifactTags: []string{"[file:" + spill + "]"},
+	}).ContentForLLM()
+	iterationNotice := "\n\n" + fmt.Sprintf(iterationBudgetWarningTemplate, 3, 10)
+
+	for name, trailing := range map[string]string{
+		"iteration": iterationNotice,
+		"run":       "\n\n" + runBudgetNotice,
+		"both":      iterationNotice + "\n\n" + runBudgetNotice,
+	} {
+		if got := existingArtifactPath("web_fetch", content+trailing); got != spill {
+			t.Fatalf("%s notice: existingArtifactPath = %q, want %q", name, got, spill)
+		}
+	}
+}
+
 // A non-exec result that already spilled its full payload keeps the runtime
 // note pointer instead of writing a second bounded copy under .artifacts/evicted.
 func TestPruneToolResultReusesRuntimeArtifactNote(t *testing.T) {

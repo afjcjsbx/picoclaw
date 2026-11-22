@@ -66,6 +66,7 @@ func existingArtifactPath(toolName, content string) string {
 //
 // Requiring that suffix keeps a tool-controlled body from forging a note.
 func runtimeArtifactPath(content string) string {
+	content = trimTrailingBudgetNotices(content)
 	suffix := "\n" + toolshared.ArtifactPathsLLMNote
 	if !strings.HasSuffix(content, suffix) {
 		return ""
@@ -95,6 +96,27 @@ func runtimeArtifactPath(content string) string {
 			return path
 		}
 		note = rest[end+1:]
+	}
+}
+
+// trimTrailingBudgetNotices removes the notices the tool batch appends after
+// the runtime artifact note. They are part of the persisted result, so the note
+// is still the last meaningful line but no longer the literal suffix.
+func trimTrailingBudgetNotices(content string) string {
+	for {
+		if suffix := "\n\n" + runBudgetNotice; strings.HasSuffix(content, suffix) {
+			content = strings.TrimSuffix(content, suffix)
+			continue
+		}
+		idx := strings.LastIndex(content, "\n\n"+budgetNoticePrefix)
+		if idx < 0 {
+			return content
+		}
+		tail := content[idx+2:]
+		if strings.Contains(tail, "\n\n") || !strings.HasPrefix(tail, budgetNoticePrefix) {
+			return content
+		}
+		content = content[:idx]
 	}
 }
 
