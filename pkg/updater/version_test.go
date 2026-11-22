@@ -15,6 +15,13 @@ func TestCompareVersions(t *testing.T) {
 		ok      bool
 	}{
 		{name: "same release", current: "v0.5.6", latest: "v0.5.6", want: 0, ok: true},
+		{
+			name:    "release binary without v prefix matches release tag",
+			current: "0.5.6",
+			latest:  "v0.5.6",
+			want:    0,
+			ok:      true,
+		},
 		{name: "current older", current: "v0.5.4", latest: "v0.5.6", want: -1, ok: true},
 		{name: "current newer", current: "v0.5.7", latest: "v0.5.6", want: 1, ok: true},
 		{name: "missing v prefix", current: "0.5.4", latest: "v0.5.6", want: -1, ok: true},

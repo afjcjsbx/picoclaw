@@ -102,6 +102,13 @@ func TestUpdateCheckOnly(t *testing.T) {
 			absent:   []string{"Update available", "Run without --check"},
 		},
 		{
+			name:     "release binary without v prefix is already up to date",
+			current:  "0.5.6",
+			latest:   "v0.5.6",
+			contains: []string{"Already up to date."},
+			absent:   []string{"Update available", "Run without --check"},
+		},
+		{
 			name:     "development build ahead of latest release",
 			current:  "v0.5.6-12-gabc1234",
 			latest:   "v0.5.6",
@@ -145,6 +152,24 @@ func TestUpdateCheckOnly(t *testing.T) {
 			assert.False(t, *applied, "--check must not apply the update")
 		})
 	}
+}
+
+func TestUpdateDoesNotApplyWhenUpToDate(t *testing.T) {
+	useReleaseTestServer(t, "v0.5.6")
+	applied := stubUpdateSelf(t)
+	stubStdinTerminal(t, true)
+
+	out, err := executeUpdate(t, updateOptions{
+		binaryName: "picoclaw",
+		current:    "0.5.6",
+		display:    "0.5.6 (git: abc1234)",
+	}, "y\n")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "Already up to date.")
+	assert.NotContains(t, out, "[y/N]")
+	assert.NotContains(t, out, "Update available")
+	assert.False(t, *applied)
 }
 
 func TestUpdateAppliesAcceptedConfirmation(t *testing.T) {
