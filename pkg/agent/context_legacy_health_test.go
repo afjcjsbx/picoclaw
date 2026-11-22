@@ -156,6 +156,67 @@ func TestLegacyCompactionHealth_CooldownEscalates(t *testing.T) {
 	}
 }
 
+func TestLegacyCompactionHealth_NewTurnClearsStaleState(t *testing.T) {
+	_, agent, lcm, _ := newCompactionHealthTestManager(t)
+	const sessionKey = "session-new-turn"
+
+	turnOne := &turnState{turnID: "agent-turn-1", sessionKey: sessionKey, agent: agent}
+	ctxOne := withTurnState(context.Background(), turnOne)
+
+	// A failed threshold attempt in turn one arms the cooldown.
+	err := lcm.Compact(ctxOne, &CompactRequest{
+		SessionKey:         sessionKey,
+		Reason:             ContextCompressReasonThreshold,
+		ActiveTurnMessages: 8,
+	})
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("first attempt err = %v, want ErrNothingToCompact", err)
+	}
+
+	// The cooldown stays for the same turn even when compaction shrank the
+	// turn's own record: the message count is not a turn boundary.
+	err = lcm.Compact(ctxOne, &CompactRequest{
+		SessionKey:         sessionKey,
+		Reason:             ContextCompressReasonThreshold,
+		ActiveTurnMessages: 2,
+	})
+	if !errors.Is(err, ErrCompactionThrottled) {
+		t.Fatalf("same-turn attempt err = %v, want the cooldown to persist", err)
+	}
+
+	// Trip the breaker too, so the next turn has to clear both counters.
+	for i := 0; i < maxIneffectiveCompactions; i++ {
+		lcm.RecordCompactionHealth(ctxOne, sessionKey, CompactionHealthOutcome{
+			AgentID:   agent.ID,
+			Attempted: true,
+			Effective: false,
+		})
+	}
+	err = lcm.Compact(ctxOne, &CompactRequest{
+		SessionKey: sessionKey,
+		Reason:     ContextCompressReasonThreshold,
+	})
+	if !errors.Is(err, ErrCompactionThrottled) || !strings.Contains(err.Error(), "did not reduce") {
+		t.Fatalf("same-turn attempt err = %v, want the ineffective breaker", err)
+	}
+
+	// Turn one ended: its oversized protected tail is ordinary history now, so
+	// the stale cooldown and breaker must not follow the session.
+	turnTwo := &turnState{turnID: "agent-turn-2", sessionKey: sessionKey, agent: agent}
+	ctxTwo := withTurnState(context.Background(), turnTwo)
+	err = lcm.Compact(ctxTwo, &CompactRequest{
+		SessionKey:         sessionKey,
+		Reason:             ContextCompressReasonThreshold,
+		ActiveTurnMessages: 1,
+	})
+	if errors.Is(err, ErrCompactionThrottled) {
+		t.Fatalf("new turn inherited compaction health: %v", err)
+	}
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("new-turn attempt err = %v, want ErrNothingToCompact", err)
+	}
+}
+
 func TestLegacyCompactionHealth_EffectiveClearsFailureCooldown(t *testing.T) {
 	_, agent, lcm, _ := newCompactionHealthTestManager(t)
 	const sessionKey = "session-effective"

@@ -33,6 +33,12 @@ const (
 // It is guarded by legacyContextManager.healthMu.
 type compactionHealthState struct {
 	lastAttempt time.Time
+	// turnID is the turn that produced the failure and ineffective counters.
+	// The verdict does not necessarily hold for the next turn: while a turn
+	// runs, compaction cannot fold its protected tail, so a prompt that stays
+	// over the threshold may be structural, but once the turn ends that tail is
+	// ordinary history and can be summarized.
+	turnID string
 	// failureCount counts consecutive automatic attempts that errored or made
 	// no progress. It drives the cooldown.
 	failureCount int
@@ -92,6 +98,43 @@ func (m *legacyContextManager) resetCompactionHealth(agent *AgentInstance, sessi
 	key := compactionHealthKey(agent, sessionKey)
 	m.healthMu.Lock()
 	delete(m.health, key)
+	m.healthMu.Unlock()
+}
+
+// turnForSession returns the turn in progress for a session, preferring the one
+// carried by ctx so a caller inside a turn cannot observe a newer one.
+func (m *legacyContextManager) turnForSession(ctx context.Context, sessionKey string) *turnState {
+	if ts := turnStateFromContext(ctx); ts != nil && ts.sessionKey == sessionKey {
+		return ts
+	}
+	return m.al.getActiveTurnState(sessionKey)
+}
+
+// noteThresholdTurn records which turn owns an automatic threshold attempt and
+// drops health produced by an earlier turn. While a turn runs, compaction cannot
+// fold its protected tail; once the turn ends that tail is ordinary history, so
+// the old verdict must not throttle a context it was never measured against. The
+// turn ID (not the active-message count) is the signal: summarizeActiveTurn
+// shrinks the turn's own record within the same turn.
+func (m *legacyContextManager) noteThresholdTurn(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+) {
+	ts := m.turnForSession(ctx, sessionKey)
+	if ts == nil || ts.turnID == "" {
+		return
+	}
+
+	key := compactionHealthKey(agent, sessionKey)
+	m.healthMu.Lock()
+	state := m.healthStateLocked(key)
+	if state.turnID != "" && state.turnID != ts.turnID {
+		state.failureCount = 0
+		state.ineffectiveCount = 0
+		state.cooldownUntil = time.Time{}
+	}
+	state.turnID = ts.turnID
 	m.healthMu.Unlock()
 }
 
@@ -288,6 +331,9 @@ func (m *legacyContextManager) Assemble(ctx context.Context, req *AssembleReques
 func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest) error {
 	agent := m.al.agentForSession(req.SessionKey)
 	if req.Reason == ContextCompressReasonThreshold {
+		// A new turn changes what compaction can summarize; drop the previous
+		// turn's verdict before consulting the throttle.
+		m.noteThresholdTurn(ctx, agent, req.SessionKey)
 		if blocked, reason := m.thresholdCompactionBlocked(agent, req.SessionKey); blocked {
 			return fmt.Errorf("%w: %s", ErrCompactionThrottled, reason)
 		}
@@ -395,9 +441,7 @@ func (m *legacyContextManager) compactSessionLocked(
 	// /compact reports its own outcome; the threshold path notifies the turn's chat.
 	var ts *turnState
 	if req.Reason == ContextCompressReasonThreshold {
-		if ts = turnStateFromContext(ctx); ts == nil {
-			ts = m.al.getActiveTurnState(req.SessionKey)
-		}
+		ts = m.turnForSession(ctx, req.SessionKey)
 	}
 	if m.summarizeSession(ctx, agent, req.SessionKey, ts, req.Instructions) {
 		return nil
