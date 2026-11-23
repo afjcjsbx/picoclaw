@@ -24,10 +24,29 @@ func lockI2CBus(bus string) func() {
 }
 
 // I2CTool provides I2C bus interaction for reading sensors and controlling peripherals.
-type I2CTool struct{}
+type I2CTool struct {
+	policy *WritePolicy
+}
 
-func NewI2CTool() *I2CTool {
-	return &I2CTool{}
+type I2COptions struct {
+	Policy *WritePolicy
+}
+
+var readOnlyI2CPolicy = NewI2CWritePolicy(false, nil, false, 0)
+
+func NewI2CTool(opts ...I2COptions) *I2CTool {
+	tool := &I2CTool{policy: readOnlyI2CPolicy}
+	if len(opts) > 0 && opts[0].Policy != nil {
+		tool.policy = opts[0].Policy
+	}
+	return tool
+}
+
+func (t *I2CTool) writePolicy() *WritePolicy {
+	if t == nil || t.policy == nil {
+		return readOnlyI2CPolicy
+	}
+	return t.policy
 }
 
 func (t *I2CTool) Name() string {

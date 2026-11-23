@@ -42,6 +42,22 @@ type SerialTool struct {
 	sessions    map[string]*serialSession
 	sessionTTL  time.Duration
 	maxSessions int
+	policy      *WritePolicy
+}
+
+type SerialOptions struct {
+	Policy      *WritePolicy
+	SessionTTL  time.Duration
+	MaxSessions int
+}
+
+var readOnlySerialPolicy = NewSerialWritePolicy(false, nil, false, 0)
+
+func (t *SerialTool) writePolicy() *WritePolicy {
+	if t == nil || t.policy == nil {
+		return readOnlySerialPolicy
+	}
+	return t.policy
 }
 
 type serialSession struct {
@@ -70,12 +86,25 @@ type serialConfig struct {
 	RS485DelayAfterMS  int
 }
 
-func NewSerialTool() *SerialTool {
-	return &SerialTool{
+func NewSerialTool(opts ...SerialOptions) *SerialTool {
+	tool := &SerialTool{
 		sessions:    make(map[string]*serialSession),
 		sessionTTL:  defaultSerialSessionTTL,
 		maxSessions: defaultSerialMaxSessions,
+		policy:      readOnlySerialPolicy,
 	}
+	if len(opts) > 0 {
+		if opts[0].Policy != nil {
+			tool.policy = opts[0].Policy
+		}
+		if opts[0].SessionTTL > 0 {
+			tool.sessionTTL = opts[0].SessionTTL
+		}
+		if opts[0].MaxSessions > 0 {
+			tool.maxSessions = opts[0].MaxSessions
+		}
+	}
+	return tool
 }
 
 func (t *SerialTool) Name() string {
@@ -220,6 +249,9 @@ func (t *SerialTool) read(ctx context.Context, args map[string]any) *ToolResult 
 	if errResult != nil {
 		return errResult
 	}
+	if result := t.writePolicy().checkTarget(cfg.Port); result != nil {
+		return result
+	}
 
 	timeout, errResult := parseSerialTimeout(args)
 	if errResult != nil {
@@ -302,6 +334,10 @@ func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult
 	if errResult != nil {
 		return errResult
 	}
+	policy := t.writePolicy()
+	if result := policy.checkTarget(cfg.Port); result != nil {
+		return result
+	}
 	timeout, errResult := parseSerialTimeout(args)
 	if errResult != nil {
 		return errResult
@@ -309,6 +345,19 @@ func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult
 	payload, errResult := parseSerialWritePayload(args)
 	if errResult != nil {
 		return errResult
+	}
+
+	if policy.DryRun {
+		result, _ := json.MarshalIndent(map[string]any{
+			"dry_run": true,
+			"action":  "write",
+			"port":    cfg.Port,
+			"payload": serialPayloadSummary(payload),
+		}, "", "  ")
+		return SilentResult(string(result))
+	}
+	if result := policy.checkWrite(cfg.Port, time.Now()); result != nil {
+		return result
 	}
 
 	session, unlock, errResult := t.lockSession(ctx, cfg)

@@ -50,6 +50,9 @@ func (t *SerialTool) ensureSessionsLocked() {
 }
 
 func (t *SerialTool) openSession(ctx context.Context, cfg serialConfig) *ToolResult {
+	if result := t.writePolicy().checkTarget(cfg.Port); result != nil {
+		return result
+	}
 	key := serialSessionKey(ctx, cfg.Port)
 
 	t.mu.Lock()

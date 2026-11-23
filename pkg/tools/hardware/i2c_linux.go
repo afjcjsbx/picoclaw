@@ -239,6 +239,9 @@ func (t *I2CTool) scan(ctx context.Context, args map[string]any) *ToolResult {
 	if errResult != nil {
 		return errResult
 	}
+	if result := t.writePolicy().checkBus(bus, bus+":"); result != nil {
+		return result
+	}
 	unlock := lockI2CBus(bus)
 	defer unlock()
 
@@ -328,6 +331,9 @@ func (t *I2CTool) readDevice(ctx context.Context, args map[string]any) *ToolResu
 	addr, errResult := parseI2CAddress(args)
 	if errResult != nil {
 		return errResult
+	}
+	if result := t.writePolicy().checkTarget(i2cTarget(bus, addr)); result != nil {
+		return result
 	}
 
 	length, err := parseI2CLength(args)
@@ -468,6 +474,28 @@ func (t *I2CTool) writeDevice(ctx context.Context, args map[string]any) *ToolRes
 		data = append(data, byte(register))
 	}
 	data = append(data, payload...)
+
+	target := i2cTarget(bus, addr)
+	policy := t.writePolicy()
+	if policy.DryRun {
+		if result := policy.checkTarget(target); result != nil {
+			return result
+		}
+		hexBytes, intBytes := formatI2CBytes(data)
+		result, _ := json.MarshalIndent(map[string]any{
+			"dry_run":  true,
+			"action":   "write",
+			"bus":      fmt.Sprintf("/dev/i2c-%s", bus),
+			"address":  fmt.Sprintf("0x%02x", addr),
+			"bytes":    intBytes,
+			"hex":      hexBytes,
+			"delay_ms": delayMS,
+		}, "", "  ")
+		return SilentResult(string(result))
+	}
+	if result := policy.checkWrite(target, time.Now()); result != nil {
+		return result
+	}
 
 	devPath := fmt.Sprintf("/dev/i2c-%s", bus)
 	fd, err := syscall.Open(devPath, syscall.O_RDWR, 0)

@@ -10,10 +10,29 @@ import (
 )
 
 // SPITool provides SPI bus interaction for high-speed peripheral communication.
-type SPITool struct{}
+type SPITool struct {
+	policy *WritePolicy
+}
 
-func NewSPITool() *SPITool {
-	return &SPITool{}
+type SPIOptions struct {
+	Policy *WritePolicy
+}
+
+var readOnlySPIPolicy = NewSPIWritePolicy(false, nil, false, 0)
+
+func NewSPITool(opts ...SPIOptions) *SPITool {
+	tool := &SPITool{policy: readOnlySPIPolicy}
+	if len(opts) > 0 && opts[0].Policy != nil {
+		tool.policy = opts[0].Policy
+	}
+	return tool
+}
+
+func (t *SPITool) writePolicy() *WritePolicy {
+	if t == nil || t.policy == nil {
+		return readOnlySPIPolicy
+	}
+	return t.policy
 }
 
 func (t *SPITool) Name() string {

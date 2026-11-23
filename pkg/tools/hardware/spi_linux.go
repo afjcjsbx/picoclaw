@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -83,6 +84,39 @@ func (t *SPITool) transfer(args map[string]any) *ToolResult {
 		return ErrorResult(err.Error())
 	}
 
+	policy := t.writePolicy()
+	if policy.DryRun {
+		if result := policy.checkTarget(dev); result != nil {
+			return result
+		}
+		drySegments := make([]map[string]any, len(segments))
+		for i, segment := range segments {
+			hexBytes := make([]string, len(segment.Data))
+			for j, b := range segment.Data {
+				hexBytes[j] = fmt.Sprintf("0x%02x", b)
+			}
+			drySegments[i] = map[string]any{
+				"data_hex":    hexBytes,
+				"read_length": segment.ReadLength,
+				"delay_usecs": segment.DelayUsecs,
+				"cs_change":   segment.CSChange,
+			}
+		}
+		result, _ := json.MarshalIndent(map[string]any{
+			"dry_run":  true,
+			"action":   "transfer",
+			"device":   fmt.Sprintf("/dev/spidev%s", dev),
+			"speed":    speed,
+			"mode":     mode,
+			"bits":     bits,
+			"segments": drySegments,
+		}, "", "  ")
+		return SilentResult(string(result))
+	}
+	if result := policy.checkWrite(dev, time.Now()); result != nil {
+		return result
+	}
+
 	devPath := fmt.Sprintf("/dev/spidev%s", dev)
 	fd, errResult := configureSPI(devPath, mode, bits, speed)
 	if errResult != nil {
@@ -147,6 +181,9 @@ func (t *SPITool) readDevice(args map[string]any) *ToolResult {
 	length, err := parseSPIReadCount(args)
 	if err != nil {
 		return ErrorResult(err.Error())
+	}
+	if result := t.writePolicy().checkTarget(dev); result != nil {
+		return result
 	}
 
 	devPath := fmt.Sprintf("/dev/spidev%s", dev)

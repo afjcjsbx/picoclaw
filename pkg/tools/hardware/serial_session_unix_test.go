@@ -64,7 +64,9 @@ func TestSerialSessionLifecycle(t *testing.T) {
 	useLooseSerialPortNormalizer(t)
 
 	pair := openPTYPair(t)
-	tool := NewSerialTool()
+	tool := NewSerialTool(SerialOptions{
+		Policy: NewSerialWritePolicy(true, nil, false, 0),
+	})
 	tool.sessionTTL = 2 * time.Second
 	t.Cleanup(tool.CloseAll)
 
@@ -140,7 +142,9 @@ func TestSerialSessionExpiresAfterIdleTTL(t *testing.T) {
 	useLooseSerialPortNormalizer(t)
 
 	pair := openPTYPair(t)
-	tool := NewSerialTool()
+	tool := NewSerialTool(SerialOptions{
+		Policy: NewSerialWritePolicy(true, nil, false, 0),
+	})
 	tool.sessionTTL = 50 * time.Millisecond
 	t.Cleanup(tool.CloseAll)
 
@@ -165,7 +169,9 @@ func TestSerialSessionConfigMismatchIsRejected(t *testing.T) {
 	useLooseSerialPortNormalizer(t)
 
 	pair := openPTYPair(t)
-	tool := NewSerialTool()
+	tool := NewSerialTool(SerialOptions{
+		Policy: NewSerialWritePolicy(true, nil, false, 0),
+	})
 	t.Cleanup(tool.CloseAll)
 
 	if result := tool.Execute(context.Background(), map[string]any{
@@ -192,7 +198,9 @@ func TestSerialClearSessionClosesOnlyOwnedSessions(t *testing.T) {
 
 	pairA := openPTYPair(t)
 	pairB := openPTYPair(t)
-	tool := NewSerialTool()
+	tool := NewSerialTool(SerialOptions{
+		Policy: NewSerialWritePolicy(true, nil, false, 0),
+	})
 	t.Cleanup(tool.CloseAll)
 
 	ctxA := toolshared.WithToolSessionContext(context.Background(), "agent-a", "session-a", nil)
