@@ -498,6 +498,18 @@
       "providerDefault": "výchozí poskytovatele",
       "maxTokensField": "Pole Max Tokens",
       "maxTokensFieldHint": "Přepsat název pole požadavku pro max tokens, např. max_completion_tokens.",
+      "maxTokens": "Maximální výstupní tokeny",
+      "maxTokensHint": "Přepíše agents.defaults.max_tokens pro tento model. Ponechte prázdné pro zdědění globální hodnoty.",
+      "temperature": "Teplota",
+      "temperatureHint": "Přepíše agents.defaults.temperature pro tento model. Ponechte prázdné pro zdědění globální hodnoty; 0 je platná hodnota.",
+      "contextWindow": "Kontextové okno",
+      "contextWindowHint": "Velikost kontextového okna v tokenech pro tento model. Ponechte prázdné pro zdědění globální hodnoty.",
+      "inherit": "zdědit",
+      "samplingError": {
+        "number": "Zadejte platné číslo.",
+        "integer": "Zadejte celé číslo.",
+        "negative": "Hodnota nesmí být záporná."
+      },
       "toolSchemaTransform": "Transformace schématu nástroje",
       "toolSchemaTransformHint": "Volitelná transformace kompatibility pro JSON schémata nástrojů. Ponechte prázdné pro nativní chování. Podporované hodnoty: simple.",
       "streamingEnabled": "Streamované výstupy",
