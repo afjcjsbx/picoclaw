@@ -463,6 +463,18 @@
       "providerDefault": "Provider 默认",
       "maxTokensField": "Max Tokens 字段名",
       "maxTokensFieldHint": "覆盖请求中 max_tokens 的字段名，例如 max_completion_tokens。",
+      "maxTokens": "最大输出 Token 数",
+      "maxTokensHint": "覆盖此模型的 agents.defaults.max_tokens。留空则继承全局值。",
+      "temperature": "温度",
+      "temperatureHint": "覆盖此模型的 agents.defaults.temperature。留空则继承全局值；0 是有效值。",
+      "contextWindow": "上下文窗口",
+      "contextWindowHint": "此模型的上下文窗口大小（Token 数）。留空则继承全局值。",
+      "inherit": "继承",
+      "samplingError": {
+        "number": "请输入有效数字。",
+        "integer": "请输入整数。",
+        "negative": "数值不能为负数。"
+      },
       "toolSchemaTransform": "工具 Schema 转换",
       "toolSchemaTransformHint": "可选的工具 JSON Schema 兼容性转换。留空表示保持原生行为。当前支持值：simple。",
       "streamingEnabled": "流式输出",

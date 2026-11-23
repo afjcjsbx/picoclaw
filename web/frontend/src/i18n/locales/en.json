@@ -498,6 +498,18 @@
       "providerDefault": "provider default",
       "maxTokensField": "Max Tokens Field",
       "maxTokensFieldHint": "Override the request field name for max tokens, e.g. max_completion_tokens.",
+      "maxTokens": "Max Output Tokens",
+      "maxTokensHint": "Overrides agents.defaults.max_tokens for this model. Leave empty to inherit the global value.",
+      "temperature": "Temperature",
+      "temperatureHint": "Overrides agents.defaults.temperature for this model. Leave empty to inherit the global value; 0 is a valid value.",
+      "contextWindow": "Context Window",
+      "contextWindowHint": "Context window size in tokens for this model. Leave empty to inherit the global value.",
+      "inherit": "inherit",
+      "samplingError": {
+        "number": "Enter a valid number.",
+        "integer": "Enter a whole number.",
+        "negative": "Value cannot be negative."
+      },
       "toolSchemaTransform": "Tool Schema Transform",
       "toolSchemaTransformHint": "Optional compatibility transform for tool JSON schemas. Leave blank for native behavior. Supported values: simple.",
       "streamingEnabled": "Streaming Output",
