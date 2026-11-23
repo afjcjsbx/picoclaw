@@ -36,6 +36,7 @@ This is the documentation home for the community-maintained fork of PicoClaw. Se
 
 - [Configuration Guide](guides/configuration.md)
 - [Tools Configuration](reference/tools_configuration.md)
+- [Browser automation](tools/browser-automation.md)
 - [CLI Reference](reference/cli.md)
 - [Gateway HTTP API](reference/gateway-api.md)
 - [Scheduled Tasks and Cron Jobs](reference/cron.md)
