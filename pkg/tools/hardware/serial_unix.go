@@ -167,6 +167,13 @@ func configureUnixSerialPort(fd int, cfg serialConfig) error {
 	tio.Cc[unix.VMIN] = 0
 	tio.Cc[unix.VTIME] = 0
 
+	switch cfg.FlowControl {
+	case "rtscts":
+		tio.Cflag |= serialCRTSCTS
+	case "xonxoff":
+		tio.Iflag |= unix.IXON | unix.IXOFF
+	}
+
 	switch cfg.DataBits {
 	case 5:
 		tio.Cflag |= unix.CS5

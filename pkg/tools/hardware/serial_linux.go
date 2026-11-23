@@ -4,6 +4,10 @@ package hardwaretools
 
 import "golang.org/x/sys/unix"
 
+// serialCRTSCTS is Linux's CRTSCTS bit. x/sys/unix does not export it on
+// Linux, but the value is the same across the supported architectures.
+const serialCRTSCTS = 0x80000000
+
 func serialGetTermios(fd int) (*unix.Termios, error) {
 	return unix.IoctlGetTermios(fd, unix.TCGETS)
 }

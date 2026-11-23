@@ -4,6 +4,8 @@ package hardwaretools
 
 import "golang.org/x/sys/unix"
 
+const serialCRTSCTS = unix.CRTSCTS
+
 func serialGetTermios(fd int) (*unix.Termios, error) {
 	return unix.IoctlGetTermios(fd, unix.TIOCGETA)
 }

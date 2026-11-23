@@ -41,11 +41,12 @@ type serialPortInfo struct {
 }
 
 type serialConfig struct {
-	Port     string
-	Baud     int
-	DataBits int
-	Parity   string
-	StopBits int
+	Port        string
+	Baud        int
+	DataBits    int
+	Parity      string
+	StopBits    int
+	FlowControl string
 }
 
 func NewSerialTool() *SerialTool {
@@ -89,6 +90,11 @@ func (t *SerialTool) Parameters() map[string]any {
 			"stop_bits": map[string]any{
 				"type":        "integer",
 				"description": "Stop bits. Supported values: 1, 2. Default: 1.",
+			},
+			"flow_control": map[string]any{
+				"type":        "string",
+				"enum":        []string{"none", "rtscts", "xonxoff"},
+				"description": "Flow control. none (default), rtscts (hardware RTS/CTS), or xonxoff (software XON/XOFF).",
 			},
 			"timeout_ms": map[string]any{
 				"type":        "integer",
@@ -223,11 +229,12 @@ func parseSerialConfig(args map[string]any) (serialConfig, *ToolResult) {
 	}
 
 	cfg := serialConfig{
-		Port:     normalizedPort,
-		Baud:     defaultSerialBaud,
-		DataBits: defaultSerialDataBits,
-		Parity:   "none",
-		StopBits: defaultSerialStopBits,
+		Port:        normalizedPort,
+		Baud:        defaultSerialBaud,
+		DataBits:    defaultSerialDataBits,
+		Parity:      "none",
+		StopBits:    defaultSerialStopBits,
+		FlowControl: "none",
 	}
 
 	if v, ok := args["baud"].(float64); ok {
@@ -260,6 +267,21 @@ func parseSerialConfig(args map[string]any) (serialConfig, *ToolResult) {
 	}
 	if cfg.StopBits != 1 && cfg.StopBits != 2 {
 		return serialConfig{}, ErrorResult("stop_bits must be 1 or 2")
+	}
+
+	if v, ok := args["flow_control"].(string); ok && strings.TrimSpace(v) != "" {
+		normalized := strings.ToLower(strings.TrimSpace(v))
+		normalized = strings.NewReplacer("/", "", "-", "", "_", "").Replace(normalized)
+		switch normalized {
+		case "none":
+			cfg.FlowControl = "none"
+		case "rtscts", "hardware":
+			cfg.FlowControl = "rtscts"
+		case "xonxoff", "software":
+			cfg.FlowControl = "xonxoff"
+		default:
+			return serialConfig{}, ErrorResult(`flow_control must be one of "none", "rtscts", or "xonxoff"`)
+		}
 	}
 
 	return cfg, nil
@@ -325,14 +347,15 @@ func formatSerialPayload(
 	extra map[string]any,
 ) string {
 	fields := map[string]any{
-		"action":     action,
-		"port":       cfg.Port,
-		"baud":       cfg.Baud,
-		"data_bits":  cfg.DataBits,
-		"parity":     cfg.Parity,
-		"stop_bits":  cfg.StopBits,
-		"timeout_ms": timeout.Milliseconds(),
-		"payload":    serialPayloadSummary(data),
+		"action":       action,
+		"port":         cfg.Port,
+		"baud":         cfg.Baud,
+		"data_bits":    cfg.DataBits,
+		"parity":       cfg.Parity,
+		"stop_bits":    cfg.StopBits,
+		"flow_control": cfg.FlowControl,
+		"timeout_ms":   timeout.Milliseconds(),
+		"payload":      serialPayloadSummary(data),
 	}
 	for key, value := range extra {
 		fields[key] = value

@@ -59,6 +59,7 @@ This sends the measurement command, waits 80 ms, and reads six bytes in one tool
 | `data_bits` | integer | no | Data bits: `5`, `6`, `7`, or `8`. Default: `8` |
 | `parity` | string | no | `none`, `even`, or `odd`. Default: `none` |
 | `stop_bits` | integer | no | `1` or `2`. Default: `1` |
+| `flow_control` | string | no | `none` (default), `rtscts` (hardware RTS/CTS), or `xonxoff` (software flow control) |
 | `timeout_ms` | integer | no | Read/write timeout in milliseconds. Default: `1000` |
 | `length` | integer | read | Number of bytes to read (`1`–`4096`) |
 | `data` | array | write | Bytes to write (`0`–`255` each); required for write unless `text` is provided |

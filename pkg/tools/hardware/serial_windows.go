@@ -35,6 +35,7 @@ const (
 	dcbFlagOutX             = 0x00000100
 	dcbFlagInX              = 0x00000200
 	dcbFlagRtsControlMask   = 0x00003000
+	dcbRtsControlHandshake  = 0x00002000
 )
 
 type dcb struct {
@@ -189,6 +190,26 @@ func configureWindowsSerialPort(handle windows.Handle, cfg serialConfig, timeout
 	state.ByteSize = byte(cfg.DataBits)
 	state.Flags = sanitizeWindowsSerialFlags(state.Flags)
 	state.Flags |= dcbFlagBinary
+
+	switch cfg.FlowControl {
+	case "rtscts":
+		state.Flags |= dcbFlagOutxCtsFlow
+		state.Flags = (state.Flags &^ dcbFlagRtsControlMask) | dcbRtsControlHandshake
+	case "xonxoff":
+		state.Flags |= dcbFlagOutX | dcbFlagInX
+		if state.XonChar == 0 {
+			state.XonChar = 0x11
+		}
+		if state.XoffChar == 0 {
+			state.XoffChar = 0x13
+		}
+		if state.XonLim == 0 {
+			state.XonLim = 128
+		}
+		if state.XoffLim == 0 {
+			state.XoffLim = 128
+		}
+	}
 
 	switch cfg.Parity {
 	case "even":

@@ -32,6 +32,50 @@ func TestParseSerialConfig(t *testing.T) {
 	if cfg.Port != wantPort || cfg.Baud != 9600 || cfg.DataBits != 7 || cfg.Parity != "even" || cfg.StopBits != 2 {
 		t.Fatalf("parseSerialConfig() = %#v", cfg)
 	}
+	if cfg.FlowControl != "none" {
+		t.Fatalf("parseSerialConfig() flow control = %q, want none", cfg.FlowControl)
+	}
+}
+
+func TestParseSerialFlowControl(t *testing.T) {
+	port := "/dev/ttyUSB0"
+	if runtime.GOOS == "windows" {
+		port = "COM3"
+	}
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "none", want: "none"},
+		{input: "rtscts", want: "rtscts"},
+		{input: "RTS/CTS", want: "rtscts"},
+		{input: "hardware", want: "rtscts"},
+		{input: "xonxoff", want: "xonxoff"},
+		{input: "XON/XOFF", want: "xonxoff"},
+		{input: "software", want: "xonxoff"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			cfg, errResult := parseSerialConfig(map[string]any{
+				"port":         port,
+				"flow_control": tt.input,
+			})
+			if errResult != nil {
+				t.Fatalf("parseSerialConfig() error = %v", errResult.ForLLM)
+			}
+			if cfg.FlowControl != tt.want {
+				t.Fatalf("flow_control = %q, want %q", cfg.FlowControl, tt.want)
+			}
+		})
+	}
+
+	if _, errResult := parseSerialConfig(map[string]any{
+		"port":         port,
+		"flow_control": "dsr",
+	}); errResult == nil {
+		t.Fatal("parseSerialConfig() accepted an invalid flow_control")
+	}
 }
 
 func TestParseSerialConfigRejectsInvalidParity(t *testing.T) {
