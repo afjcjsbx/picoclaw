@@ -340,7 +340,7 @@ func TestReloadProviderAndConfigReplacesConfiguredHooks(t *testing.T) {
 		names = append(names, hook.Name)
 	}
 	slices.Sort(names)
-	want := []string{"exec-unknown-command-approval", newHookName}
+	want := []string{"exec-unknown-command-approval", "hardware-write-approval", newHookName}
 	if !slices.Equal(names, want) {
 		t.Fatalf("mounted hook registrations = %v, want %v", names, want)
 	}

@@ -127,6 +127,16 @@ func NewAgentLoop(
 			"error": err.Error(),
 		})
 	}
+	hardwareApprovalHook := NamedHook(
+		"hardware-write-approval",
+		&hardwareWriteApprovalHook{agent: al},
+	)
+	hardwareApprovalHook.Priority = 100
+	if err := al.MountHook(hardwareApprovalHook); err != nil {
+		logger.WarnCF("agent", "Failed to mount hardware approval hook", map[string]any{
+			"error": err.Error(),
+		})
+	}
 	al.contextManager = al.resolveContextManager()
 
 	// Register shared tools to all agents (now that al is created)

@@ -68,7 +68,8 @@ type AgentLoop struct {
 	voiceModes     sync.Map
 	pendingStops   sync.Map
 	// pendingExecApprovals maps approval tokens to the user waiting for an
-	// answer when exec cannot classify a command.
+	// answer when exec cannot classify a command or a hardware write needs
+	// explicit approval.
 	pendingExecApprovals sync.Map
 	mu                   sync.RWMutex
 

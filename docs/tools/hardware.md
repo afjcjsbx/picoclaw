@@ -46,7 +46,7 @@ Enabling a hardware tool does **not** enable writes. Reads, discovery, and `dete
 | `tools.hardware.serial_session_ttl_seconds` | `60` | Idle timeout for persistent serial sessions |
 | `tools.hardware.serial_max_sessions` | `2` | Maximum persistent serial sessions per agent conversation; the oldest is evicted |
 
-The `confirm: true` argument is still accepted for compatibility, but it is not a security boundary: the model can set it itself. The real gate is `allow_write` plus the approval hook. If you deliberately run unattended, set `require_approval: false` only after constraining `allow` to the exact devices the automation needs; rate limiting remains active.
+The `confirm: true` argument is still accepted for compatibility, but it is not a security boundary: the model can set it itself. The real gate is `allow_write` plus the approval hook. Approval uses the same `approve`/`deny` reply transport as the exec unknown-command gate; the Web UI renders it as an actionable card. A CLI run, a cron job, or any sender without an interactive channel is denied. If you deliberately run unattended, set `require_approval: false` only after constraining `allow` to the exact devices the automation needs; rate limiting remains active.
 
 Environment overrides use `PICOCLAW_TOOLS_HARDWARE_` and the tool prefix, for example `PICOCLAW_TOOLS_HARDWARE_REQUIRE_APPROVAL=false`, `PICOCLAW_TOOLS_HARDWARE_MAX_WRITES_PER_MINUTE=5`, `PICOCLAW_TOOLS_I2C_ALLOW_WRITE=true`, and `PICOCLAW_TOOLS_I2C_ALLOW=1:0x76,1:0x38`.
 
