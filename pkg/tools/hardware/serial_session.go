@@ -186,9 +186,18 @@ func (t *SerialTool) lockSession(
 			cfg.Port,
 		))
 	}
-	// Lock order is t.mu then session.mu. The expiry callback uses the same
-	// order, so it cannot close the handle while this operation is running.
+	t.mu.Unlock()
+
+	// Do not hold t.mu while waiting for a slow read/write: close, /clear, and
+	// session listing must still make progress. Re-check the map after taking
+	// the session lock so a concurrent close cannot leave us using a dead fd.
 	session.mu.Lock()
+	t.mu.Lock()
+	if t.sessions[key] != session {
+		t.mu.Unlock()
+		session.mu.Unlock()
+		return nil, nil, nil
+	}
 	session.lastUsed = time.Now()
 	if session.timer != nil {
 		session.timer.Reset(t.effectiveSessionTTL())
