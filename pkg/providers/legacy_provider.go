@@ -145,6 +145,25 @@ func modelConfigTemplateScore(modelCfg *config.ModelConfig, defaultProvider stri
 	return score
 }
 
+// DefaultModelRef returns what Agents.Defaults.ModelName should hold once
+// CreateProvider has returned modelID. A name that matches a model_list entry
+// is an alias and must survive: replacing it with the upstream model ID hides
+// the entry from the agent, which then loses its per-model settings (streaming,
+// thinking level) and resolves the model under the default provider. Raw
+// references that name no entry are replaced by modelID, as before.
+func DefaultModelRef(cfg *config.Config, modelID string) string {
+	name := cfg.Agents.Defaults.GetModelName()
+	if modelID == "" {
+		return name
+	}
+	for _, m := range cfg.ModelList {
+		if m != nil && name != "" && m.ModelName == name {
+			return name
+		}
+	}
+	return modelID
+}
+
 // CreateProvider creates a provider based on the configuration.
 // It uses the model_list configuration (new format) to create providers.
 // The old providers config is automatically converted to model_list during config loading.
