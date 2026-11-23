@@ -19,7 +19,7 @@ import {
 import { ConfigChangeNotice } from "@/components/config-change-notice"
 import {
   AgentDefaultsSection,
-  AuxiliaryModelsSection,
+  AuxiliaryModelFields,
   CronSection,
   DevicesSection,
   EvolutionSection,
@@ -592,16 +592,16 @@ export function ConfigPage() {
                 form={form}
                 onFieldChange={updateField}
                 onTurnProfileFieldChange={handleTurnProfileFieldChange}
-              />
-
-              <AuxiliaryModelsSection
-                form={form}
-                onFieldChange={updateField}
-                modelNames={auxiliaryModelNames}
-                primaryModelName={primaryModelName}
-                modelsLoading={isModelsLoading}
-                modelsError={Boolean(modelsError)}
-              />
+              >
+                <AuxiliaryModelFields
+                  form={form}
+                  onFieldChange={updateField}
+                  modelNames={auxiliaryModelNames}
+                  primaryModelName={primaryModelName}
+                  modelsLoading={isModelsLoading}
+                  modelsError={Boolean(modelsError)}
+                />
+              </AgentDefaultsSection>
 
               <RuntimeSection form={form} onFieldChange={updateField} />
 

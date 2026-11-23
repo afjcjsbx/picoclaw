@@ -69,12 +69,14 @@ interface AgentDefaultsSectionProps {
     key: K,
     value: TurnProfileForm[K],
   ) => void
+  children?: ReactNode
 }
 
 export function AgentDefaultsSection({
   form,
   onFieldChange,
   onTurnProfileFieldChange,
+  children,
 }: AgentDefaultsSectionProps) {
   const { t } = useTranslation()
   const renderModeSelect = ({
@@ -345,13 +347,15 @@ export function AgentDefaultsSection({
           </div>
         </div>
       </Field>
+
+      {children}
     </ConfigSectionCard>
   )
 }
 
 const AUXILIARY_INHERIT_VALUE = "__inherit__"
 
-interface AuxiliaryModelsSectionProps {
+interface AuxiliaryModelFieldsProps {
   form: CoreConfigForm
   onFieldChange: UpdateCoreField
   modelNames: string[]
@@ -360,14 +364,14 @@ interface AuxiliaryModelsSectionProps {
   modelsError: boolean
 }
 
-export function AuxiliaryModelsSection({
+export function AuxiliaryModelFields({
   form,
   onFieldChange,
   modelNames,
   primaryModelName,
   modelsLoading,
   modelsError,
-}: AuxiliaryModelsSectionProps) {
+}: AuxiliaryModelFieldsProps) {
   const { t } = useTranslation()
   const disabled = modelsLoading
 
@@ -392,10 +396,15 @@ export function AuxiliaryModelsSection({
   }
 
   return (
-    <ConfigSectionCard
-      title={t("pages.config.sections.auxiliary")}
-      description={t("pages.config.auxiliary_description")}
-    >
+    <>
+      <div className="space-y-1 py-4">
+        <div className="text-sm font-medium">
+          {t("pages.config.sections.auxiliary")}
+        </div>
+        <p className="text-muted-foreground text-xs leading-relaxed">
+          {t("pages.config.auxiliary_description")}
+        </p>
+      </div>
       <Field
         label={t("pages.config.auxiliary_compaction")}
         hint={hintFor("pages.config.auxiliary_compaction_hint")}
@@ -465,7 +474,7 @@ export function AuxiliaryModelsSection({
           </SelectContent>
         </Select>
       </Field>
-    </ConfigSectionCard>
+    </>
   )
 }
 
