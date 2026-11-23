@@ -98,6 +98,7 @@ func (t *SerialTool) openSession(ctx context.Context, cfg serialConfig) *ToolRes
 		"parity":       cfg.Parity,
 		"stop_bits":    cfg.StopBits,
 		"flow_control": cfg.FlowControl,
+		"rs485":        cfg.RS485,
 		"ttl_seconds":  t.effectiveSessionTTL().Seconds(),
 		"max_sessions": t.effectiveMaxSessions(),
 		"replaced":     previous != nil,
@@ -144,6 +145,7 @@ func (t *SerialTool) listSessions(ctx context.Context) *ToolResult {
 			"parity":       session.cfg.Parity,
 			"stop_bits":    session.cfg.StopBits,
 			"flow_control": session.cfg.FlowControl,
+			"rs485":        session.cfg.RS485,
 			"idle_ms":      now.Sub(session.lastUsed).Milliseconds(),
 		})
 	}

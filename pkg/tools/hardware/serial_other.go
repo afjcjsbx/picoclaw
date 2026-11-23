@@ -16,6 +16,10 @@ func validatePlatformSerialBaud(baud int) error {
 	return fmt.Errorf("serial is not supported on this platform")
 }
 
+func validatePlatformSerialConfig(cfg serialConfig) error {
+	return nil
+}
+
 type serialHandle = struct{}
 
 func serialOpenHandle(cfg serialConfig, timeout time.Duration) (serialHandle, error) {

@@ -277,7 +277,10 @@ func configureUnixSerialPort(fd int, cfg serialConfig) error {
 	if err := serialSetTermios(fd, tio); err != nil {
 		return err
 	}
-	return serialApplyBaud(fd, cfg.Baud)
+	if err := serialApplyBaud(fd, cfg.Baud); err != nil {
+		return err
+	}
+	return serialSetRS485(fd, cfg)
 }
 
 func serialBaudToUnix(baud int) (uint32, error) {

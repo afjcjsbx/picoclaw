@@ -126,6 +126,51 @@ func TestParseSerialConfigAcceptsHighBaud(t *testing.T) {
 	}
 }
 
+func TestParseSerialRS485(t *testing.T) {
+	port := "/dev/ttyUSB0"
+	if runtime.GOOS == "windows" {
+		port = "COM3"
+	}
+
+	if _, errResult := parseSerialConfig(map[string]any{
+		"port":                  port,
+		"rs485":                 true,
+		"rs485_delay_before_ms": float64(10),
+		"rs485_delay_after_ms":  float64(20),
+	}); errResult == nil && runtime.GOOS != "linux" {
+		t.Fatal("parseSerialConfig() accepted RS-485 on a non-Linux platform")
+	}
+
+	if _, errResult := parseSerialConfig(map[string]any{
+		"port":                  port,
+		"rs485_delay_before_ms": float64(10),
+	}); errResult == nil {
+		t.Fatal("parseSerialConfig() accepted an RS-485 delay without rs485=true")
+	}
+
+	if runtime.GOOS == "linux" {
+		cfg, errResult := parseSerialConfig(map[string]any{
+			"port":                  port,
+			"rs485":                 true,
+			"rs485_delay_before_ms": float64(10),
+			"rs485_delay_after_ms":  float64(20),
+		})
+		if errResult != nil {
+			t.Fatalf("parseSerialConfig() error = %v", errResult.ForLLM)
+		}
+		if !cfg.RS485 || cfg.RS485DelayBeforeMS != 10 || cfg.RS485DelayAfterMS != 20 {
+			t.Fatalf("parseSerialConfig() = %#v", cfg)
+		}
+		if _, errResult := parseSerialConfig(map[string]any{
+			"port":                  port,
+			"rs485":                 true,
+			"rs485_delay_before_ms": float64(1001),
+		}); errResult == nil {
+			t.Fatal("parseSerialConfig() accepted an RS-485 delay above 1000 ms")
+		}
+	}
+}
+
 func TestDecodeSerialDelimiter(t *testing.T) {
 	t.Parallel()
 

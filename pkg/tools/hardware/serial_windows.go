@@ -5,6 +5,7 @@ package hardwaretools
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -66,6 +67,13 @@ type commTimeouts struct {
 }
 
 func validatePlatformSerialBaud(baud int) error {
+	return nil
+}
+
+func validatePlatformSerialConfig(cfg serialConfig) error {
+	if cfg.RS485 {
+		return fmt.Errorf("RS-485 mode is only supported on Linux")
+	}
 	return nil
 }
 

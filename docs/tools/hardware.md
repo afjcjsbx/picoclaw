@@ -60,6 +60,9 @@ This sends the measurement command, waits 80 ms, and reads six bytes in one tool
 | `parity` | string | no | `none`, `even`, or `odd`. Default: `none` |
 | `stop_bits` | integer | no | `1` or `2`. Default: `1` |
 | `flow_control` | string | no | `none` (default), `rtscts` (hardware RTS/CTS), or `xonxoff` (software flow control) |
+| `rs485` | bool | no | Enable Linux RS-485 mode through `TIOCSRS485`. Unsupported on macOS and Windows |
+| `rs485_delay_before_ms` | integer | no | RTS delay before sending (`0`–`1000` ms). Requires `rs485: true` |
+| `rs485_delay_after_ms` | integer | no | RTS delay after sending (`0`–`1000` ms). Requires `rs485: true` |
 | `timeout_ms` | integer | no | Read/write timeout in milliseconds. Default: `1000` |
 | `length` | integer | read | Number of bytes for a plain read (`1`–`4096`). Required unless `read_until` or `read_available` is set; in those modes it caps the buffer (default `4096`) |
 | `read_until` | string | no | Read until a delimiter, included in the payload. Accepts `\n`, `\r\n`, `\t`, `\\`, and `\xNN` escapes. Cannot be combined with `read_available` |
@@ -90,5 +93,7 @@ serial close   port="/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A12345678-if00-p
 ```
 
 Sessions are scoped to the agent conversation and close automatically after 60 seconds of inactivity, on `/clear`, when the agent stops, or when the oldest session is evicted beyond the two-session limit. The `open` settings must match later `read`/`write` calls; close and reopen to change baud or framing.
+
+RS-485 direction control is Linux-only and driver-dependent. `rs485: true` asks the kernel to toggle RTS around each write; USB-RS485 adapters that switch direction in hardware usually work without it, while native UARTs may additionally need the right RTS polarity in the device tree. `rs485_delay_*` inserts the kernel's before/after-send delays.
 
 All three tools return structured results (bus lists, scan tables, hex dumps) that the model can reason about directly. Write-style actions always require the explicit `confirm: true` argument; there is no configuration to disable that guard.

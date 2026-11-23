@@ -59,12 +59,15 @@ type serialPortInfo struct {
 }
 
 type serialConfig struct {
-	Port        string
-	Baud        int
-	DataBits    int
-	Parity      string
-	StopBits    int
-	FlowControl string
+	Port               string
+	Baud               int
+	DataBits           int
+	Parity             string
+	StopBits           int
+	FlowControl        string
+	RS485              bool
+	RS485DelayBeforeMS int
+	RS485DelayAfterMS  int
 }
 
 func NewSerialTool() *SerialTool {
@@ -117,6 +120,18 @@ func (t *SerialTool) Parameters() map[string]any {
 				"type":        "string",
 				"enum":        []string{"none", "rtscts", "xonxoff"},
 				"description": "Flow control. none (default), rtscts (hardware RTS/CTS), or xonxoff (software XON/XOFF).",
+			},
+			"rs485": map[string]any{
+				"type":        "boolean",
+				"description": "Enable Linux RS-485 mode through TIOCSRS485. Unsupported on macOS and Windows.",
+			},
+			"rs485_delay_before_ms": map[string]any{
+				"type":        "integer",
+				"description": "RS-485 RTS delay before sending (0-1000 ms). Requires rs485=true. Default: 0.",
+			},
+			"rs485_delay_after_ms": map[string]any{
+				"type":        "integer",
+				"description": "RS-485 RTS delay after sending (0-1000 ms). Requires rs485=true. Default: 0.",
 			},
 			"timeout_ms": map[string]any{
 				"type":        "integer",
@@ -393,6 +408,36 @@ func parseSerialConfig(args map[string]any) (serialConfig, *ToolResult) {
 		}
 	}
 
+	if v, ok := args["rs485"].(bool); ok {
+		cfg.RS485 = v
+	}
+	if v, ok := args["rs485_delay_before_ms"]; ok && v != nil {
+		value, err := parseI2CScalar(v, "rs485_delay_before_ms")
+		if err != nil {
+			return serialConfig{}, ErrorResult(err.Error())
+		}
+		if value < 0 || value > 1000 {
+			return serialConfig{}, ErrorResult("rs485_delay_before_ms must be between 0 and 1000")
+		}
+		cfg.RS485DelayBeforeMS = value
+	}
+	if v, ok := args["rs485_delay_after_ms"]; ok && v != nil {
+		value, err := parseI2CScalar(v, "rs485_delay_after_ms")
+		if err != nil {
+			return serialConfig{}, ErrorResult(err.Error())
+		}
+		if value < 0 || value > 1000 {
+			return serialConfig{}, ErrorResult("rs485_delay_after_ms must be between 0 and 1000")
+		}
+		cfg.RS485DelayAfterMS = value
+	}
+	if !cfg.RS485 && (cfg.RS485DelayBeforeMS != 0 || cfg.RS485DelayAfterMS != 0) {
+		return serialConfig{}, ErrorResult("rs485_delay_* requires rs485: true")
+	}
+	if err := validatePlatformSerialConfig(cfg); err != nil {
+		return serialConfig{}, ErrorResult(err.Error())
+	}
+
 	return cfg, nil
 }
 
@@ -554,6 +599,11 @@ func formatSerialPayload(
 		"flow_control": cfg.FlowControl,
 		"timeout_ms":   timeout.Milliseconds(),
 		"payload":      serialPayloadSummary(data),
+	}
+	if cfg.RS485 {
+		fields["rs485"] = true
+		fields["rs485_delay_before_ms"] = cfg.RS485DelayBeforeMS
+		fields["rs485_delay_after_ms"] = cfg.RS485DelayAfterMS
 	}
 	for key, value := range extra {
 		fields[key] = value

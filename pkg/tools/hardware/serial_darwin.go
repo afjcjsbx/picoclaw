@@ -55,6 +55,17 @@ func validatePlatformSerialBaud(baud int) error {
 	return nil
 }
 
+func validatePlatformSerialConfig(cfg serialConfig) error {
+	if cfg.RS485 {
+		return fmt.Errorf("RS-485 mode is only supported on Linux")
+	}
+	return nil
+}
+
+func serialSetRS485(fd int, cfg serialConfig) error {
+	return nil
+}
+
 func serialSetTermios(fd int, tio *unix.Termios) error {
 	return unix.IoctlSetTermios(fd, unix.TIOCSETA, tio)
 }

@@ -4,6 +4,7 @@ package hardwaretools
 
 import (
 	"fmt"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -66,6 +67,42 @@ func linuxSerialBaud(baud int) (uint32, bool) {
 }
 
 func serialApplyBaud(fd int, baud int) error {
+	return nil
+}
+
+// serialRS485 matches the Linux struct serial_rs485. The padding keeps the
+// struct size stable across kernel versions.
+type serialRS485 struct {
+	flags              uint32
+	delayRTSBeforeSend uint32
+	delayRTSAfterSend  uint32
+	padding            [5]uint32
+}
+
+const serRS485Enabled = 1 << 0
+
+func serialSetRS485(fd int, cfg serialConfig) error {
+	if !cfg.RS485 {
+		return nil
+	}
+	value := serialRS485{
+		flags:              serRS485Enabled,
+		delayRTSBeforeSend: uint32(cfg.RS485DelayBeforeMS),
+		delayRTSAfterSend:  uint32(cfg.RS485DelayAfterMS),
+	}
+	_, _, errno := unix.Syscall(
+		unix.SYS_IOCTL,
+		uintptr(fd),
+		uintptr(unix.TIOCSRS485),
+		uintptr(unsafe.Pointer(&value)),
+	)
+	if errno != 0 {
+		return fmt.Errorf("TIOCSRS485 failed: %w", errno)
+	}
+	return nil
+}
+
+func validatePlatformSerialConfig(cfg serialConfig) error {
 	return nil
 }
 
