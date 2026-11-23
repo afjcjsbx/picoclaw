@@ -684,6 +684,7 @@ type AgentDefaults struct {
 	ModelFallbacks            []string            `json:"model_fallbacks,omitempty"`
 	ImageModel                string              `json:"image_model,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string            `json:"image_model_fallbacks,omitempty"`
+	Auxiliary                 AuxiliaryModels     `json:"auxiliary,omitzero"`
 	MaxTokens                 int                 `json:"max_tokens"                           env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
 	ContextWindow             int                 `json:"context_window,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64            `json:"temperature,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
@@ -718,6 +719,27 @@ type AgentDefaults struct {
 	// serialized so an explicit false or empty list survives save and reload.
 	LLMRetryOnEmptyContent  bool     `json:"llm_retry_on_empty_content"  env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_EMPTY_CONTENT"`
 	LLMRetryOnFinishReasons []string `json:"llm_retry_on_finish_reasons" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_FINISH_REASONS"`
+}
+
+// AuxiliaryModels sends background LLM work to a dedicated model_list entry
+// instead of the agent's own model. Each slot holds a model_name; empty keeps
+// the agent's own model. The entry's own settings (api_base, request_timeout,
+// extra_body, thinking_level, max_tokens, ...) apply to that work.
+type AuxiliaryModels struct {
+	// Compaction summarizes old conversation history when the context is compacted.
+	Compaction string `json:"compaction,omitempty"`
+	// Vision handles turns that carry images. It takes precedence over
+	// agents.defaults.image_model, which keeps working when this is empty.
+	Vision string `json:"vision,omitempty"`
+}
+
+// GetImageModel returns the model that handles image turns: auxiliary.vision,
+// else the legacy image_model.
+func (d *AgentDefaults) GetImageModel() string {
+	if v := strings.TrimSpace(d.Auxiliary.Vision); v != "" {
+		return v
+	}
+	return d.ImageModel
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
@@ -1138,6 +1160,13 @@ type ModelConfig struct {
 	ExtraBody           map[string]any       `json:"extra_body,omitempty"`            // Additional fields to inject into request body
 	CustomHeaders       map[string]string    `json:"custom_headers,omitempty"`        // Additional headers to inject into every HTTP request
 
+	// MaxTokens, Temperature and ContextWindow override the matching
+	// agents.defaults values for requests sent to this model entry. Zero (or
+	// nil for Temperature, where 0 is a valid value) inherits the global default.
+	MaxTokens     int      `json:"max_tokens,omitempty"`     // Max output tokens per request
+	Temperature   *float64 `json:"temperature,omitempty"`    // Sampling temperature
+	ContextWindow int      `json:"context_window,omitempty"` // Context window size in tokens
+
 	APIKeys SecureStrings `json:"api_keys,omitzero" yaml:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
 
 	// Enabled indicates whether this model entry is active. When omitted in
@@ -1202,6 +1231,15 @@ func (c *ModelConfig) Validate() error {
 	}
 	if _, err := providercommon.NormalizeProviderSort(c.ProviderSort); err != nil {
 		return err
+	}
+	if c.MaxTokens < 0 {
+		return fmt.Errorf("max_tokens must not be negative")
+	}
+	if c.ContextWindow < 0 {
+		return fmt.Errorf("context_window must not be negative")
+	}
+	if c.Temperature != nil && *c.Temperature < 0 {
+		return fmt.Errorf("temperature must not be negative")
 	}
 
 	// Reject whitespace in model identifier
@@ -2419,6 +2457,9 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 				MaxTokensField:      m.MaxTokensField,
 				RequestTimeout:      m.RequestTimeout,
 				ProviderSort:        m.ProviderSort,
+				MaxTokens:           m.MaxTokens,
+				Temperature:         m.Temperature,
+				ContextWindow:       m.ContextWindow,
 				ThinkingLevel:       m.ThinkingLevel,
 				ToolSchemaTransform: m.ToolSchemaTransform,
 				Streaming:           m.Streaming,
@@ -2448,6 +2489,9 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 			MaxTokensField:      m.MaxTokensField,
 			RequestTimeout:      m.RequestTimeout,
 			ProviderSort:        m.ProviderSort,
+			MaxTokens:           m.MaxTokens,
+			Temperature:         m.Temperature,
+			ContextWindow:       m.ContextWindow,
 			ThinkingLevel:       m.ThinkingLevel,
 			ToolSchemaTransform: m.ToolSchemaTransform,
 			Streaming:           m.Streaming,

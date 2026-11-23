@@ -70,9 +70,10 @@ func (p *Pipeline) CallLLM(
 		return ControlBreak, err
 	}
 
+	maxTokens, temperature := ts.agent.llmSampling(p.Cfg, exec.activeModelConfig)
 	exec.llmOpts = map[string]any{
-		"max_tokens":       ts.agent.MaxTokens,
-		"temperature":      ts.agent.Temperature,
+		"max_tokens":       maxTokens,
+		"temperature":      temperature,
 		"prompt_cache_key": ts.agent.ID,
 		"session_key":      ts.sessionKey,
 	}
@@ -161,8 +162,8 @@ func (p *Pipeline) CallLLM(
 			Model:         exec.llmModel,
 			MessagesCount: len(exec.callMessages),
 			ToolsCount:    len(exec.providerToolDefs),
-			MaxTokens:     ts.agent.MaxTokens,
-			Temperature:   ts.agent.Temperature,
+			MaxTokens:     maxTokens,
+			Temperature:   temperature,
 		},
 	)
 
@@ -176,8 +177,8 @@ func (p *Pipeline) CallLLM(
 				"model":             exec.llmModel,
 				"messages_count":    len(exec.callMessages),
 				"tools_count":       len(exec.providerToolDefs),
-				"max_tokens":        ts.agent.MaxTokens,
-				"temperature":       ts.agent.Temperature,
+				"max_tokens":        maxTokens,
+				"temperature":       temperature,
 				"system_prompt_len": len(exec.callMessages[0].Content),
 			})
 		logger.DebugCF("agent", "Full LLM request",
@@ -283,6 +284,7 @@ func (p *Pipeline) CallLLM(
 				candidate.Model,
 				p.Cfg.Agents.Defaults.Provider,
 			)
+			p.applyCandidateSampling(ts.agent, exec.activeModelConfig, candidateCfg, callOpts)
 			candidateThinking := thinkingSettingsFromModelConfig(candidateCfg)
 			applyThinkingOption(callOpts, candidateProvider, candidateThinking, true, ts.agent.ID)
 			exec.suppressReasoning = shouldSuppressReasoningFor(candidateThinking)

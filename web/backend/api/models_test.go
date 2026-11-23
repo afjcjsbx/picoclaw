@@ -4301,3 +4301,58 @@ func TestHandleFetchModels_ModelIndexProviderMismatchRejectsKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
 }
+
+func TestHandleUpdateModel_SamplingFieldsPreserveAndClear(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	temp := 0.2
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName:     "editable",
+		Model:         "openai/gpt-4o-mini",
+		APIKeys:       config.SimpleSecureStrings("sk-existing"),
+		MaxTokens:     2048,
+		Temperature:   &temp,
+		ContextWindow: 32000,
+	}}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	put := func(t *testing.T, body string) *config.ModelConfig {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		after, loadErr := config.LoadConfig(configPath)
+		if loadErr != nil {
+			t.Fatalf("LoadConfig() error = %v", loadErr)
+		}
+		return after.ModelList[0]
+	}
+
+	// A client that predates these fields must not wipe them.
+	got := put(t, `{"model_name":"editable","model":"openai/gpt-4o-mini"}`)
+	if got.MaxTokens != 2048 || got.ContextWindow != 32000 || got.Temperature == nil || *got.Temperature != 0.2 {
+		t.Fatalf("sampling fields not preserved: %+v", got)
+	}
+
+	// Explicit values replace; null/0 clear.
+	got = put(t, `{"model_name":"editable","model":"openai/gpt-4o-mini",`+
+		`"max_tokens":0,"temperature":null,"context_window":0}`)
+	if got.MaxTokens != 0 || got.ContextWindow != 0 || got.Temperature != nil {
+		t.Fatalf("sampling fields not cleared: %+v", got)
+	}
+}
