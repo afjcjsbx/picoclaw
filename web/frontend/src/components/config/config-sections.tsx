@@ -349,6 +349,126 @@ export function AgentDefaultsSection({
   )
 }
 
+const AUXILIARY_INHERIT_VALUE = "__inherit__"
+
+interface AuxiliaryModelsSectionProps {
+  form: CoreConfigForm
+  onFieldChange: UpdateCoreField
+  modelNames: string[]
+  primaryModelName: string
+  modelsLoading: boolean
+  modelsError: boolean
+}
+
+export function AuxiliaryModelsSection({
+  form,
+  onFieldChange,
+  modelNames,
+  primaryModelName,
+  modelsLoading,
+  modelsError,
+}: AuxiliaryModelsSectionProps) {
+  const { t } = useTranslation()
+  const disabled = modelsLoading
+
+  const slotOptions = (value: string) =>
+    value && !modelNames.includes(value) ? [value, ...modelNames] : modelNames
+
+  const slotError = (value: string) => {
+    if (!value.trim() || modelsLoading || modelsError) return undefined
+    if (primaryModelName && value === primaryModelName) {
+      return t("pages.config.auxiliary_primary_warning")
+    }
+    if (!modelNames.includes(value)) {
+      return t("pages.config.auxiliary_missing_warning")
+    }
+    return undefined
+  }
+
+  const hintFor = (key: string) => {
+    if (modelsError) return t("pages.config.auxiliary_models_load_error")
+    if (modelsLoading) return t("pages.config.auxiliary_models_loading")
+    return t(key)
+  }
+
+  return (
+    <ConfigSectionCard
+      title={t("pages.config.sections.auxiliary")}
+      description={t("pages.config.auxiliary_description")}
+    >
+      <Field
+        label={t("pages.config.auxiliary_compaction")}
+        hint={hintFor("pages.config.auxiliary_compaction_hint")}
+        error={slotError(form.auxiliaryCompaction)}
+        layout="setting-row"
+      >
+        <Select
+          value={form.auxiliaryCompaction || AUXILIARY_INHERIT_VALUE}
+          onValueChange={(next) =>
+            onFieldChange(
+              "auxiliaryCompaction",
+              next === AUXILIARY_INHERIT_VALUE ? "" : next,
+            )
+          }
+          disabled={disabled}
+        >
+          <SelectTrigger
+            className="h-9"
+            aria-label={t("pages.config.auxiliary_compaction")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUXILIARY_INHERIT_VALUE}>
+              {t("pages.config.auxiliary_inherit")}
+            </SelectItem>
+            {slotOptions(form.auxiliaryCompaction).map((name) => (
+              <SelectItem key={name} value={name}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+
+      <Field
+        label={t("pages.config.auxiliary_vision")}
+        hint={hintFor("pages.config.auxiliary_vision_hint")}
+        error={slotError(form.auxiliaryVision)}
+        layout="setting-row"
+      >
+        <Select
+          value={form.auxiliaryVision || AUXILIARY_INHERIT_VALUE}
+          onValueChange={(next) =>
+            onFieldChange(
+              "auxiliaryVision",
+              next === AUXILIARY_INHERIT_VALUE ? "" : next,
+            )
+          }
+          disabled={disabled}
+        >
+          <SelectTrigger
+            className="h-9"
+            aria-label={t("pages.config.auxiliary_vision")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUXILIARY_INHERIT_VALUE}>
+              {t("pages.config.auxiliary_inherit")}
+            </SelectItem>
+            {slotOptions(form.auxiliaryVision).map((name) => (
+              <SelectItem key={name} value={name}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+    </ConfigSectionCard>
+  )
+}
+
 interface ExecSectionProps {
   form: CoreConfigForm
   onFieldChange: UpdateCoreField
