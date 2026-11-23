@@ -44,7 +44,7 @@ channel_list:
       tokens: ["a-long-random-token"]
 ```
 
-Each token is a separate **principal**: it can only see, list, cancel and subscribe to its own tasks, and its conversations are isolated from other tokens.
+Each token is a separate **principal**: it can only see, list, cancel and subscribe to its own tasks, and its conversations are isolated from other tokens. Tokens do **not** isolate the agent itself: see [Shared workspace](#shared-workspace).
 
 ### Settings
 
@@ -72,6 +72,10 @@ Each token is a separate **principal**: it can only see, list, cancel and subscr
 - **One task per context**: a second message for a `contextId` that still has a running task is rejected (`-32010`). `contextId` maps to a PicoClaw session (`1-128` chars of `[A-Za-z0-9._-]`).
 
 > **Sessions**: a `contextId` becomes the chat of a PicoClaw session (`a2a:<principal>:<contextId>`), so conversations are isolated as long as `session.dimensions` includes `chat` or `sender` (the default is `["chat"]`). With `dm_scope: "global"` every A2A context shares one session, like any other channel.
+
+### Shared workspace
+
+Tokens separate tasks and sessions, not the agent. Every principal talks to the same agent, so they share its workspace, long-term memory (`memory/`, `USER.md`) and tools. If one client asks the agent to "remember" something, the agent may write it to `memory/MEMORY.md`, and any other client or token can then get it back by asking. Issue tokens only to callers you trust with that workspace; for untrusted callers run a separate PicoClaw instance (own workspace) per caller.
 
 ### Limits (by design)
 
