@@ -3,43 +3,9 @@ package hardwaretools
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"syscall"
 	"unsafe"
 )
-
-// Helper functions for I2C operations (used by platform-specific implementations)
-
-// isValidBusID checks that a bus identifier is a simple number (prevents path injection)
-func isValidBusID(id string) bool {
-	matched, _ := regexp.MatchString(`^\d+$`, id)
-	return matched
-}
-
-// parseI2CAddress extracts and validates an I2C address from args
-func parseI2CAddress(args map[string]any) (int, *ToolResult) {
-	addrFloat, ok := args["address"].(float64)
-	if !ok {
-		return 0, ErrorResult("address is required (e.g. 0x38 for AHT20)")
-	}
-	addr := int(addrFloat)
-	if addr < 0x03 || addr > 0x77 {
-		return 0, ErrorResult("address must be in valid 7-bit range (0x03-0x77)")
-	}
-	return addr, nil
-}
-
-// parseI2CBus extracts and validates an I2C bus from args
-func parseI2CBus(args map[string]any) (string, *ToolResult) {
-	bus, ok := args["bus"].(string)
-	if !ok || bus == "" {
-		return "", ErrorResult("bus is required (e.g. \"1\" for /dev/i2c-1)")
-	}
-	if !isValidBusID(bus) {
-		return "", ErrorResult("invalid bus identifier: must be a number (e.g. \"1\")")
-	}
-	return bus, nil
-}
 
 // I2C ioctl constants from Linux kernel headers (<linux/i2c-dev.h>, <linux/i2c.h>)
 const (
@@ -189,12 +155,13 @@ func (t *I2CTool) readDevice(args map[string]any) *ToolResult {
 		return errResult
 	}
 
-	length := 1
-	if l, ok := args["length"].(float64); ok {
-		length = int(l)
+	length, err := parseI2CLength(args)
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
-	if length < 1 || length > 256 {
-		return ErrorResult("length must be between 1 and 256")
+	register, hasRegister, err := parseI2CByteArg(args, "register")
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
 
 	devPath := fmt.Sprintf("/dev/i2c-%s", bus)
@@ -210,15 +177,11 @@ func (t *I2CTool) readDevice(args map[string]any) *ToolResult {
 		return ErrorResult(fmt.Sprintf("failed to set I2C address 0x%02x: %v", addr, errno))
 	}
 
-	// If register is specified, write it first
-	if regFloat, ok := args["register"].(float64); ok {
-		reg := int(regFloat)
-		if reg < 0 || reg > 255 {
-			return ErrorResult("register must be between 0x00 and 0xFF")
-		}
-		_, err = syscall.Write(fd, []byte{byte(reg)})
+	// If register is specified, write it first.
+	if hasRegister {
+		_, err = syscall.Write(fd, []byte{byte(register)})
 		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to write register 0x%02x: %v", reg, err))
+			return ErrorResult(fmt.Sprintf("failed to write register 0x%02x: %v", register, err))
 		}
 	}
 
@@ -266,36 +229,28 @@ func (t *I2CTool) writeDevice(args map[string]any) *ToolResult {
 		return errResult
 	}
 
-	dataRaw, ok := args["data"].([]any)
-	if !ok || len(dataRaw) == 0 {
+	payload, hasData, err := parseI2CData(args, "data")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if !hasData || len(payload) == 0 {
 		return ErrorResult("data is required for write (array of byte values 0-255)")
 	}
-	if len(dataRaw) > 256 {
+	if len(payload) > 256 {
 		return ErrorResult("data too long: maximum 256 bytes per I2C transaction")
 	}
 
-	data := make([]byte, 0, len(dataRaw)+1)
-
-	// If register is specified, prepend it to the data
-	if regFloat, ok := args["register"].(float64); ok {
-		reg := int(regFloat)
-		if reg < 0 || reg > 255 {
-			return ErrorResult("register must be between 0x00 and 0xFF")
-		}
-		data = append(data, byte(reg))
+	register, hasRegister, err := parseI2CByteArg(args, "register")
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
 
-	for i, v := range dataRaw {
-		f, ok := v.(float64)
-		if !ok {
-			return ErrorResult(fmt.Sprintf("data[%d] is not a valid byte value", i))
-		}
-		b := int(f)
-		if b < 0 || b > 255 {
-			return ErrorResult(fmt.Sprintf("data[%d] = %d is out of byte range (0-255)", i, b))
-		}
-		data = append(data, byte(b))
+	data := make([]byte, 0, len(payload)+1)
+	// If register is specified, prepend it to the data.
+	if hasRegister {
+		data = append(data, byte(register))
 	}
+	data = append(data, payload...)
 
 	devPath := fmt.Sprintf("/dev/i2c-%s", bus)
 	fd, err := syscall.Open(devPath, syscall.O_RDWR, 0)

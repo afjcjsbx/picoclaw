@@ -39,11 +39,11 @@ func (t *I2CTool) Parameters() map[string]any {
 			},
 			"address": map[string]any{
 				"type":        "integer",
-				"description": "7-bit I2C device address (0x03-0x77). Required for read/write.",
+				"description": "7-bit I2C device address (0x03-0x77), for example 56 for 0x38. Required for read/write.",
 			},
 			"register": map[string]any{
 				"type":        "integer",
-				"description": "Register address to read from or write to. If set, sends register byte before read/write.",
+				"description": "Register address (0-255), for example 118 for 0x76. If set, sends the register byte before read/write.",
 			},
 			"data": map[string]any{
 				"type":        "array",
@@ -52,7 +52,7 @@ func (t *I2CTool) Parameters() map[string]any {
 			},
 			"length": map[string]any{
 				"type":        "integer",
-				"description": "Number of bytes to read (1-256). Default: 1. Used with read action.",
+				"description": "Number of bytes to read (1-256). Default: 1. Used with read action. \"count\" is accepted as an alias.",
 			},
 			"confirm": map[string]any{
 				"type":        "boolean",

@@ -19,10 +19,10 @@ Environment variables follow the pattern `PICOCLAW_TOOLS_I2C_ENABLED`, `PICOCLAW
 |----------|------|----------|-------------|
 | `action` | string | yes | `detect` (list buses), `scan` (find devices on a bus), `read`, or `write` |
 | `bus` | string | scan/read/write | Bus number, for example `"1"` for `/dev/i2c-1` |
-| `address` | string | read/write | 7-bit device address (`0x03`–`0x77`) |
-| `register` | string | no | Register address; when set, it is sent before the read/write |
+| `address` | integer | read/write | 7-bit device address (`0x03`–`0x77`), for example `56` for `0x38` |
+| `register` | integer | no | Register address (`0`–`255`), for example `118` for `0x76`; when set, it is sent before the read/write |
 | `data` | array | write | Bytes to write (`0`–`255` each) |
-| `count` | integer | no | Number of bytes to read (`1`–`256`). Default: `1` |
+| `length` | integer | no | Number of bytes to read (`1`–`256`). Default: `1`. The historical name `count` is accepted as an alias |
 | `confirm` | bool | write | Safety guard: must be `true` for write operations |
 
 ## `spi`
