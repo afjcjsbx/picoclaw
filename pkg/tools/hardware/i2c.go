@@ -104,7 +104,7 @@ func (t *I2CTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	case "detect":
 		return t.detect()
 	case "scan":
-		return t.scan(args)
+		return t.scan(ctx, args)
 	case "read":
 		return t.readDevice(ctx, args)
 	case "write":

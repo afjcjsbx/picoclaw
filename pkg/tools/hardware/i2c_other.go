@@ -5,7 +5,7 @@ package hardwaretools
 import "context"
 
 // scan is a stub for non-Linux platforms.
-func (t *I2CTool) scan(args map[string]any) *ToolResult {
+func (t *I2CTool) scan(ctx context.Context, args map[string]any) *ToolResult {
 	return ErrorResult("I2C is only supported on Linux")
 }
 

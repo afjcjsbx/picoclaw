@@ -231,7 +231,10 @@ func smbusProbe(fd int, addr int, hasQuick bool) bool {
 // scan probes valid 7-bit addresses on a bus for connected devices.
 // Uses the same hybrid probe strategy as i2cdetect's MODE_AUTO:
 // SMBus Quick Write for most addresses, SMBus Read Byte for EEPROM ranges.
-func (t *I2CTool) scan(args map[string]any) *ToolResult {
+func (t *I2CTool) scan(ctx context.Context, args map[string]any) *ToolResult {
+	if err := ctx.Err(); err != nil {
+		return ErrorResult(err.Error())
+	}
 	bus, errResult := parseI2CBus(args)
 	if errResult != nil {
 		return errResult
@@ -269,8 +272,14 @@ func (t *I2CTool) scan(args map[string]any) *ToolResult {
 	}
 
 	var found []deviceEntry
-	// Scan 0x08-0x77, skipping I2C reserved addresses 0x00-0x07
+	// Scan 0x08-0x77, skipping I2C reserved addresses 0x00-0x07.
+	const scanContextInterval = 8
 	for addr := 0x08; addr <= 0x77; addr++ {
+		if (addr-0x08)%scanContextInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return ErrorResult(fmt.Sprintf("scan canceled after 0x%02x: %v", addr, err))
+			}
+		}
 		// Set slave address — EBUSY means a kernel driver owns this address
 		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), i2cSlave, uintptr(addr))
 		if errno != 0 {
