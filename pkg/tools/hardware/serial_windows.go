@@ -184,6 +184,9 @@ func serialReadHandleWithStop(
 	}
 
 	pollTimeout := min(timeout, 100*time.Millisecond)
+	if idleStop {
+		pollTimeout = min(timeout, 50*time.Millisecond)
+	}
 	if err := serialSetHandleTimeout(handle, pollTimeout); err != nil {
 		return nil, err
 	}
