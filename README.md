@@ -65,6 +65,7 @@ See [maintenance status](docs/project/maintenance-status.md) for the current com
 | 🔌 **MCP native**<br>Connect any [Model Context Protocol](https://modelcontextprotocol.io/) server to extend the agent — including Playwright for real browser automation. | 🧩 **Agent Plugins 1.0.0**<br>Package skills and MCP servers into portable, installable plugins. |
 | 👁️ **Vision pipeline**<br>Send images and files directly to multimodal LLMs with automatic base64 encoding. | 🧠 **Smart routing**<br>Rule-based model routing sends simple queries to cheaper, faster models. |
 | 💬 **19+ chat channels**<br>Telegram, Discord, Slack, WhatsApp, Matrix, WeChat, and many more. | 🔗 **30+ providers**<br>OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, local models, and more. |
+| 🤝 **A2A agent-to-agent**<br>Speaks [A2A 1.0](https://a2a-protocol.org/latest/specification/): other agents can call PicoClaw, and PicoClaw can call remote agents. See the [guide](docs/channels/a2a/README.md). | |
 
 ### How it compares
 
