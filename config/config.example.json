@@ -20,6 +20,7 @@
       "max_tool_budget_warning_ratio": 0.75,
       "max_parallel_turns": 5,
       "max_parallel_tool_calls": 4,
+      "resume_interrupted_turns": true,
       "subturn": {
         "max_depth": 3,
         "max_concurrent": 3
