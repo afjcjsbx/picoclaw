@@ -9,6 +9,7 @@ import (
 	"github.com/gomarkdown/markdown/parser"
 	"gopkg.in/yaml.v3"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
@@ -75,43 +76,57 @@ type AgentContextDefinition struct {
 // structured files are absent, it falls back to the legacy AGENTS.md layout so
 // the current runtime can transition incrementally.
 func (cb *ContextBuilder) LoadAgentDefinition() AgentContextDefinition {
-	return loadAgentDefinition(cb.workspace)
+	maxChars, _ := cb.bootstrapLimits()
+	return loadAgentDefinitionWithLimit(cb.workspace, maxChars)
 }
 
 func loadAgentDefinition(workspace string) AgentContextDefinition {
+	return loadAgentDefinitionWithLimit(workspace, config.DefaultMaxBootstrapChars)
+}
+
+func loadAgentDefinitionWithLimit(workspace string, maxChars int) AgentContextDefinition {
+	if maxChars <= 0 {
+		maxChars = config.DefaultMaxBootstrapChars
+	}
+
 	definition := AgentContextDefinition{}
-	definition.User = loadUserDefinition(workspace)
+	definition.User = loadUserDefinition(workspace, maxChars)
+
 	agentPath := filepath.Join(workspace, string(AgentDefinitionSourceAgent))
-	if content, err := os.ReadFile(agentPath); err == nil {
-		prompt := parseAgentPromptDefinition(agentPath, string(content))
+	if content, ok := readBootstrapFile(agentPath); ok {
+		prompt := parseAgentPromptDefinition(agentPath, content)
+		capAgentPromptDefinition(&prompt, maxChars, relativeWorkspacePath(workspace, agentPath))
 		definition.Source = AgentDefinitionSourceAgent
 		definition.Agent = &prompt
+
 		soulPath := filepath.Join(workspace, "SOUL.md")
-		if content, err := os.ReadFile(soulPath); err == nil {
+		if content, ok := readBootstrapFile(soulPath); ok {
 			definition.Soul = &SoulDefinition{
 				Path:    soulPath,
-				Content: string(content),
+				Content: capBootstrapContent(content, maxChars, relativeWorkspacePath(workspace, soulPath)),
 			}
 		}
 		return definition
 	}
 
 	legacyPath := filepath.Join(workspace, string(AgentDefinitionSourceAgents))
-	if content, err := os.ReadFile(legacyPath); err == nil {
-		definition.Source = AgentDefinitionSourceAgents
-		definition.Agent = &AgentPromptDefinition{
+	if content, ok := readBootstrapFile(legacyPath); ok {
+		prompt := AgentPromptDefinition{
 			Path: legacyPath,
-			Raw:  string(content),
-			Body: string(content),
+			Raw:  content,
+			Body: content,
 		}
+		capAgentPromptDefinition(&prompt, maxChars, relativeWorkspacePath(workspace, legacyPath))
+		definition.Source = AgentDefinitionSourceAgents
+		definition.Agent = &prompt
 	}
 
 	defaultSoulPath := filepath.Join(workspace, "SOUL.md")
 	if definition.Source != "" || fileutil.Exists(defaultSoulPath) {
-		if content, err := os.ReadFile(defaultSoulPath); err == nil {
+		if content, ok := readBootstrapFile(defaultSoulPath); ok {
 			definition.Soul = &SoulDefinition{
 				Path:    defaultSoulPath,
-				Content: string(content),
+				Content: capBootstrapContent(content, maxChars, relativeWorkspacePath(workspace, defaultSoulPath)),
 			}
 		}
 	}
@@ -119,13 +134,48 @@ func loadAgentDefinition(workspace string) AgentContextDefinition {
 	return definition
 }
 
-func (definition AgentContextDefinition) trackedPaths(workspace string) []string {
+func loadUserDefinition(workspace string, maxChars int) *UserDefinition {
+	userPath := filepath.Join(workspace, "USER.md")
+	if content, ok := readBootstrapFile(userPath); ok {
+		return &UserDefinition{
+			Path:    userPath,
+			Content: capBootstrapContent(content, maxChars, relativeWorkspacePath(workspace, userPath)),
+		}
+	}
+
+	return nil
+}
+
+// capAgentPromptDefinition bounds the parsed prompt and its retained raw copy.
+// Frontmatter is parsed before this runs, so the machine-readable fields keep
+// their full values even when the body is shortened.
+func capAgentPromptDefinition(prompt *AgentPromptDefinition, maxChars int, label string) {
+	if prompt == nil {
+		return
+	}
+	prompt.Body = capBootstrapContent(prompt.Body, maxChars, label)
+	prompt.Raw = capBootstrapContent(prompt.Raw, maxChars, label)
+}
+
+// capBootstrapContent applies the per-file cap and returns the content
+// unchanged when it already fits.
+func capBootstrapContent(content string, maxChars int, label string) string {
+	capped, _ := truncateBootstrapText(content, maxChars, label)
+	return capped
+}
+
+// bootstrapSourcePaths returns the workspace files whose mtime can invalidate
+// the cached system prompt. It only stats the files, so a large bootstrap file
+// is not read again on every prompt-cache check.
+func bootstrapSourcePaths(workspace string) []string {
+	agentPath := filepath.Join(workspace, string(AgentDefinitionSourceAgent))
 	paths := []string{
-		filepath.Join(workspace, string(AgentDefinitionSourceAgent)),
+		agentPath,
 		filepath.Join(workspace, "SOUL.md"),
 	}
-	if definition.Source != AgentDefinitionSourceAgent {
-		paths = append(paths,
+	if !bootstrapFileReadable(agentPath) {
+		paths = append(
+			paths,
 			filepath.Join(workspace, string(AgentDefinitionSourceAgents)),
 			filepath.Join(workspace, "IDENTITY.md"),
 		)
@@ -133,16 +183,19 @@ func (definition AgentContextDefinition) trackedPaths(workspace string) []string
 	return uniquePaths(paths)
 }
 
-func loadUserDefinition(workspace string) *UserDefinition {
-	userPath := filepath.Join(workspace, "USER.md")
-	if content, err := os.ReadFile(userPath); err == nil {
-		return &UserDefinition{
-			Path:    userPath,
-			Content: string(content),
-		}
+// bootstrapFileReadable mirrors the first step of loadAgentDefinition: the
+// structured layout wins only when AGENT.md can actually be read.
+func bootstrapFileReadable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
 	}
-
-	return nil
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	_ = file.Close()
+	return true
 }
 
 func parseAgentPromptDefinition(path, content string) AgentPromptDefinition {

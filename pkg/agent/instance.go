@@ -115,7 +115,7 @@ func NewAgentInstance(
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
 
-	definition := loadAgentDefinition(workspace)
+	definition := loadAgentDefinitionWithLimit(workspace, defaults.GetMaxBootstrapChars())
 
 	model := resolveAgentModel(agentCfg, defaults, definition)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -232,6 +232,7 @@ func NewAgentInstance(
 		).
 		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
 		WithMemoryConfig(defaults.Memory).
+		WithBootstrapLimits(defaults.GetMaxBootstrapChars(), defaults.GetMaxBootstrapTotalChars()).
 		WithIsolation(
 			cfg.Isolation,
 			defaults.RestrictToWorkspace,
