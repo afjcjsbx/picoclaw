@@ -152,7 +152,7 @@ func modelConfigTemplateScore(modelCfg *config.ModelConfig, defaultProvider stri
 // thinking level) and resolves the model under the default provider. Raw
 // references that name no entry are replaced by modelID, as before.
 func DefaultModelRef(cfg *config.Config, modelID string) string {
-	name := cfg.Agents.Defaults.GetModelName()
+	name := strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
 	if modelID == "" {
 		return name
 	}
