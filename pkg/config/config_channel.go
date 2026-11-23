@@ -39,11 +39,13 @@ const (
 	ChannelTeamsWebHook   = "teams_webhook"
 	ChannelMQTT           = "mqtt"
 	ChannelSlackWebHook   = "slack_webhook"
+	ChannelA2A            = "a2a"
 )
 
 func initChannel() {
 	registerSingletonChannel(ChannelPico)
 	registerSingletonChannel(ChannelPicoClient)
+	registerSingletonChannel(ChannelA2A)
 }
 
 // singletonRegistry stores which channel types are singletons (only allow one instance).
@@ -682,6 +684,7 @@ var channelSettingsFactory = map[string]any{
 	ChannelTeamsWebHook:   (TeamsWebhookSettings{}),
 	ChannelMQTT:           (MQTTSettings{}),
 	ChannelSlackWebHook:   (SlackWebhookSettings{}),
+	ChannelA2A:            (A2ASettings{}),
 }
 
 // RegisterChannelSettings registers a settings struct prototype for a custom
