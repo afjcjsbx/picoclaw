@@ -57,24 +57,32 @@ func (c *Client) Card(ctx context.Context) (*AgentCard, error) {
 // token to a third party.
 func (c *Client) rpcURL(ctx context.Context) string {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.endpoint != "" {
-		return c.endpoint
+	ep := c.endpoint
+	c.mu.Unlock()
+	if ep != "" {
+		return ep
 	}
+	// Fetch without holding mu: a slow card must not block callers that have
+	// their own ctx. Racing callers may fetch twice; the first result wins.
 	fallback := strings.TrimRight(c.BaseURL, "/") + RPCPath
 	card, err := c.Card(ctx)
 	if err != nil {
 		return fallback // not cached: retry discovery next call
 	}
-	c.endpoint = fallback
+	ep = fallback
 	base, _ := url.Parse(c.BaseURL)
 	for _, i := range card.SupportedInterfaces {
 		u, err := url.Parse(i.URL)
 		if i.ProtocolBinding == BindingJSONRPC && err == nil && base != nil &&
 			u.Scheme == base.Scheme && u.Host == base.Host {
-			c.endpoint = i.URL
+			ep = i.URL
 			break
 		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.endpoint == "" {
+		c.endpoint = ep
 	}
 	return c.endpoint
 }

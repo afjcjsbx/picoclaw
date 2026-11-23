@@ -57,6 +57,33 @@ func TestCardEndpointOnSameOriginIsUsed(t *testing.T) {
 	assert.Equal(t, srv2.URL+"/custom", c.rpcURL(context.Background()))
 }
 
+func TestSlowCardDoesNotBlockOtherCallers(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close
+	c := &Client{BaseURL: srv.URL}
+
+	go c.rpcURL(context.Background()) // first caller sits on the slow card
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan string, 1)
+	go func() { done <- c.rpcURL(ctx) }()
+	select {
+	case got := <-done:
+		assert.Equal(t, srv.URL+RPCPath, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("second caller blocked behind the first caller's card fetch")
+	}
+}
+
 func TestAskPollsUntilTerminal(t *testing.T) {
 	pollStart = 5 * time.Millisecond
 	t.Cleanup(func() { pollStart = time.Second })
