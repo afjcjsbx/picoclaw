@@ -3,6 +3,7 @@
 package hardwaretools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -97,6 +98,84 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 	}
 
 	return buf[:total], nil
+}
+
+// serialReadUntil reads one byte at a time so it never consumes data past the
+// delimiter. A strace-level inefficiency is preferable to losing the next
+// NMEA/AT line.
+func serialReadUntil(
+	ctx context.Context,
+	cfg serialConfig,
+	delimiter []byte,
+	maxLength int,
+	timeout time.Duration,
+) ([]byte, error) {
+	return serialReadWithStop(ctx, cfg, maxLength, timeout, delimiter, false)
+}
+
+func serialReadAvailable(
+	ctx context.Context,
+	cfg serialConfig,
+	maxLength int,
+	timeout time.Duration,
+) ([]byte, error) {
+	return serialReadWithStop(ctx, cfg, maxLength, timeout, nil, true)
+}
+
+func serialReadWithStop(
+	ctx context.Context,
+	cfg serialConfig,
+	maxLength int,
+	timeout time.Duration,
+	delimiter []byte,
+	idleStop bool,
+) ([]byte, error) {
+	if err := serialContextErr(ctx); err != nil {
+		return nil, err
+	}
+
+	fd, err := unixSerialOpenPort(cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer unixSerialClosePort(fd)
+
+	buf := make([]byte, 0, min(maxLength, 256))
+	chunk := make([]byte, 256)
+	if len(delimiter) > 0 {
+		chunk = chunk[:1]
+	}
+	deadline := unixSerialNow().Add(timeout)
+
+	for len(buf) < maxLength {
+		if err := serialContextErr(ctx); err != nil {
+			return nil, err
+		}
+		remaining := deadline.Sub(unixSerialNow())
+		if remaining <= 0 {
+			break
+		}
+		pollTimeout := minSerialPollTimeout(remaining)
+		if idleStop && len(buf) > 0 {
+			pollTimeout = min(remaining, 50*time.Millisecond)
+		}
+		n, err := unixSerialPollRead(fd, chunk, pollTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			if idleStop && len(buf) > 0 {
+				break
+			}
+			continue
+		}
+		take := min(n, maxLength-len(buf))
+		buf = append(buf, chunk[:take]...)
+		if len(delimiter) > 0 && bytes.HasSuffix(buf, delimiter) {
+			return buf, nil
+		}
+	}
+	return buf, nil
 }
 
 func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {

@@ -1,6 +1,7 @@
 package hardwaretools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -55,7 +57,7 @@ func (t *SerialTool) Name() string {
 }
 
 func (t *SerialTool) Description() string {
-	return "Interact with host serial ports. Actions: list (enumerate ports), read (receive bytes), write (send bytes with explicit confirmation). Supports Linux, macOS, and Windows."
+	return "Interact with host serial ports. Actions: list (enumerate ports), read (receive an exact byte count, bytes up to a delimiter, or currently available bytes), write (send bytes with explicit confirmation). Supports Linux, macOS, and Windows."
 }
 
 func (t *SerialTool) Parameters() map[string]any {
@@ -99,7 +101,15 @@ func (t *SerialTool) Parameters() map[string]any {
 			},
 			"length": map[string]any{
 				"type":        "integer",
-				"description": "Number of bytes to read. Required for read. Range: 1-4096.",
+				"description": "Number of bytes to read with a plain read (1-4096). Required unless read_until or read_available is set; in those modes it caps the buffer. Default cap: 4096.",
+			},
+			"read_until": map[string]any{
+				"type":        "string",
+				"description": "Read until this delimiter, for example \"\\n\" for NMEA or \"\\r\\n\" for AT commands. The delimiter is included in the payload.",
+			},
+			"read_available": map[string]any{
+				"type":        "boolean",
+				"description": "Read whatever is available, stopping after 50 ms of idle time or when timeout_ms expires.",
 			},
 			"data": map[string]any{
 				"type":        "array",
@@ -159,19 +169,52 @@ func (t *SerialTool) read(ctx context.Context, args map[string]any) *ToolResult 
 		return errResult
 	}
 
-	length := 0
-	if v, ok := args["length"].(float64); ok {
-		length = int(v)
-	}
-	if length < 1 || length > maxSerialReadBytes {
-		return ErrorResult(fmt.Sprintf("length is required for read (1-%d)", maxSerialReadBytes))
-	}
-
 	timeout, errResult := parseSerialTimeout(args)
 	if errResult != nil {
 		return errResult
 	}
+	delimiter, hasDelimiter, err := parseSerialReadUntil(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	readAvailable, err := parseSerialReadAvailable(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if hasDelimiter && readAvailable {
+		return ErrorResult("read_until and read_available cannot be used together")
+	}
+	length, hasLength, err := parseSerialReadLength(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
 
+	if hasDelimiter || readAvailable {
+		if !hasLength {
+			length = maxSerialReadBytes
+		}
+		var data []byte
+		var extra map[string]any
+		switch {
+		case hasDelimiter:
+			data, err = serialReadUntil(ctx, cfg, delimiter, length, timeout)
+			extra = map[string]any{
+				"read_until": string(delimiter),
+				"matched":    bytes.HasSuffix(data, delimiter),
+			}
+		case readAvailable:
+			data, err = serialReadAvailable(ctx, cfg, length, timeout)
+			extra = map[string]any{"read_available": true}
+		}
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err))
+		}
+		return SilentResult(formatSerialPayload("read", cfg, data, timeout, extra))
+	}
+
+	if !hasLength {
+		return ErrorResult("length is required for read (1-4096) unless read_until or read_available is set")
+	}
 	data, err := serialRead(ctx, cfg, length, timeout)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err))
@@ -293,6 +336,95 @@ func parseSerialTimeout(args map[string]any) (time.Duration, *ToolResult) {
 		return 0, ErrorResult("timeout_ms must be between 1 and 60000")
 	}
 	return time.Duration(timeoutMS) * time.Millisecond, nil
+}
+
+func parseSerialReadLength(args map[string]any) (int, bool, error) {
+	raw, ok := args["length"]
+	if !ok || raw == nil {
+		return 0, false, nil
+	}
+	value, err := parseI2CScalar(raw, "length")
+	if err != nil {
+		return 0, false, err
+	}
+	if value < 1 || value > maxSerialReadBytes {
+		return 0, false, fmt.Errorf("length must be between 1 and %d", maxSerialReadBytes)
+	}
+	return value, true, nil
+}
+
+func parseSerialReadUntil(args map[string]any) ([]byte, bool, error) {
+	raw, ok := args["read_until"]
+	if !ok || raw == nil {
+		return nil, false, nil
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return nil, false, fmt.Errorf("read_until must be a string")
+	}
+	delimiter, err := decodeSerialDelimiter(text)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(delimiter) == 0 {
+		return nil, false, fmt.Errorf("read_until must not be empty")
+	}
+	if len(delimiter) > 32 {
+		return nil, false, fmt.Errorf("read_until must be at most 32 bytes")
+	}
+	return delimiter, true, nil
+}
+
+func parseSerialReadAvailable(args map[string]any) (bool, error) {
+	raw, ok := args["read_available"]
+	if !ok || raw == nil {
+		return false, nil
+	}
+	value, ok := raw.(bool)
+	if !ok {
+		return false, fmt.Errorf("read_available must be a boolean")
+	}
+	return value, nil
+}
+
+// decodeSerialDelimiter turns the sequences an LLM writes in JSON into bytes.
+// A literal newline is already a valid delimiter; this also accepts "\\n",
+// "\\r\\n", "\\t", "\\\\", and "\\xNN".
+func decodeSerialDelimiter(text string) ([]byte, error) {
+	out := make([]byte, 0, len(text))
+	for i := 0; i < len(text); i++ {
+		if text[i] != '\\' {
+			out = append(out, text[i])
+			continue
+		}
+		i++
+		if i >= len(text) {
+			return nil, fmt.Errorf("read_until ends with a trailing backslash")
+		}
+		switch text[i] {
+		case 'n':
+			out = append(out, '\n')
+		case 'r':
+			out = append(out, '\r')
+		case 't':
+			out = append(out, '\t')
+		case '\\':
+			out = append(out, '\\')
+		case 'x':
+			if i+2 >= len(text) {
+				return nil, fmt.Errorf("read_until has an incomplete \\x escape")
+			}
+			value, err := strconv.ParseUint(text[i+1:i+3], 16, 8)
+			if err != nil {
+				return nil, fmt.Errorf("read_until has an invalid \\x escape")
+			}
+			out = append(out, byte(value))
+			i += 2
+		default:
+			return nil, fmt.Errorf("read_until has an unsupported escape \\%c", text[i])
+		}
+	}
+	return out, nil
 }
 
 func parseSerialWritePayload(args map[string]any) ([]byte, *ToolResult) {

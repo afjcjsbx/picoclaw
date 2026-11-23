@@ -126,6 +126,93 @@ func TestParseSerialConfigAcceptsHighBaud(t *testing.T) {
 	}
 }
 
+func TestDecodeSerialDelimiter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{input: "\\n", want: "\n"},
+		{input: "\\r\\n", want: "\r\n"},
+		{input: "\n", want: "\n"},
+		{input: "END", want: "END"},
+		{input: "\\x03", want: "\x03"},
+		{input: "\\t", want: "\t"},
+		{input: "\\\\", want: "\\"},
+		{input: "\\", wantErr: true},
+		{input: "\\q", wantErr: true},
+		{input: "\\xZZ", wantErr: true},
+		{input: "\\x1", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := decodeSerialDelimiter(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("decodeSerialDelimiter(%q) = %q, want error", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("decodeSerialDelimiter(%q) error = %v", tt.input, err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("decodeSerialDelimiter(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseSerialReadModeValidation(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := parseSerialReadUntil(map[string]any{"read_until": 123}); err == nil {
+		t.Fatal("parseSerialReadUntil() accepted a non-string")
+	}
+	if _, _, err := parseSerialReadUntil(map[string]any{"read_until": ""}); err == nil {
+		t.Fatal("parseSerialReadUntil() accepted an empty delimiter")
+	}
+	if _, _, err := parseSerialReadUntil(map[string]any{"read_until": strings.Repeat("x", 33)}); err == nil {
+		t.Fatal("parseSerialReadUntil() accepted a delimiter longer than 32 bytes")
+	}
+	if _, err := parseSerialReadAvailable(map[string]any{"read_available": "yes"}); err == nil {
+		t.Fatal("parseSerialReadAvailable() accepted a string")
+	}
+	if _, _, err := parseSerialReadLength(map[string]any{"length": float64(0)}); err == nil {
+		t.Fatal("parseSerialReadLength() accepted zero")
+	}
+	if _, _, err := parseSerialReadLength(map[string]any{"length": float64(4097)}); err == nil {
+		t.Fatal("parseSerialReadLength() accepted more than 4096 bytes")
+	}
+}
+
+func TestSerialReadRequiresLengthUnlessReadModeIsSet(t *testing.T) {
+	port := "/dev/ttyUSB0"
+	if runtime.GOOS == "windows" {
+		port = "COM3"
+	}
+
+	result := NewSerialTool().Execute(context.Background(), map[string]any{
+		"action": "read",
+		"port":   port,
+	})
+	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "length is required") {
+		t.Fatalf("read result = %#v, want a length error", result)
+	}
+
+	result = NewSerialTool().Execute(context.Background(), map[string]any{
+		"action":         "read",
+		"port":           port,
+		"read_until":     "\n",
+		"read_available": true,
+	})
+	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "cannot be used together") {
+		t.Fatalf("read result = %#v, want a read-mode conflict error", result)
+	}
+}
+
 func TestParseSerialWritePayloadRejectsFractionalBytes(t *testing.T) {
 	_, errResult := parseSerialWritePayload(map[string]any{
 		"data": []any{65.9},

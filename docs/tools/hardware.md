@@ -61,9 +61,20 @@ This sends the measurement command, waits 80 ms, and reads six bytes in one tool
 | `stop_bits` | integer | no | `1` or `2`. Default: `1` |
 | `flow_control` | string | no | `none` (default), `rtscts` (hardware RTS/CTS), or `xonxoff` (software flow control) |
 | `timeout_ms` | integer | no | Read/write timeout in milliseconds. Default: `1000` |
-| `length` | integer | read | Number of bytes to read (`1`–`4096`) |
+| `length` | integer | read | Number of bytes for a plain read (`1`–`4096`). Required unless `read_until` or `read_available` is set; in those modes it caps the buffer (default `4096`) |
+| `read_until` | string | no | Read until a delimiter, included in the payload. Accepts `\n`, `\r\n`, `\t`, `\\`, and `\xNN` escapes. Cannot be combined with `read_available` |
+| `read_available` | bool | no | Read whatever is available, stopping after 50 ms of idle time or at `timeout_ms` |
 | `data` | array | write | Bytes to write (`0`–`255` each); required for write unless `text` is provided |
 | `text` | string | write | UTF-8 text to write; required for write if `data` is omitted |
 | `confirm` | bool | write | Safety guard: must be `true` for write operations |
+
+For line-oriented devices, prefer a delimiter over an exact byte count:
+
+```text
+serial read  port="/dev/ttyUSB0" read_until="\r\n" timeout_ms=2000
+serial read  port="/dev/ttyUSB0" read_available=true timeout_ms=500
+```
+
+`read_until` returns partial data with `matched: false` when the timeout expires. `read_available` stops after 50 ms with no new bytes, so it is useful for prompts and interactive consoles.
 
 All three tools return structured results (bus lists, scan tables, hex dumps) that the model can reason about directly. Write-style actions always require the explicit `confirm: true` argument; there is no configuration to disable that guard.

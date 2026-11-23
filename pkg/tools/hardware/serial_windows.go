@@ -3,6 +3,7 @@
 package hardwaretools
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"strings"
@@ -136,6 +137,78 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 	return buf[:read], nil
 }
 
+func serialReadUntil(
+	ctx context.Context,
+	cfg serialConfig,
+	delimiter []byte,
+	maxLength int,
+	timeout time.Duration,
+) ([]byte, error) {
+	return serialReadWindowsWithStop(ctx, cfg, maxLength, timeout, delimiter, false)
+}
+
+func serialReadAvailable(
+	ctx context.Context,
+	cfg serialConfig,
+	maxLength int,
+	timeout time.Duration,
+) ([]byte, error) {
+	return serialReadWindowsWithStop(ctx, cfg, maxLength, timeout, nil, true)
+}
+
+func serialReadWindowsWithStop(
+	ctx context.Context,
+	cfg serialConfig,
+	maxLength int,
+	timeout time.Duration,
+	delimiter []byte,
+	idleStop bool,
+) ([]byte, error) {
+	if err := serialContextErr(ctx); err != nil {
+		return nil, err
+	}
+
+	pollTimeout := min(timeout, 100*time.Millisecond)
+	handle, err := openAndConfigureWindowsSerial(cfg, pollTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(handle)
+
+	buf := make([]byte, 0, min(maxLength, 256))
+	chunk := make([]byte, 256)
+	if len(delimiter) > 0 {
+		chunk = chunk[:1]
+	}
+	deadline := time.Now().Add(timeout)
+
+	for len(buf) < maxLength {
+		if err := serialContextErr(ctx); err != nil {
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+
+		var read uint32
+		if err := windows.ReadFile(handle, chunk, &read, nil); err != nil {
+			return nil, err
+		}
+		if read == 0 {
+			if idleStop && len(buf) > 0 {
+				break
+			}
+			continue
+		}
+		take := min(int(read), maxLength-len(buf))
+		buf = append(buf, chunk[:take]...)
+		if len(delimiter) > 0 && bytes.HasSuffix(buf, delimiter) {
+			return buf, nil
+		}
+	}
+	return buf, nil
+}
+
 func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
 	if err := serialContextErr(ctx); err != nil {
 		return 0, err
@@ -239,6 +312,15 @@ func configureWindowsSerialPort(handle windows.Handle, cfg serialConfig, timeout
 		return err
 	}
 
+	if err := serialSetWindowsTimeouts(handle, timeout); err != nil {
+		return err
+	}
+
+	procPurgeComm.Call(uintptr(handle), uintptr(purgeRxClear|purgeTxClear))
+	return nil
+}
+
+func serialSetWindowsTimeouts(handle windows.Handle, timeout time.Duration) error {
 	timeoutMS := uint32(timeout / time.Millisecond)
 	if timeoutMS == 0 {
 		timeoutMS = 1
@@ -250,12 +332,10 @@ func configureWindowsSerialPort(handle windows.Handle, cfg serialConfig, timeout
 		ReadTotalTimeoutMultiplier:  0,
 		WriteTotalTimeoutMultiplier: 0,
 	}
-	r1, _, err = procSetCommTimeouts.Call(uintptr(handle), uintptr(unsafe.Pointer(&timeouts)))
+	r1, _, err := procSetCommTimeouts.Call(uintptr(handle), uintptr(unsafe.Pointer(&timeouts)))
 	if r1 == 0 {
 		return err
 	}
-
-	procPurgeComm.Call(uintptr(handle), uintptr(purgeRxClear|purgeTxClear))
 	return nil
 }
 

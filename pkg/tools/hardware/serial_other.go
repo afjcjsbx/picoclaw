@@ -20,6 +20,25 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 	return nil, fmt.Errorf("serial is not supported on this platform")
 }
 
+func serialReadUntil(
+	ctx context.Context,
+	cfg serialConfig,
+	delimiter []byte,
+	maxLength int,
+	timeout time.Duration,
+) ([]byte, error) {
+	return nil, fmt.Errorf("serial is not supported on this platform")
+}
+
+func serialReadAvailable(
+	ctx context.Context,
+	cfg serialConfig,
+	maxLength int,
+	timeout time.Duration,
+) ([]byte, error) {
+	return nil, fmt.Errorf("serial is not supported on this platform")
+}
+
 func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
 	return 0, fmt.Errorf("serial is not supported on this platform")
 }
