@@ -45,9 +45,23 @@ This sends the measurement command, waits 80 ms, and reads six bytes in one tool
 | `speed` | integer | no | Clock speed in Hz. Default: `1000000` (1 MHz) |
 | `mode` | integer | no | SPI mode `0`–`3` (CPOL/CPHA). Default: `0` |
 | `bits` | integer | no | Bits per word. Only `8` is supported; other widths are rejected instead of being mis-encoded. Default: `8` |
-| `data` | array | transfer | Bytes to send (`0`–`255` each) |
-| `count` | integer | read | Number of bytes to read (`1`–`4096`) |
+| `data` | array | transfer | Bytes to send (`0`–`255` each). Required unless `segments` is used |
+| `read_length` | integer | no | Bytes to receive for a transfer (`0`–`4096`). Omit for full-duplex (same as `data`); `0` means write-only |
+| `delay_usecs` | integer | no | Delay after the transfer (`0`–`65535` µs) |
+| `cs_change` | bool | no | Toggle chip select after the transfer |
+| `segments` | array | no | Multi-segment transfer in one ioctl. Each item supports `data`, `read_length`, `delay_usecs`, and `cs_change`. Conflicts with top-level `data`/`delay_usecs`/`cs_change` |
+| `length` | integer | read | Number of bytes to read (`1`–`4096`). The historical name `count` is accepted as an alias |
+| `count` | integer | read | Deprecated alias for `length` |
 | `confirm` | bool | transfer | Safety guard: must be `true` for transfers |
+
+A multi-segment transfer is useful for devices that need a command and a response with chip select held low:
+
+```text
+spi transfer  device="2.0" speed=1000000 segments=[
+  {"data":[3,0,0,0], "cs_change":false},
+  {"read_length":4, "delay_usecs":100, "cs_change":true}
+]
+```
 
 ## `serial`
 

@@ -71,7 +71,11 @@ func (t *I2CTool) Parameters() map[string]any {
 			},
 			"length": map[string]any{
 				"type":        "integer",
-				"description": "Number of bytes to read (1-256). Default: 1. Used with read action. \"count\" is accepted as an alias.",
+				"description": "Number of bytes to read (1-256). Default: 1. Used with read action.",
+			},
+			"count": map[string]any{
+				"type":        "integer",
+				"description": "Deprecated alias for length; use length.",
 			},
 			"delay_ms": map[string]any{
 				"type":        "integer",
