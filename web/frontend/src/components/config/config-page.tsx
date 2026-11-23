@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { patchAppConfig, resetAppConfig } from "@/api/channels"
 import { launcherFetch } from "@/api/http"
 import { postLauncherDashboardSetup } from "@/api/launcher-auth"
+import { getModels } from "@/api/models"
 import {
   getAutoStartStatus,
   getLauncherConfig,
@@ -18,6 +19,7 @@ import {
 import { ConfigChangeNotice } from "@/components/config-change-notice"
 import {
   AgentDefaultsSection,
+  AuxiliaryModelFields,
   CronSection,
   DevicesSection,
   EvolutionSection,
@@ -119,6 +121,16 @@ export function ConfigPage() {
     queryFn: getLauncherConfig,
   })
 
+  const {
+    data: modelsData,
+    isLoading: isModelsLoading,
+    error: modelsError,
+  } = useQuery({
+    queryKey: ["models"],
+    queryFn: getModels,
+    staleTime: 60_000,
+  })
+
   const { data: versionInfo } = useQuery({
     queryKey: ["system", "version"],
     queryFn: getSystemVersionInfo,
@@ -163,6 +175,16 @@ export function ConfigPage() {
     setAutoStartEnabled(autoStartStatus.enabled)
     setAutoStartBaseline(autoStartStatus.enabled)
   }, [autoStartStatus])
+
+  const primaryModelName = (modelsData?.default_model ?? "").trim()
+  const auxiliaryModelNames = Array.from(
+    new Set(
+      (modelsData?.models ?? [])
+        .filter((model) => !model.is_virtual)
+        .map((model) => model.model_name.trim())
+        .filter((name) => name !== "" && name !== primaryModelName),
+    ),
+  ).sort((a, b) => a.localeCompare(b))
 
   const configDirty = JSON.stringify(form) !== JSON.stringify(baseline)
   const launcherSettingsDirty =
@@ -344,6 +366,10 @@ export function ConfigPage() {
               },
               max_tokens: maxTokens,
               context_window: contextWindow,
+              auxiliary: {
+                compaction: form.auxiliaryCompaction.trim(),
+                vision: form.auxiliaryVision.trim(),
+              },
               max_tool_iterations: maxToolIterations,
               summarize_message_threshold: summarizeMessageThreshold,
               summarize_token_percent: summarizeTokenPercent,
@@ -566,7 +592,16 @@ export function ConfigPage() {
                 form={form}
                 onFieldChange={updateField}
                 onTurnProfileFieldChange={handleTurnProfileFieldChange}
-              />
+              >
+                <AuxiliaryModelFields
+                  form={form}
+                  onFieldChange={updateField}
+                  modelNames={auxiliaryModelNames}
+                  primaryModelName={primaryModelName}
+                  modelsLoading={isModelsLoading}
+                  modelsError={Boolean(modelsError)}
+                />
+              </AgentDefaultsSection>
 
               <RuntimeSection form={form} onFieldChange={updateField} />
 
