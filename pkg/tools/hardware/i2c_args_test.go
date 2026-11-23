@@ -133,6 +133,56 @@ func TestParseI2CRegisterDoesNotSilentlyIgnoreStrings(t *testing.T) {
 	}
 }
 
+func TestParseI2CDelayMS(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		args    map[string]any
+		want    int
+		wantErr bool
+	}{
+		{name: "default", args: map[string]any{}, want: 0},
+		{name: "number", args: map[string]any{"delay_ms": float64(80)}, want: 80},
+		{name: "string", args: map[string]any{"delay_ms": "40"}, want: 40},
+		{name: "negative", args: map[string]any{"delay_ms": float64(-1)}, wantErr: true},
+		{name: "too large", args: map[string]any{"delay_ms": float64(60001)}, wantErr: true},
+		{name: "fractional", args: map[string]any{"delay_ms": 1.5}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseI2CDelayMS(tt.args)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseI2CDelayMS() = %d, want error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseI2CDelayMS() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseI2CDelayMS() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseI2CRepeatedStart(t *testing.T) {
+	t.Parallel()
+
+	if got, err := parseI2CRepeatedStart(map[string]any{"repeated_start": true}); err != nil || !got {
+		t.Fatalf("parseI2CRepeatedStart() = (%v, %v), want (true, nil)", got, err)
+	}
+	if got, err := parseI2CRepeatedStart(map[string]any{}); err != nil || got {
+		t.Fatalf("parseI2CRepeatedStart() = (%v, %v), want (false, nil)", got, err)
+	}
+	if _, err := parseI2CRepeatedStart(map[string]any{"repeated_start": "yes"}); err == nil {
+		t.Fatal("parseI2CRepeatedStart() accepted a string")
+	}
+}
+
 func TestParseI2CData(t *testing.T) {
 	t.Parallel()
 

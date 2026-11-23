@@ -21,9 +21,20 @@ Environment variables follow the pattern `PICOCLAW_TOOLS_I2C_ENABLED`, `PICOCLAW
 | `bus` | string | scan/read/write | Bus number, for example `"1"` for `/dev/i2c-1` |
 | `address` | integer | read/write | 7-bit device address (`0x03`–`0x77`), for example `56` for `0x38` |
 | `register` | integer | no | Register address (`0`–`255`), for example `118` for `0x76`; when set, it is sent before the read/write |
+| `command` | array | no | Raw command bytes to send before a read, for devices without register addressing (for example the AHT20's `[172, 51, 0]`). Conflicts with `register` |
 | `data` | array | write | Bytes to write (`0`–`255` each) |
 | `length` | integer | no | Number of bytes to read (`1`–`256`). Default: `1`. The historical name `count` is accepted as an alias |
+| `delay_ms` | integer | no | Wait `0`–`60000` ms between the command/register write and the read, or after a write |
+| `repeated_start` | bool | no | Keep command/register and read in one transaction using a repeated START. Ignored when `delay_ms > 0` |
 | `confirm` | bool | write | Safety guard: must be `true` for write operations |
+
+A register read without `delay_ms` uses two separate messages by default, which inserts a STOP between them. Set `repeated_start: true` for devices that require a combined transaction. Devices that need conversion time, such as the AHT20, should use `delay_ms`:
+
+```text
+i2c read  bus="1" address=56 command=[172,51,0] delay_ms=80 length=6
+```
+
+This sends the measurement command, waits 80 ms, and reads six bytes in one tool call.
 
 ## `spi`
 

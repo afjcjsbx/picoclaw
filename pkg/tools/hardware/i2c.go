@@ -21,7 +21,7 @@ func (t *I2CTool) Name() string {
 }
 
 func (t *I2CTool) Description() string {
-	return "Interact with I2C bus devices for reading sensors and controlling peripherals. Actions: detect (list buses), scan (find devices on a bus), read (read bytes from device), write (send bytes to device). Linux only."
+	return "Interact with I2C bus devices for reading sensors and controlling peripherals. Actions: detect (list buses), scan (find devices on a bus), read (read bytes from device), write (send bytes to device). Reads can send a register or a raw command first, using a repeated START (combined transaction) or a delay. Linux only."
 }
 
 func (t *I2CTool) Parameters() map[string]any {
@@ -45,6 +45,11 @@ func (t *I2CTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "Register address (0-255), for example 118 for 0x76. If set, sends the register byte before read/write.",
 			},
+			"command": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "integer"},
+				"description": "Raw command bytes to send before a read (0-255 each). Use this for devices without register addressing, such as the AHT20's [172, 51, 0]. Conflicts with register.",
+			},
 			"data": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "integer"},
@@ -53,6 +58,14 @@ func (t *I2CTool) Parameters() map[string]any {
 			"length": map[string]any{
 				"type":        "integer",
 				"description": "Number of bytes to read (1-256). Default: 1. Used with read action. \"count\" is accepted as an alias.",
+			},
+			"delay_ms": map[string]any{
+				"type":        "integer",
+				"description": "Wait this many milliseconds between the command/register write and the read, or after a write. Range: 0-60000. Use 80 for an AHT20 measurement.",
+			},
+			"repeated_start": map[string]any{
+				"type":        "boolean",
+				"description": "For read: keep the command/register and the read in one I2C transaction using a repeated START. Ignored when delay_ms is greater than 0.",
 			},
 			"confirm": map[string]any{
 				"type":        "boolean",
@@ -79,9 +92,9 @@ func (t *I2CTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	case "scan":
 		return t.scan(args)
 	case "read":
-		return t.readDevice(args)
+		return t.readDevice(ctx, args)
 	case "write":
-		return t.writeDevice(args)
+		return t.writeDevice(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: detect, scan, read, write)", action))
 	}

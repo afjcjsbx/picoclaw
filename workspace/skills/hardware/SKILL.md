@@ -19,7 +19,8 @@ i2c detect
 i2c scan  (bus: "1")
 
 # 3. Read from a sensor (e.g. AHT20 temperature/humidity)
-i2c read  (bus: "1", address: 0x38, register: 0xAC, length: 6)
+#    AHT20 needs a 3-byte command, an 80 ms conversion wait, then 6 bytes.
+i2c read  (bus: "1", address: 0x38, command: [0xAC, 0x33, 0x00], delay_ms: 80, length: 6)
 
 # 4. SPI devices
 spi list

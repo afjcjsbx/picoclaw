@@ -171,6 +171,37 @@ func parseI2CPositiveInt(args map[string]any, key string) (int, bool, error) {
 	return value, true, nil
 }
 
+// parseI2CDelayMS parses the optional delay between a command write and the
+// following read (or after a write). It is bounded to keep a tool call from
+// sleeping for an unbounded amount of time.
+func parseI2CDelayMS(args map[string]any) (int, error) {
+	raw, ok := args["delay_ms"]
+	if !ok || raw == nil {
+		return 0, nil
+	}
+	value, err := parseI2CScalar(raw, "delay_ms")
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 || value > 60000 {
+		return 0, fmt.Errorf("delay_ms must be between 0 and 60000")
+	}
+	return value, nil
+}
+
+// parseI2CRepeatedStart parses the optional repeated-start switch.
+func parseI2CRepeatedStart(args map[string]any) (bool, error) {
+	raw, ok := args["repeated_start"]
+	if !ok || raw == nil {
+		return false, nil
+	}
+	value, ok := raw.(bool)
+	if !ok {
+		return false, fmt.Errorf("repeated_start must be a boolean")
+	}
+	return value, nil
+}
+
 // parseI2CData accepts an array of numbers/strings or a whitespace/comma
 // separated byte string. The latter keeps hand-written sensor sequences
 // compact and mirrors how register maps are usually documented.
