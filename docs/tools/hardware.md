@@ -54,7 +54,7 @@ This sends the measurement command, waits 80 ms, and reads six bytes in one tool
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
 | `action` | string | yes | `list`, `read`, or `write` |
-| `port` | string | read/write | Port path or name, for example `/dev/ttyUSB0`, `/dev/cu.usbserial-0001`, or `COM3` |
+| `port` | string | read/write | Port path or name, for example `/dev/ttyUSB0`, `/dev/cu.usbserial-0001`, a stable `/dev/serial/by-id/...` or `/dev/serial/by-path/...` link, or `COM3` |
 | `baud` | integer | no | Baud rate. Default: `115200`. Linux supports standard termios rates up to `4000000`; macOS also accepts arbitrary rates through `IOSSIOSPEED`; Windows accepts up to `4000000` |
 | `data_bits` | integer | no | Data bits: `5`, `6`, `7`, or `8`. Default: `8` |
 | `parity` | string | no | `none`, `even`, or `odd`. Default: `none` |

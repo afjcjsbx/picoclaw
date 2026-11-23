@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -23,8 +24,8 @@ const (
 )
 
 var (
-	unixSerialPortPattern = regexp.MustCompile(
-		`^(?:/dev/)?(?:ttyS\d+|ttyUSB\d+|ttyACM\d+|ttyAMA\d+|rfcomm\d+|tty\.[A-Za-z0-9._-]+|cu\.[A-Za-z0-9._-]+)$`,
+	unixSerialBasePattern = regexp.MustCompile(
+		`^(?:ttyS\d+|ttyUSB\d+|ttyACM\d+|ttyAMA\d+|serial\d+|rfcomm\d+|tty\.[A-Za-z0-9._-]+|cu\.[A-Za-z0-9._-]+)$`,
 	)
 	windowsSerialPortPattern = regexp.MustCompile(`^(?:\\\\\.\\)?COM[1-9]\d*$`)
 )
@@ -68,7 +69,7 @@ func (t *SerialTool) Parameters() map[string]any {
 			},
 			"port": map[string]any{
 				"type":        "string",
-				"description": "Serial port path or name, for example /dev/ttyUSB0, /dev/cu.usbserial-0001, or COM3. Required for read/write.",
+				"description": "Serial port path or name, for example /dev/ttyUSB0, /dev/cu.usbserial-0001, /dev/serial/by-id/usb-..., or COM3. Required for read/write.",
 			},
 			"baud": map[string]any{
 				"type":        "integer",
@@ -395,16 +396,70 @@ func normalizeSerialPort(port string) (string, error) {
 }
 
 func normalizeUnixSerialPath(port string) (string, error) {
+	return normalizeUnixSerialPathAt(port, "/dev")
+}
+
+// normalizeUnixSerialPathAt resolves stable /dev/serial/by-id and by-path
+// links to the real tty device. The resolved path must still be a serial
+// device directly under devRoot, so a symlink cannot escape the allowlist.
+func normalizeUnixSerialPathAt(port, devRoot string) (string, error) {
 	trimmed := strings.TrimSpace(port)
-	if !unixSerialPortPattern.MatchString(trimmed) {
+	if trimmed == "" {
+		return "", fmt.Errorf("serial port must not be empty")
+	}
+	if strings.Contains(trimmed, "..") {
+		return "", fmt.Errorf("invalid serial port: %q contains a path traversal segment", trimmed)
+	}
+	devRoot = filepath.Clean(devRoot)
+	if resolvedRoot, err := filepath.EvalSymlinks(devRoot); err == nil {
+		devRoot = resolvedRoot
+	}
+
+	byID := filepath.Join(devRoot, "serial", "by-id") + string(filepath.Separator)
+	byPath := filepath.Join(devRoot, "serial", "by-path") + string(filepath.Separator)
+	if strings.HasPrefix(trimmed, byID) || strings.HasPrefix(trimmed, byPath) {
+		resolved, err := filepath.EvalSymlinks(trimmed)
+		if err != nil {
+			return "", fmt.Errorf(
+				"invalid serial port: %q does not resolve to a device (is the adapter connected?): %w",
+				trimmed,
+				err,
+			)
+		}
+		resolved = filepath.Clean(resolved)
+		if filepath.Dir(resolved) != devRoot || !unixSerialBasePattern.MatchString(filepath.Base(resolved)) {
+			return "", fmt.Errorf(
+				"invalid serial port: %q resolves to %q, which is not a serial device",
+				trimmed,
+				resolved,
+			)
+		}
+		return resolved, nil
+	}
+
+	switch {
+	case strings.HasPrefix(trimmed, devRoot+string(filepath.Separator)):
+		cleaned := filepath.Clean(trimmed)
+		if filepath.Dir(cleaned) != devRoot || !unixSerialBasePattern.MatchString(filepath.Base(cleaned)) {
+			return "", fmt.Errorf(
+				"invalid serial port: expected a safe Unix device name such as /dev/ttyUSB0, /dev/cu.usbserial-0001, or /dev/serial/by-id/...",
+			)
+		}
+		return cleaned, nil
+	case filepath.IsAbs(trimmed):
 		return "", fmt.Errorf(
-			"invalid serial port: expected a safe Unix device name such as /dev/ttyUSB0 or /dev/cu.usbserial-0001",
+			"invalid serial port: %q is outside %s",
+			trimmed,
+			devRoot,
 		)
+	default:
+		if !unixSerialBasePattern.MatchString(trimmed) {
+			return "", fmt.Errorf(
+				"invalid serial port: expected a safe Unix device name such as /dev/ttyUSB0, /dev/cu.usbserial-0001, or /dev/serial/by-id/...",
+			)
+		}
+		return filepath.Join(devRoot, trimmed), nil
 	}
-	if strings.HasPrefix(trimmed, "/dev/") {
-		return trimmed, nil
-	}
-	return "/dev/" + trimmed, nil
 }
 
 func normalizeWindowsSerialPath(port string) (string, error) {
