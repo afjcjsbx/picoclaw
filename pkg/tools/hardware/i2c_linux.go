@@ -236,6 +236,8 @@ func (t *I2CTool) scan(args map[string]any) *ToolResult {
 	if errResult != nil {
 		return errResult
 	}
+	unlock := lockI2CBus(bus)
+	defer unlock()
 
 	devPath := fmt.Sprintf("/dev/i2c-%s", bus)
 	fd, err := syscall.Open(devPath, syscall.O_RDWR, 0)
@@ -311,6 +313,8 @@ func (t *I2CTool) readDevice(ctx context.Context, args map[string]any) *ToolResu
 	if errResult != nil {
 		return errResult
 	}
+	unlock := lockI2CBus(bus)
+	defer unlock()
 
 	addr, errResult := parseI2CAddress(args)
 	if errResult != nil {
@@ -421,6 +425,8 @@ func (t *I2CTool) writeDevice(ctx context.Context, args map[string]any) *ToolRes
 	if errResult != nil {
 		return errResult
 	}
+	unlock := lockI2CBus(bus)
+	defer unlock()
 
 	addr, errResult := parseI2CAddress(args)
 	if errResult != nil {

@@ -7,7 +7,21 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sync"
 )
+
+// i2cBusLocks serializes compound transactions on the same bus. Parallel tool
+// calls can otherwise interleave a register write and its read on /dev/i2c-N,
+// which corrupts the device conversation even though the kernel serializes
+// individual transfers.
+var i2cBusLocks sync.Map
+
+func lockI2CBus(bus string) func() {
+	value, _ := i2cBusLocks.LoadOrStore(bus, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 // I2CTool provides I2C bus interaction for reading sensors and controlling peripherals.
 type I2CTool struct{}
