@@ -22,6 +22,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	hardwaretools "github.com/sipeed/picoclaw/pkg/tools/hardware"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
@@ -760,6 +761,13 @@ func (a *AgentInstance) Close() error {
 		providerList = append(providerList, provider)
 	}
 	closeUniqueStatefulProviders(providerList...)
+	if a.Tools != nil {
+		if tool, ok := a.Tools.Get("serial"); ok {
+			if serialTool, ok := tool.(*hardwaretools.SerialTool); ok {
+				serialTool.CloseAll()
+			}
+		}
+	}
 	if a.Sessions != nil {
 		return a.Sessions.Close()
 	}

@@ -11,18 +11,21 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
 
 const (
-	defaultSerialBaud      = 115200
-	defaultSerialDataBits  = 8
-	defaultSerialStopBits  = 1
-	defaultSerialTimeoutMS = 1000
-	maxSerialPayloadBytes  = 4096
-	maxSerialReadBytes     = 4096
-	serialPollInterval     = 100 * time.Millisecond
+	defaultSerialBaud        = 115200
+	defaultSerialDataBits    = 8
+	defaultSerialStopBits    = 1
+	defaultSerialTimeoutMS   = 1000
+	maxSerialPayloadBytes    = 4096
+	maxSerialReadBytes       = 4096
+	serialPollInterval       = 100 * time.Millisecond
+	defaultSerialSessionTTL  = time.Minute
+	defaultSerialMaxSessions = 2
 )
 
 var (
@@ -30,9 +33,25 @@ var (
 		`^(?:ttyS\d+|ttyUSB\d+|ttyACM\d+|ttyAMA\d+|serial\d+|rfcomm\d+|tty\.[A-Za-z0-9._-]+|cu\.[A-Za-z0-9._-]+)$`,
 	)
 	windowsSerialPortPattern = regexp.MustCompile(`^(?:\\\\\.\\)?COM[1-9]\d*$`)
+
+	serialNormalizePort = normalizeSerialPort
 )
 
-type SerialTool struct{}
+type SerialTool struct {
+	mu          sync.Mutex
+	sessions    map[string]*serialSession
+	sessionTTL  time.Duration
+	maxSessions int
+}
+
+type serialSession struct {
+	key      string
+	cfg      serialConfig
+	handle   serialHandle
+	lastUsed time.Time
+	timer    *time.Timer
+	mu       sync.Mutex
+}
 
 type serialPortInfo struct {
 	Name string `json:"name"`
@@ -49,7 +68,11 @@ type serialConfig struct {
 }
 
 func NewSerialTool() *SerialTool {
-	return &SerialTool{}
+	return &SerialTool{
+		sessions:    make(map[string]*serialSession),
+		sessionTTL:  defaultSerialSessionTTL,
+		maxSessions: defaultSerialMaxSessions,
+	}
 }
 
 func (t *SerialTool) Name() string {
@@ -66,8 +89,8 @@ func (t *SerialTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"list", "read", "write"},
-				"description": "Action to perform: list available serial ports, read bytes from a port, or write bytes to a port.",
+				"enum":        []string{"list", "open", "read", "write", "close", "sessions"},
+				"description": "Action to perform: list ports, open a persistent session, read (exact bytes, until a delimiter, or available data), write bytes, close a session, or list open sessions.",
 			},
 			"port": map[string]any{
 				"type":        "string",
@@ -138,12 +161,26 @@ func (t *SerialTool) Execute(ctx context.Context, args map[string]any) *ToolResu
 	switch action {
 	case "list":
 		return t.list()
+	case "open":
+		cfg, errResult := parseSerialConfig(args)
+		if errResult != nil {
+			return errResult
+		}
+		return t.openSession(ctx, cfg)
 	case "read":
 		return t.read(ctx, args)
 	case "write":
 		return t.write(ctx, args)
+	case "close":
+		cfg, errResult := parseSerialConfig(args)
+		if errResult != nil {
+			return errResult
+		}
+		return t.closeSession(ctx, cfg.Port)
+	case "sessions":
+		return t.listSessions(ctx)
 	default:
-		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: list, read, write)", action))
+		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: list, open, read, write, close, sessions)", action))
 	}
 }
 
@@ -189,38 +226,53 @@ func (t *SerialTool) read(ctx context.Context, args map[string]any) *ToolResult 
 		return ErrorResult(err.Error())
 	}
 
-	if hasDelimiter || readAvailable {
-		if !hasLength {
-			length = maxSerialReadBytes
-		}
-		var data []byte
-		var extra map[string]any
-		switch {
-		case hasDelimiter:
-			data, err = serialReadUntil(ctx, cfg, delimiter, length, timeout)
-			extra = map[string]any{
-				"read_until": string(delimiter),
-				"matched":    bytes.HasSuffix(data, delimiter),
-			}
-		case readAvailable:
-			data, err = serialReadAvailable(ctx, cfg, length, timeout)
-			extra = map[string]any{"read_available": true}
-		}
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err))
-		}
-		return SilentResult(formatSerialPayload("read", cfg, data, timeout, extra))
+	if (hasDelimiter || readAvailable) && !hasLength {
+		length = maxSerialReadBytes
 	}
-
-	if !hasLength {
+	if !hasDelimiter && !readAvailable && !hasLength {
 		return ErrorResult("length is required for read (1-4096) unless read_until or read_available is set")
 	}
-	data, err := serialRead(ctx, cfg, length, timeout)
+
+	session, unlock, errResult := t.lockSession(ctx, cfg)
+	if errResult != nil {
+		return errResult
+	}
+	var handle serialHandle
+	if session != nil {
+		defer unlock()
+		handle = session.handle
+	} else {
+		openTimeout := timeout
+		if hasDelimiter || readAvailable {
+			openTimeout = min(timeout, 100*time.Millisecond)
+		}
+		handle, err = serialOpenHandle(cfg, openTimeout)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("failed to open %s: %v", cfg.Port, err))
+		}
+		defer serialCloseHandle(handle)
+	}
+
+	var data []byte
+	var extra map[string]any
+	switch {
+	case hasDelimiter:
+		data, err = serialReadUntilHandle(ctx, handle, delimiter, length, timeout)
+		extra = map[string]any{
+			"read_until": string(delimiter),
+			"matched":    bytes.HasSuffix(data, delimiter),
+		}
+	case readAvailable:
+		data, err = serialReadAvailableHandle(ctx, handle, length, timeout)
+		extra = map[string]any{"read_available": true}
+	default:
+		data, err = serialReadHandle(ctx, handle, length, timeout)
+	}
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err))
 	}
 
-	return SilentResult(formatSerialPayload("read", cfg, data, timeout, nil))
+	return SilentResult(formatSerialPayload("read", cfg, data, timeout, extra))
 }
 
 func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult {
@@ -244,7 +296,24 @@ func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult
 		return errResult
 	}
 
-	written, err := serialWrite(ctx, cfg, payload, timeout)
+	session, unlock, errResult := t.lockSession(ctx, cfg)
+	if errResult != nil {
+		return errResult
+	}
+	var handle serialHandle
+	if session != nil {
+		defer unlock()
+		handle = session.handle
+	} else {
+		opened, openErr := serialOpenHandle(cfg, timeout)
+		if openErr != nil {
+			return ErrorResult(fmt.Sprintf("failed to open %s: %v", cfg.Port, openErr))
+		}
+		handle = opened
+		defer serialCloseHandle(handle)
+	}
+
+	written, err := serialWriteHandle(ctx, handle, payload, timeout)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("serial write failed on %s: %v", cfg.Port, err))
 	}
@@ -263,7 +332,7 @@ func parseSerialConfig(args map[string]any) (serialConfig, *ToolResult) {
 		)
 	}
 
-	normalizedPort, err := normalizeSerialPort(port)
+	normalizedPort, err := serialNormalizePort(port)
 	if err != nil {
 		return serialConfig{}, ErrorResult(err.Error())
 	}

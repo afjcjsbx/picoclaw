@@ -53,7 +53,7 @@ This sends the measurement command, waits 80 ms, and reads six bytes in one tool
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
-| `action` | string | yes | `list`, `read`, or `write` |
+| `action` | string | yes | `list`, `open` (persistent session), `read`, `write`, `close`, or `sessions` |
 | `port` | string | read/write | Port path or name, for example `/dev/ttyUSB0`, `/dev/cu.usbserial-0001`, a stable `/dev/serial/by-id/...` or `/dev/serial/by-path/...` link, or `COM3` |
 | `baud` | integer | no | Baud rate. Default: `115200`. Linux supports standard termios rates up to `4000000`; macOS also accepts arbitrary rates through `IOSSIOSPEED`; Windows accepts up to `4000000` |
 | `data_bits` | integer | no | Data bits: `5`, `6`, `7`, or `8`. Default: `8` |
@@ -76,5 +76,19 @@ serial read  port="/dev/ttyUSB0" read_available=true timeout_ms=500
 ```
 
 `read_until` returns partial data with `matched: false` when the timeout expires. `read_available` stops after 50 ms with no new bytes, so it is useful for prompts and interactive consoles.
+
+### Persistent sessions
+
+Plain `read` and `write` open and close the port on every call. Some devices reset when the serial line is reopened (DTR toggling on Arduino/ESP32 boards) or need a continuous conversation (AT modems, GPS, boot consoles). Open a session to keep the port alive:
+
+```text
+serial open    port="/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A12345678-if00-port0" baud=115200
+serial read    port="/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A12345678-if00-port0" read_until="\r\n"
+serial write   port="/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A12345678-if00-port0" text="AT\r\n" confirm=true
+serial sessions
+serial close   port="/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A12345678-if00-port0"
+```
+
+Sessions are scoped to the agent conversation and close automatically after 60 seconds of inactivity, on `/clear`, when the agent stops, or when the oldest session is evicted beyond the two-session limit. The `open` settings must match later `read`/`write` calls; close and reopen to change baud or framing.
 
 All three tools return structured results (bus lists, scan tables, hex dumps) that the model can reason about directly. Write-style actions always require the explicit `confirm: true` argument; there is no configuration to disable that guard.

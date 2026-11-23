@@ -16,13 +16,27 @@ func validatePlatformSerialBaud(baud int) error {
 	return fmt.Errorf("serial is not supported on this platform")
 }
 
-func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
+type serialHandle = struct{}
+
+func serialOpenHandle(cfg serialConfig, timeout time.Duration) (serialHandle, error) {
+	return serialHandle{}, fmt.Errorf("serial is not supported on this platform")
+}
+
+func serialCloseHandle(handle serialHandle) error {
+	return fmt.Errorf("serial is not supported on this platform")
+}
+
+func serialSetHandleTimeout(handle serialHandle, timeout time.Duration) error {
+	return fmt.Errorf("serial is not supported on this platform")
+}
+
+func serialReadHandle(ctx context.Context, handle serialHandle, length int, timeout time.Duration) ([]byte, error) {
 	return nil, fmt.Errorf("serial is not supported on this platform")
 }
 
-func serialReadUntil(
+func serialReadUntilHandle(
 	ctx context.Context,
-	cfg serialConfig,
+	handle serialHandle,
 	delimiter []byte,
 	maxLength int,
 	timeout time.Duration,
@@ -30,15 +44,15 @@ func serialReadUntil(
 	return nil, fmt.Errorf("serial is not supported on this platform")
 }
 
-func serialReadAvailable(
+func serialReadAvailableHandle(
 	ctx context.Context,
-	cfg serialConfig,
+	handle serialHandle,
 	maxLength int,
 	timeout time.Duration,
 ) ([]byte, error) {
 	return nil, fmt.Errorf("serial is not supported on this platform")
 }
 
-func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
+func serialWriteHandle(ctx context.Context, handle serialHandle, data []byte, timeout time.Duration) (int, error) {
 	return 0, fmt.Errorf("serial is not supported on this platform")
 }

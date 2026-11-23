@@ -112,18 +112,25 @@ func serialListPorts() ([]serialPortInfo, error) {
 	return ports, nil
 }
 
-func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
+type serialHandle = windows.Handle
+
+func serialOpenHandle(cfg serialConfig, timeout time.Duration) (serialHandle, error) {
+	return openAndConfigureWindowsSerial(cfg, timeout)
+}
+
+func serialCloseHandle(handle serialHandle) error {
+	return windows.CloseHandle(handle)
+}
+
+func serialSetHandleTimeout(handle serialHandle, timeout time.Duration) error {
+	return serialSetWindowsTimeouts(handle, timeout)
+}
+
+func serialReadHandle(ctx context.Context, handle serialHandle, length int, timeout time.Duration) ([]byte, error) {
 	if err := serialContextErr(ctx); err != nil {
 		return nil, err
 	}
-
-	handle, err := openAndConfigureWindowsSerial(cfg, timeout)
-	if err != nil {
-		return nil, err
-	}
-	defer windows.CloseHandle(handle)
-
-	if err := serialContextErr(ctx); err != nil {
+	if err := serialSetHandleTimeout(handle, timeout); err != nil {
 		return nil, err
 	}
 
@@ -137,28 +144,28 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 	return buf[:read], nil
 }
 
-func serialReadUntil(
+func serialReadUntilHandle(
 	ctx context.Context,
-	cfg serialConfig,
+	handle serialHandle,
 	delimiter []byte,
 	maxLength int,
 	timeout time.Duration,
 ) ([]byte, error) {
-	return serialReadWindowsWithStop(ctx, cfg, maxLength, timeout, delimiter, false)
+	return serialReadHandleWithStop(ctx, handle, maxLength, timeout, delimiter, false)
 }
 
-func serialReadAvailable(
+func serialReadAvailableHandle(
 	ctx context.Context,
-	cfg serialConfig,
+	handle serialHandle,
 	maxLength int,
 	timeout time.Duration,
 ) ([]byte, error) {
-	return serialReadWindowsWithStop(ctx, cfg, maxLength, timeout, nil, true)
+	return serialReadHandleWithStop(ctx, handle, maxLength, timeout, nil, true)
 }
 
-func serialReadWindowsWithStop(
+func serialReadHandleWithStop(
 	ctx context.Context,
-	cfg serialConfig,
+	handle serialHandle,
 	maxLength int,
 	timeout time.Duration,
 	delimiter []byte,
@@ -169,11 +176,9 @@ func serialReadWindowsWithStop(
 	}
 
 	pollTimeout := min(timeout, 100*time.Millisecond)
-	handle, err := openAndConfigureWindowsSerial(cfg, pollTimeout)
-	if err != nil {
+	if err := serialSetHandleTimeout(handle, pollTimeout); err != nil {
 		return nil, err
 	}
-	defer windows.CloseHandle(handle)
 
 	buf := make([]byte, 0, min(maxLength, 256))
 	chunk := make([]byte, 256)
@@ -209,18 +214,11 @@ func serialReadWindowsWithStop(
 	return buf, nil
 }
 
-func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
+func serialWriteHandle(ctx context.Context, handle serialHandle, data []byte, timeout time.Duration) (int, error) {
 	if err := serialContextErr(ctx); err != nil {
 		return 0, err
 	}
-
-	handle, err := openAndConfigureWindowsSerial(cfg, timeout)
-	if err != nil {
-		return 0, err
-	}
-	defer windows.CloseHandle(handle)
-
-	if err := serialContextErr(ctx); err != nil {
+	if err := serialSetHandleTimeout(handle, timeout); err != nil {
 		return 0, err
 	}
 

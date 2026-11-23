@@ -62,16 +62,24 @@ func serialListPorts() ([]serialPortInfo, error) {
 	return ports, nil
 }
 
-func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
+type serialHandle = int
+
+func serialOpenHandle(cfg serialConfig, timeout time.Duration) (serialHandle, error) {
+	return unixSerialOpenPort(cfg)
+}
+
+func serialCloseHandle(handle serialHandle) error {
+	return unixSerialClosePort(handle)
+}
+
+func serialSetHandleTimeout(handle serialHandle, timeout time.Duration) error {
+	return nil
+}
+
+func serialReadHandle(ctx context.Context, handle serialHandle, length int, timeout time.Duration) ([]byte, error) {
 	if err := serialContextErr(ctx); err != nil {
 		return nil, err
 	}
-
-	fd, err := unixSerialOpenPort(cfg)
-	if err != nil {
-		return nil, err
-	}
-	defer unixSerialClosePort(fd)
 
 	buf := make([]byte, length)
 	total := 0
@@ -87,7 +95,7 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 			break
 		}
 
-		n, err := unixSerialPollRead(fd, buf[total:], minSerialPollTimeout(remaining))
+		n, err := unixSerialPollRead(handle, buf[total:], minSerialPollTimeout(remaining))
 		if err != nil {
 			return nil, err
 		}
@@ -100,31 +108,31 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 	return buf[:total], nil
 }
 
-// serialReadUntil reads one byte at a time so it never consumes data past the
-// delimiter. A strace-level inefficiency is preferable to losing the next
-// NMEA/AT line.
-func serialReadUntil(
+// serialReadUntilHandle reads one byte at a time so it never consumes data
+// past the delimiter. A strace-level inefficiency is preferable to losing the
+// next NMEA/AT line.
+func serialReadUntilHandle(
 	ctx context.Context,
-	cfg serialConfig,
+	handle serialHandle,
 	delimiter []byte,
 	maxLength int,
 	timeout time.Duration,
 ) ([]byte, error) {
-	return serialReadWithStop(ctx, cfg, maxLength, timeout, delimiter, false)
+	return serialReadHandleWithStop(ctx, handle, maxLength, timeout, delimiter, false)
 }
 
-func serialReadAvailable(
+func serialReadAvailableHandle(
 	ctx context.Context,
-	cfg serialConfig,
+	handle serialHandle,
 	maxLength int,
 	timeout time.Duration,
 ) ([]byte, error) {
-	return serialReadWithStop(ctx, cfg, maxLength, timeout, nil, true)
+	return serialReadHandleWithStop(ctx, handle, maxLength, timeout, nil, true)
 }
 
-func serialReadWithStop(
+func serialReadHandleWithStop(
 	ctx context.Context,
-	cfg serialConfig,
+	handle serialHandle,
 	maxLength int,
 	timeout time.Duration,
 	delimiter []byte,
@@ -133,12 +141,6 @@ func serialReadWithStop(
 	if err := serialContextErr(ctx); err != nil {
 		return nil, err
 	}
-
-	fd, err := unixSerialOpenPort(cfg)
-	if err != nil {
-		return nil, err
-	}
-	defer unixSerialClosePort(fd)
 
 	buf := make([]byte, 0, min(maxLength, 256))
 	chunk := make([]byte, 256)
@@ -159,7 +161,7 @@ func serialReadWithStop(
 		if idleStop && len(buf) > 0 {
 			pollTimeout = min(remaining, 50*time.Millisecond)
 		}
-		n, err := unixSerialPollRead(fd, chunk, pollTimeout)
+		n, err := unixSerialPollRead(handle, chunk, pollTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -178,16 +180,10 @@ func serialReadWithStop(
 	return buf, nil
 }
 
-func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
+func serialWriteHandle(ctx context.Context, handle serialHandle, data []byte, timeout time.Duration) (int, error) {
 	if err := serialContextErr(ctx); err != nil {
 		return 0, err
 	}
-
-	fd, err := unixSerialOpenPort(cfg)
-	if err != nil {
-		return 0, err
-	}
-	defer unixSerialClosePort(fd)
 
 	total := 0
 	deadline := unixSerialNow().Add(timeout)
@@ -201,7 +197,7 @@ func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout tim
 			return total, fmt.Errorf("timeout while writing serial data")
 		}
 
-		n, err := unixSerialPollWrite(fd, data[total:], minSerialPollTimeout(remaining))
+		n, err := unixSerialPollWrite(handle, data[total:], minSerialPollTimeout(remaining))
 		if err != nil {
 			return total, err
 		}
