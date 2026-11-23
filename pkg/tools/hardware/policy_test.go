@@ -94,6 +94,25 @@ func TestNewSPIWritePolicyNormalizesDevices(t *testing.T) {
 	}
 }
 
+func TestSerialPolicyNormalizesAllowlistAtCheckTime(t *testing.T) {
+	previous := serialNormalizePort
+	serialNormalizePort = func(port string) (string, error) {
+		if port == "usb-adapter" {
+			return "/dev/ttyUSB0", nil
+		}
+		return port, nil
+	}
+	defer func() { serialNormalizePort = previous }()
+
+	policy := NewSerialWritePolicy(true, []string{"usb-adapter"}, false, 30)
+	if len(policy.Allow) != 1 || policy.Allow[0] != "usb-adapter" {
+		t.Fatalf("allowlist = %#v, want the raw entry", policy.Allow)
+	}
+	if result := policy.checkTarget("/dev/ttyUSB0"); result != nil {
+		t.Fatalf("checkTarget() = %v", result.ForLLM)
+	}
+}
+
 func TestSerialWriteIsReadOnlyByDefault(t *testing.T) {
 	t.Parallel()
 

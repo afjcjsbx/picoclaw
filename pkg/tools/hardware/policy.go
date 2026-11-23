@@ -56,14 +56,12 @@ func NewSPIWritePolicy(allowWrite bool, allow []string, dryRun bool, maxPerMinut
 }
 
 func NewSerialWritePolicy(allowWrite bool, allow []string, dryRun bool, maxPerMinute int) *WritePolicy {
+	// Keep serial entries raw: a /dev/serial/by-id link may not resolve until
+	// the adapter is plugged in after startup. The lookup normalizes both
+	// sides on every check.
 	normalized := make([]string, 0, len(allow))
 	for _, entry := range allow {
-		port, err := serialNormalizePort(entry)
-		if err != nil {
-			normalized = append(normalized, strings.TrimSpace(entry))
-			continue
-		}
-		normalized = append(normalized, port)
+		normalized = append(normalized, strings.TrimSpace(entry))
 	}
 	return NewWritePolicy("serial", allowWrite, normalized, dryRun, maxPerMinute)
 }
@@ -81,7 +79,13 @@ func (p *WritePolicy) allowsTarget(target string) bool {
 		return true
 	}
 	for _, allowed := range p.Allow {
-		if allowed == target {
+		candidate := allowed
+		if p.Tool == "serial" {
+			if normalized, err := serialNormalizePort(allowed); err == nil {
+				candidate = normalized
+			}
+		}
+		if candidate == target {
 			return true
 		}
 	}
