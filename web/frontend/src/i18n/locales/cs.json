@@ -145,11 +145,13 @@
     "messagesCount": "{{count}} zpráv",
     "usage": {
       "summary": "{{input}} vstup · {{output}} výstup",
+      "throughputValue": "{{rate}} tok/s",
       "costValue": "{{cost}}",
       "estimatedCostValue": "~{{cost}}",
       "input": "Vstupní tokeny",
       "inputTurnTotal": "Vstupní tokeny celkem",
       "output": "Výstupní tokeny",
+      "throughput": "Rychlost generování",
       "requests": "Počet volání modelu",
       "contextTokens": "Kontext posledního volání",
       "total": "Celkem tokenů",

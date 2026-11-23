@@ -1118,6 +1118,7 @@ func addCallUsage(dst, call *providers.UsageInfo) {
 	dst.CacheReadTokens += call.CacheReadTokens
 	dst.CacheCreationTokens += call.CacheCreationTokens
 	dst.CostUSD += call.CostUSD
+	dst.DurationMS += call.DurationMS
 	dst.Requests++
 }
 
