@@ -95,7 +95,7 @@ func (r *registry) submit(
 	switch {
 	case r.byChat[chat] != nil:
 		return nil, false, errCtxBusy
-	case len(r.byChat) >= maxActive:
+	case len(r.byChat) >= maxActive: // global on purpose: all principals share one agent
 		return nil, false, errBusy
 	case len(r.tasks) >= r.max && !r.evictOldestTerminal():
 		return nil, false, errFull

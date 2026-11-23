@@ -57,7 +57,7 @@ Each token is a separate **principal**: it can only see, list, cancel and subscr
 | `max_body_bytes` | 1 MiB | Request body cap |
 | `rate_limit_per_minute` | 60 | Per-IP budget on `/a2a` |
 | `max_tasks` | 256 | Tasks kept in RAM |
-| `max_concurrent` | 4 | Tasks running at once; more get HTTP 503 |
+| `max_concurrent` | 4 | Tasks running at once, shared by all tokens (the agent is one resource); more get HTTP 503 |
 | `task_timeout_seconds` | 300 | Deadline per task |
 | `streaming.enabled` | false | Token deltas on streams (also needs `streaming.enabled` on the model) |
 

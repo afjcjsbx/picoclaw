@@ -27,7 +27,7 @@ type A2ASettings struct {
 	RateLimitPerMinute int `json:"rate_limit_per_minute,omitempty" yaml:"-"`
 	// MaxTasks caps tasks kept in RAM (default 256).
 	MaxTasks int `json:"max_tasks,omitempty" yaml:"-"`
-	// MaxConcurrent caps tasks running at once (default 4).
+	// MaxConcurrent caps tasks running at once across all tokens (default 4).
 	MaxConcurrent int `json:"max_concurrent,omitempty" yaml:"-"`
 	// TaskTimeoutSeconds is the deadline of a single task (default 300).
 	TaskTimeoutSeconds int `json:"task_timeout_seconds,omitempty" yaml:"-"`
