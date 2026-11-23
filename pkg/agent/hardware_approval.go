@@ -32,14 +32,14 @@ func (h *hardwareWriteApprovalHook) ApproveTool(
 	if h == nil || h.agent == nil || req == nil {
 		return ApprovalDecision{Approved: true}, nil
 	}
-	cfg := h.agent.GetConfig()
-	if cfg == nil {
-		return ApprovalDecision{Reason: "configuration is unavailable"}, nil
-	}
-
 	write, ok := hardwaretools.DescribeWrite(req.Tool, req.Arguments)
 	if !ok {
 		return ApprovalDecision{Approved: true}, nil
+	}
+
+	cfg := h.agent.GetConfig()
+	if cfg == nil {
+		return ApprovalDecision{Reason: "configuration is unavailable"}, nil
 	}
 
 	var allowWrite bool

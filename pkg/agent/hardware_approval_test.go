@@ -139,6 +139,22 @@ func TestHardwareWriteApprovalBypassesReadOnlyAndDisabled(t *testing.T) {
 	}
 }
 
+func TestHardwareApprovalIgnoresNonHardwareToolsWithoutConfig(t *testing.T) {
+	t.Parallel()
+
+	hook := &hardwareWriteApprovalHook{agent: &AgentLoop{}}
+	decision, err := hook.ApproveTool(context.Background(), &ToolApprovalRequest{
+		Tool:      "read_file",
+		Arguments: map[string]any{"path": "x"},
+	})
+	if err != nil {
+		t.Fatalf("ApproveTool() error = %v", err)
+	}
+	if !decision.Approved {
+		t.Fatalf("non-hardware tool denied: %s", decision.Reason)
+	}
+}
+
 func TestHardwareApprovalIgnoresReads(t *testing.T) {
 	t.Parallel()
 
