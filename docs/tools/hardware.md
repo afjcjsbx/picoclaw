@@ -105,7 +105,7 @@ spi transfer  device="2.0" speed=1000000 segments=[
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
 | `action` | string | yes | `list`, `open` (persistent session), `read`, `write`, `close`, or `sessions` |
-| `port` | string | read/write | Port path or name, for example `/dev/ttyUSB0`, `/dev/cu.usbserial-0001`, a stable `/dev/serial/by-id/...` or `/dev/serial/by-path/...` link, or `COM3` |
+| `port` | string | open/read/write/close | Port path or name, for example `/dev/ttyUSB0`, `/dev/cu.usbserial-0001`, a stable `/dev/serial/by-id/...` or `/dev/serial/by-path/...` link, or `COM3` |
 | `baud` | integer | no | Baud rate. Default: `115200`. Linux supports standard termios rates up to `4000000`; macOS also accepts arbitrary rates through `IOSSIOSPEED`; Windows accepts up to `4000000` |
 | `data_bits` | integer | no | Data bits: `5`, `6`, `7`, or `8`. Default: `8` |
 | `parity` | string | no | `none`, `even`, or `odd`. Default: `none` |
@@ -147,4 +147,4 @@ Sessions are scoped to the agent conversation and close automatically after 60 s
 
 RS-485 direction control is Linux-only and driver-dependent. `rs485: true` asks the kernel to toggle RTS around each write; USB-RS485 adapters that switch direction in hardware usually work without it, while native UARTs may additionally need the right RTS polarity in the device tree. `rs485_delay_*` inserts the kernel's before/after-send delays.
 
-All three tools return structured results (bus lists, scan tables, hex dumps) that the model can reason about directly. Write-style actions always require the explicit `confirm: true` argument; there is no configuration to disable that guard.
+All three tools return structured results (bus lists, scan tables, hex dumps) that the model can reason about directly. Write-style actions also require the explicit `confirm: true` argument; the `allow_write`, allowlist, and approval gates above are the security boundary.
