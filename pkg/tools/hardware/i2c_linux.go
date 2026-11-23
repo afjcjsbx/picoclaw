@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"syscall"
 	"time"
@@ -120,8 +121,14 @@ func i2cWriteBytes(fd, addr int, data []byte) error {
 	if err := i2cSetSlave(fd, addr); err != nil {
 		return err
 	}
-	_, err = syscall.Write(fd, data)
-	return err
+	written, err := syscall.Write(fd, data)
+	if err != nil {
+		return err
+	}
+	if written != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func i2cReadBytes(fd, addr, length int) ([]byte, error) {
