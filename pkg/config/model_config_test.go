@@ -436,3 +436,38 @@ func TestModelConfig_Validate_RejectsNegativeSampling(t *testing.T) {
 		}
 	}
 }
+
+func TestAuxiliaryModels_ConfigShape(t *testing.T) {
+	var d AgentDefaults
+	if err := json.Unmarshal([]byte(`{"image_model":"legacy"}`), &d); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := d.GetImageModel(); got != "legacy" {
+		t.Errorf("GetImageModel() without auxiliary = %q, want the legacy image_model", got)
+	}
+	data, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if strings.Contains(string(data), `"auxiliary"`) {
+		t.Errorf("unset auxiliary must not be serialized: %s", data)
+	}
+
+	if err = json.Unmarshal([]byte(`{"auxiliary":{"vision":"v","compaction":"c"}}`), &d); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := d.GetImageModel(); got != "v" {
+		t.Errorf("GetImageModel() = %q, want auxiliary.vision to win over image_model", got)
+	}
+	if d.Auxiliary.Compaction != "c" {
+		t.Errorf("auxiliary.compaction = %q, want c", d.Auxiliary.Compaction)
+	}
+}
+
+func TestAuxiliaryModels_RejectsUnknownSlot(t *testing.T) {
+	data := []byte(`{"agents":{"defaults":{"auxiliary":{"compation":"typo"}}}}`)
+	err := decodeJSONWithDiagnostics(data, &Config{}, "config")
+	if err == nil || !strings.Contains(err.Error(), "compation") {
+		t.Fatalf("decode error = %v, want the misspelled slot reported", err)
+	}
+}

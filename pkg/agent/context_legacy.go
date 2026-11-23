@@ -922,7 +922,17 @@ func (m *legacyContextManager) retryLLMCall(
 	var resp *providers.LLMResponse
 	var err error
 	// The provider wants the model ID, not the model_list alias agent.Model holds.
-	model := resolvedCandidateModel(agent.Candidates, agent.Model)
+	target := agent.compactionTarget(m.al.cfg)
+	maxTokens := agent.MaxTokens
+	if m.al.cfg != nil {
+		maxTokens = target.maxTokens(&m.al.cfg.Agents.Defaults, maxTokens)
+	}
+	opts := map[string]any{
+		"max_tokens":       maxTokens,
+		"temperature":      llmTemperature,
+		"prompt_cache_key": agent.ID,
+	}
+	target.applyThinking(opts, agent.ID)
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		m.al.activeRequestsInc()
@@ -930,15 +940,11 @@ func (m *legacyContextManager) retryLLMCall(
 			defer m.al.activeRequestsDec()
 			return chatRetryingTransient(
 				ctx,
-				agent.Provider,
+				target.provider,
 				[]providers.Message{{Role: "user", Content: prompt}},
 				nil,
-				model,
-				map[string]any{
-					"max_tokens":       agent.MaxTokens,
-					"temperature":      llmTemperature,
-					"prompt_cache_key": agent.ID,
-				},
+				target.model,
+				opts,
 				llmRetryFromConfig(m.al.cfg),
 			)
 		}()

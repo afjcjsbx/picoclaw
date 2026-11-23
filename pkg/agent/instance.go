@@ -55,6 +55,9 @@ type AgentInstance struct {
 	MCPServerAllowlist      map[string]struct{}
 	Candidates              []providers.FallbackCandidate
 	ImageCandidates         []providers.FallbackCandidate
+	// CompactionCandidates is the resolved auxiliary.compaction model; empty
+	// means summarization runs on the agent's own model.
+	CompactionCandidates []providers.FallbackCandidate
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -304,7 +307,7 @@ func NewAgentInstance(
 	imageCandidates := resolveModelCandidates(
 		cfg,
 		defaults.Provider,
-		defaults.ImageModel,
+		defaults.GetImageModel(),
 		defaults.ImageModelFallbacks,
 	)
 
@@ -320,7 +323,7 @@ func NewAgentInstance(
 		)
 		populateCandidateProvidersFromCandidates(cfg, workspace, candidates[1:], candidateProviders)
 	}
-	if strings.TrimSpace(defaults.ImageModel) != "" {
+	if strings.TrimSpace(defaults.GetImageModel()) != "" {
 		if len(candidates) > 0 {
 			inheritPrimaryProviderForCandidates(
 				cfg,
@@ -333,6 +336,11 @@ func NewAgentInstance(
 		}
 		populateCandidateProvidersFromCandidates(cfg, workspace, imageCandidates, candidateProviders)
 	}
+
+	compactionCandidates := resolveAuxiliaryCandidates(
+		cfg, defaults, "compaction", defaults.Auxiliary.Compaction, workspace,
+		candidates, provider, candidateProviders,
+	)
 
 	// Model routing setup: pre-resolve light model candidates at creation time
 	// to avoid repeated model_list lookups on every incoming message.
@@ -404,6 +412,7 @@ func NewAgentInstance(
 		MCPServerAllowlist:      agentMCPServerAllowlist,
 		Candidates:              candidates,
 		ImageCandidates:         imageCandidates,
+		CompactionCandidates:    compactionCandidates,
 		Router:                  router,
 		LightCandidates:         lightCandidates,
 		LightProvider:           lightProvider,

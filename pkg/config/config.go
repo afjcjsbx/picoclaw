@@ -682,6 +682,7 @@ type AgentDefaults struct {
 	ModelFallbacks            []string            `json:"model_fallbacks,omitempty"`
 	ImageModel                string              `json:"image_model,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string            `json:"image_model_fallbacks,omitempty"`
+	Auxiliary                 AuxiliaryModels     `json:"auxiliary,omitzero"`
 	MaxTokens                 int                 `json:"max_tokens"                           env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
 	ContextWindow             int                 `json:"context_window,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64            `json:"temperature,omitempty"                env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
@@ -716,6 +717,27 @@ type AgentDefaults struct {
 	// serialized so an explicit false or empty list survives save and reload.
 	LLMRetryOnEmptyContent  bool     `json:"llm_retry_on_empty_content"  env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_EMPTY_CONTENT"`
 	LLMRetryOnFinishReasons []string `json:"llm_retry_on_finish_reasons" env:"PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_ON_FINISH_REASONS"`
+}
+
+// AuxiliaryModels sends background LLM work to a dedicated model_list entry
+// instead of the agent's own model. Each slot holds a model_name; empty keeps
+// the agent's own model. The entry's own settings (api_base, request_timeout,
+// extra_body, thinking_level, max_tokens, ...) apply to that work.
+type AuxiliaryModels struct {
+	// Compaction summarizes old conversation history when the context is compacted.
+	Compaction string `json:"compaction,omitempty"`
+	// Vision handles turns that carry images. It takes precedence over
+	// agents.defaults.image_model, which keeps working when this is empty.
+	Vision string `json:"vision,omitempty"`
+}
+
+// GetImageModel returns the model that handles image turns: auxiliary.vision,
+// else the legacy image_model.
+func (d *AgentDefaults) GetImageModel() string {
+	if v := strings.TrimSpace(d.Auxiliary.Vision); v != "" {
+		return v
+	}
+	return d.ImageModel
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
