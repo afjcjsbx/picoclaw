@@ -37,7 +37,7 @@ Enabling a hardware tool does **not** enable writes. Reads, discovery, and `dete
 
 | Setting | Default | Effect |
 |---------|---------|--------|
-| `tools.<tool>.allow_write` | `false` | Must be `true` before `i2c write`, `spi transfer`, or `serial write` can run |
+| `tools.<tool>.allow_write` | `false` | Must be `true`, and `allow` must list the target, before `i2c write`, `spi transfer`, or `serial write` can run |
 | `tools.<tool>.allow` | `[]` | Device allowlist. I2C entries are `bus:address` (`"1:0x76"`), SPI entries are `dev` (`"2.0"`), serial entries are port paths (`"/dev/ttyUSB0"`, a resolved `/dev/serial/by-id/...`, or `COM3`). An empty list allows reads on any valid device but never allows writes; a non-empty list restricts both reads and writes to the listed devices |
 | `tools.hardware.require_approval` | `true` | Sends an approval prompt to the originating user before each write. A headless or automated sender has no interactive user, so the write is denied |
 | `tools.hardware.approval_timeout_seconds` | `300` | How long the approval prompt waits before denying |

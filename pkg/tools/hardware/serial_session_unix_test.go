@@ -65,7 +65,7 @@ func TestSerialSessionLifecycle(t *testing.T) {
 
 	pair := openPTYPair(t)
 	tool := NewSerialTool(SerialOptions{
-		Policy: NewSerialWritePolicy(true, nil, false, 0),
+		Policy: NewSerialWritePolicy(true, []string{pair.slave.Name()}, false, 0),
 	})
 	tool.sessionTTL = 2 * time.Second
 	t.Cleanup(tool.CloseAll)

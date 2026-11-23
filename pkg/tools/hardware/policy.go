@@ -164,6 +164,12 @@ func (p *WritePolicy) checkWrite(target string, now time.Time) *ToolResult {
 			p.Tool, p.allowHint(), p.listHint(),
 		))
 	}
+	if len(p.Allow) == 0 {
+		return ErrorResult(fmt.Sprintf(
+			"writes require an explicit device allowlist; add the target to %s and keep %s=true",
+			p.listHint(), p.allowHint(),
+		))
+	}
 	ok, retry := p.rateLimit(now)
 	if !ok {
 		return ErrorResult(fmt.Sprintf(

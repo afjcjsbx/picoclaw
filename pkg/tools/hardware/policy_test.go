@@ -46,7 +46,7 @@ func TestWritePolicyReadOnlyAndAllowlist(t *testing.T) {
 func TestWritePolicyRateLimit(t *testing.T) {
 	t.Parallel()
 
-	policy := NewWritePolicy("spi", true, nil, false, 2)
+	policy := NewWritePolicy("spi", true, []string{"2.0"}, false, 2)
 	now := time.Now()
 	if result := policy.checkWrite("2.0", now); result != nil {
 		t.Fatalf("first write denied: %s", result.ForLLM)
@@ -66,12 +66,22 @@ func TestWritePolicyRateLimit(t *testing.T) {
 func TestWritePolicyUnlimitedRate(t *testing.T) {
 	t.Parallel()
 
-	policy := NewWritePolicy("spi", true, nil, false, -1)
+	policy := NewWritePolicy("spi", true, []string{"2.0"}, false, -1)
 	now := time.Now()
 	for i := 0; i < 100; i++ {
 		if result := policy.checkWrite("2.0", now); result != nil {
 			t.Fatalf("write %d denied: %s", i, result.ForLLM)
 		}
+	}
+}
+
+func TestWritePolicyRequiresExplicitAllowlist(t *testing.T) {
+	t.Parallel()
+
+	policy := NewWritePolicy("spi", true, nil, false, 30)
+	result := policy.checkWrite("2.0", time.Now())
+	if result == nil || !strings.Contains(result.ForLLM, "explicit device allowlist") {
+		t.Fatalf("write with empty allowlist = %#v, want a denial", result)
 	}
 }
 

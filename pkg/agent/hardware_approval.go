@@ -60,7 +60,7 @@ func (h *hardwareWriteApprovalHook) ApproveTool(
 
 	// The tool itself will return a precise write-disabled or allowlist error;
 	// prompting first would only ask the user to approve a call that cannot run.
-	if !allowWrite || cfg.Tools.Hardware.DryRun {
+	if !allowWrite || len(allow) == 0 || cfg.Tools.Hardware.DryRun {
 		return ApprovalDecision{Approved: true}, nil
 	}
 	if !cfg.Tools.Hardware.GetRequireApproval() {
