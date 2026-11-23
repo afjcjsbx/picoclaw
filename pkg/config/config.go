@@ -51,6 +51,8 @@ type Config struct {
 	Power     PowerConfig     `json:"power,omitzero"      yaml:"-"`
 	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
+	// A2AAgents are remote A2A agents the a2a_* tools can call.
+	A2AAgents A2AAgents `json:"a2a_agents,omitempty" yaml:"a2a_agents,omitempty"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
 
