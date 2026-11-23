@@ -41,13 +41,16 @@ description: "当前项目已有的硬件相关能力主要分为两条线：因
 
 ## Serial Tool 设计
 
-`serial` 采用无状态调用模型，每次请求都自行打开和关闭端口，避免在 agent 回合之间维护串口会话状态。
+`serial` 默认采用无状态调用模型，每次 `read`/`write` 自行打开和关闭端口；需要跨调用保持端口时，使用显式的 `open`/`close` 持久会话。会话按 agent + conversation 隔离，空闲 `60s`（可配置）后自动关闭，`/clear` 和 agent 退出时也会关闭。
 
 支持动作：
 
 - `list`：枚举主机串口
-- `read`：从串口读取指定长度字节
+- `open`：打开持久会话
+- `read`：读取指定长度、读到分隔符（`read_until`）、或读取当前可用数据（`read_available`）
 - `write`：向串口写入字节或文本
+- `close`：关闭持久会话
+- `sessions`：列出当前会话
 
 公共参数：
 
@@ -56,7 +59,9 @@ description: "当前项目已有的硬件相关能力主要分为两条线：因
 - `data_bits`
 - `parity`
 - `stop_bits`
+- `flow_control`：`none`、`rtscts`、`xonxoff`
 - `timeout_ms`
+- `rs485` / `rs485_delay_before_ms` / `rs485_delay_after_ms`（仅 Linux）
 
 当前波特率实现边界：
 
@@ -67,7 +72,10 @@ description: "当前项目已有的硬件相关能力主要分为两条线：因
 
 安全约束：
 
-- `write` 必须显式传 `confirm: true`
+- `write` 必须显式传 `confirm: true`，并设置 `tools.serial.allow_write=true`
+- 默认所有硬件写入是只读的；设备还必须在 `tools.serial.allow` 中列出
+- 写入会经过 `tools.hardware.require_approval` 的人类审批；无交互用户时 fail-closed
+- 支持每分钟写入次数限制和 `tools.hardware.dry_run` 预演
 - 单次读写负载限制为 `4096` 字节
 - `port` 只接受白名单串口名：
   - Linux / macOS 仅允许 `/dev/tty*`、`/dev/cu.*` 及对应简写设备名
