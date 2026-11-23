@@ -13,10 +13,23 @@ import (
 // TestConfigureUnixSerialPortAppliesBaudToCflag pins the Linux termios
 // contract: the driver reads the line rate from c_cflag & CBAUD, so setting
 // only c_ispeed/c_ospeed would silently leave the port at B0 or 9600.
+func TestValidatePlatformSerialBaudLinux(t *testing.T) {
+	t.Parallel()
+
+	for _, baud := range []int{9600, 115200, 460800, 921600, 4000000} {
+		if err := validatePlatformSerialBaud(baud); err != nil {
+			t.Fatalf("validatePlatformSerialBaud(%d) error = %v", baud, err)
+		}
+	}
+	if err := validatePlatformSerialBaud(123456); err == nil {
+		t.Fatal("validatePlatformSerialBaud(123456) accepted a non-standard Linux rate")
+	}
+}
+
 func TestConfigureUnixSerialPortAppliesBaudToCflag(t *testing.T) {
 	t.Parallel()
 
-	for _, baud := range []int{9600, 115200, 230400} {
+	for _, baud := range []int{9600, 115200, 230400, 460800, 921600} {
 		t.Run(strconv.Itoa(baud), func(t *testing.T) {
 			ptmx, tty, err := pty.Open()
 			if err != nil {
@@ -41,9 +54,9 @@ func TestConfigureUnixSerialPortAppliesBaudToCflag(t *testing.T) {
 			if err != nil {
 				t.Fatalf("TCGETS error = %v", err)
 			}
-			want, err := serialBaudToUnix(baud)
-			if err != nil {
-				t.Fatalf("serialBaudToUnix(%d) error = %v", baud, err)
+			want, ok := linuxSerialBaud(baud)
+			if !ok {
+				t.Fatalf("linuxSerialBaud(%d) is unsupported", baud)
 			}
 			if got := tio.Cflag & unix.CBAUD; got != want&unix.CBAUD {
 				t.Fatalf("c_cflag CBAUD = %#x, want %#x", got, want&unix.CBAUD)

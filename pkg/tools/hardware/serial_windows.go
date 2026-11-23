@@ -64,6 +64,10 @@ type commTimeouts struct {
 	WriteTotalTimeoutConstant   uint32
 }
 
+func validatePlatformSerialBaud(baud int) error {
+	return nil
+}
+
 func serialListPorts() ([]serialPortInfo, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DEVICEMAP\SERIALCOMM`, registry.QUERY_VALUE)
 	if err != nil {

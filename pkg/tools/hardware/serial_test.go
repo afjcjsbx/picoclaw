@@ -93,17 +93,36 @@ func TestParseSerialConfigRejectsInvalidParity(t *testing.T) {
 	}
 }
 
-func TestParseSerialConfigRejectsUnsupportedUnixBaud(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		t.Skip("Unix baud validation only applies on Unix platforms")
+func TestParseSerialConfigRejectsUnsupportedLinuxBaud(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("only Linux has a fixed standard termios rate table")
 	}
 
 	_, errResult := parseSerialConfig(map[string]any{
 		"port": "/dev/ttyUSB0",
-		"baud": float64(460800),
+		"baud": float64(123456),
 	})
 	if errResult == nil {
-		t.Fatal("expected unsupported Unix baud rate to fail")
+		t.Fatal("expected unsupported Linux baud rate to fail")
+	}
+}
+
+func TestParseSerialConfigAcceptsHighBaud(t *testing.T) {
+	port := "/dev/ttyUSB0"
+	if runtime.GOOS == "windows" {
+		port = "COM3"
+	}
+	for _, baud := range []int{460800, 921600} {
+		cfg, errResult := parseSerialConfig(map[string]any{
+			"port": port,
+			"baud": float64(baud),
+		})
+		if errResult != nil {
+			t.Fatalf("parseSerialConfig(%d) error = %v", baud, errResult.ForLLM)
+		}
+		if cfg.Baud != baud {
+			t.Fatalf("parseSerialConfig(%d) baud = %d", baud, cfg.Baud)
+		}
 	}
 }
 
@@ -116,6 +135,15 @@ func TestParseSerialWritePayloadRejectsFractionalBytes(t *testing.T) {
 	}
 }
 
+func TestValidatePlatformSerialBaudAcceptsArbitraryOnDarwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("IOSSIOSPEED is a macOS feature")
+	}
+	if err := validatePlatformSerialBaud(123456); err != nil {
+		t.Fatalf("validatePlatformSerialBaud(123456) error = %v", err)
+	}
+}
+
 func TestValidateSerialBaud(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -123,7 +151,9 @@ func TestValidateSerialBaud(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "default-supported", baud: 115200},
-		{name: "max-unix-supported", baud: 230400},
+		{name: "standard-high", baud: 230400},
+		{name: "common-high", baud: 460800},
+		{name: "fast-high", baud: 921600},
 		{name: "too-low", baud: 49, wantErr: true},
 		{name: "too-high", baud: 4000001, wantErr: true},
 	}

@@ -196,15 +196,13 @@ func configureUnixSerialPort(fd int, cfg serialConfig) error {
 		tio.Cflag |= unix.CSTOPB
 	}
 
-	speed, err := serialBaudToUnix(cfg.Baud)
-	if err != nil {
+	if err := serialSetSpeed(tio, cfg.Baud); err != nil {
 		return err
 	}
-	if err := serialSetSpeed(tio, speed); err != nil {
+	if err := serialSetTermios(fd, tio); err != nil {
 		return err
 	}
-
-	return serialSetTermios(fd, tio)
+	return serialApplyBaud(fd, cfg.Baud)
 }
 
 func serialBaudToUnix(baud int) (uint32, error) {

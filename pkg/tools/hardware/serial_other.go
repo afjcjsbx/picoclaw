@@ -12,6 +12,10 @@ func serialListPorts() ([]serialPortInfo, error) {
 	return nil, fmt.Errorf("serial is not supported on this platform")
 }
 
+func validatePlatformSerialBaud(baud int) error {
+	return fmt.Errorf("serial is not supported on this platform")
+}
+
 func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
 	return nil, fmt.Errorf("serial is not supported on this platform")
 }

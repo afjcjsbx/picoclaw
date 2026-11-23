@@ -27,10 +27,6 @@ var (
 		`^(?:/dev/)?(?:ttyS\d+|ttyUSB\d+|ttyACM\d+|ttyAMA\d+|rfcomm\d+|tty\.[A-Za-z0-9._-]+|cu\.[A-Za-z0-9._-]+)$`,
 	)
 	windowsSerialPortPattern = regexp.MustCompile(`^(?:\\\\\.\\)?COM[1-9]\d*$`)
-	unixSerialBaudRates      = map[int]struct{}{
-		50: {}, 75: {}, 110: {}, 134: {}, 150: {}, 200: {}, 300: {}, 600: {}, 1200: {}, 1800: {},
-		2400: {}, 4800: {}, 9600: {}, 19200: {}, 38400: {}, 57600: {}, 115200: {}, 230400: {},
-	}
 )
 
 type SerialTool struct{}
@@ -76,7 +72,7 @@ func (t *SerialTool) Parameters() map[string]any {
 			},
 			"baud": map[string]any{
 				"type":        "integer",
-				"description": "Baud rate. Default: 115200. Linux/macOS currently support standard termios rates up to 230400; Windows accepts configured rates up to 4000000.",
+				"description": "Baud rate. Default: 115200. Linux supports standard termios rates up to 4000000; macOS supports standard rates plus arbitrary rates through IOSSIOSPEED; Windows accepts rates up to 4000000.",
 			},
 			"data_bits": map[string]any{
 				"type":        "integer",
@@ -426,15 +422,7 @@ func validateSerialBaud(baud int) error {
 	if baud < 50 || baud > 4000000 {
 		return fmt.Errorf("baud must be between 50 and 4000000")
 	}
-
-	switch runtime.GOOS {
-	case "linux", "darwin":
-		if _, ok := unixSerialBaudRates[baud]; !ok {
-			return fmt.Errorf("unsupported baud rate on this platform: %d (supported up to 230400)", baud)
-		}
-	}
-
-	return nil
+	return validatePlatformSerialBaud(baud)
 }
 
 func serialContextErr(ctx context.Context) error {
