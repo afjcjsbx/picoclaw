@@ -323,7 +323,11 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	if finalMessage.Usage == nil {
 		t.Fatal("expected final message usage to be persisted")
 	}
-	if got, want := *finalMessage.Usage, (providers.UsageInfo{
+	// The provider call is timed at runtime; zero the measurement so this test
+	// asserts the aggregated counters without depending on wall-clock time.
+	gotUsage := *finalMessage.Usage
+	gotUsage.DurationMS = 0
+	if got, want := gotUsage, (providers.UsageInfo{
 		PromptTokens:     120 + 200,
 		CompletionTokens: 30 + 50,
 		TotalTokens:      150 + 250,

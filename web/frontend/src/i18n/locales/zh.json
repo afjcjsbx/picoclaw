@@ -111,11 +111,13 @@
     "messagesCount": "{{count}} 条消息",
     "usage": {
       "summary": "输入 {{input}} · 输出 {{output}}",
+      "throughputValue": "{{rate}} tok/s",
       "costValue": "{{cost}}",
       "estimatedCostValue": "~{{cost}}",
       "input": "输入 tokens",
       "inputTurnTotal": "输入 tokens（本回合总计）",
       "output": "输出 tokens",
+      "throughput": "生成速度",
       "requests": "模型调用次数",
       "contextTokens": "末次调用上下文",
       "total": "总 tokens",

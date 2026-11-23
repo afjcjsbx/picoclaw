@@ -145,11 +145,13 @@
     "messagesCount": "{{count}} messages",
     "usage": {
       "summary": "{{input}} in · {{output}} out",
+      "throughputValue": "{{rate}} tok/s",
       "costValue": "{{cost}}",
       "estimatedCostValue": "~{{cost}}",
       "input": "Input tokens",
       "inputTurnTotal": "Input (turn total)",
       "output": "Output tokens",
+      "throughput": "Generation speed",
       "requests": "Model calls",
       "contextTokens": "Last call context",
       "total": "Total tokens",

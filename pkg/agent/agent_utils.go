@@ -592,6 +592,7 @@ func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
 		CostUSD:             usage.CostUSD,
 		Requests:            usage.Requests,
 		ContextTokens:       usage.ContextTokens,
+		DurationMS:          usage.DurationMS,
 	}
 }
 

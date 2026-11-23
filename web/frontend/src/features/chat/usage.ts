@@ -88,6 +88,7 @@ export function parseTokenUsage(
   const cacheCreation = toTokenCount(usage.cache_creation_tokens)
   const requests = toTokenCount(usage.requests)
   const contextTokens = toTokenCount(usage.context_tokens)
+  const durationMs = toTokenCount(usage.duration_ms)
 
   return {
     ...(input !== undefined ? { input_tokens: input } : {}),
@@ -97,6 +98,7 @@ export function parseTokenUsage(
     ...(cacheCreation ? { cache_creation_tokens: cacheCreation } : {}),
     ...(requests ? { requests } : {}),
     ...(contextTokens ? { context_tokens: contextTokens } : {}),
+    ...(durationMs ? { duration_ms: durationMs } : {}),
     ...(cost !== undefined ? { cost_usd: cost } : {}),
   }
 }
@@ -154,6 +156,33 @@ export function estimateUsageCostUsd(
 
 export function formatTokenCount(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString("en-US")
+}
+
+/**
+ * Output tokens per second for a turn. The backend records only the time spent
+ * in provider calls, so the rate stays comparable across turns that executed
+ * different tools.
+ */
+export function tokensPerSecond(usage: TokenUsage): number | undefined {
+  const output = usage.output_tokens ?? 0
+  const durationMs = usage.duration_ms ?? 0
+  if (output <= 0 || durationMs <= 0) {
+    return undefined
+  }
+  return output / (durationMs / 1000)
+}
+
+export function formatTokensPerSecond(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0"
+  }
+  if (value >= 100) {
+    return value.toFixed(0)
+  }
+  if (value >= 10) {
+    return value.toFixed(1)
+  }
+  return value.toFixed(2)
 }
 
 export function formatUsageCostUsd(cost: number): string {

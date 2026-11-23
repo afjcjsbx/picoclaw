@@ -294,8 +294,8 @@ func (p *Pipeline) CallLLM(
 				ctx, cancel = context.WithTimeout(ctx, d)
 				defer cancel()
 			}
-			resp, err := candidateProvider.Chat(
-				ctx, messagesForCall, candidateTools, candidate.Model, callOpts,
+			resp, err := chatWithDuration(
+				ctx, candidateProvider, messagesForCall, candidateTools, candidate.Model, callOpts,
 			)
 			if err != nil {
 				return nil, err
@@ -371,7 +371,9 @@ func (p *Pipeline) CallLLM(
 			}
 			return fbResult.Response, nil
 		}
-		return exec.activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, exec.llmModel, exec.llmOpts)
+		return chatWithDuration(
+			providerCtx, exec.activeProvider, messagesForCall, toolDefsForCall, exec.llmModel, exec.llmOpts,
+		)
 	}
 
 	// Retry loop
@@ -1057,6 +1059,33 @@ func finishReasonMatches(configured, actual string) bool {
 		return true
 	}
 	return isTruncatedFinishReason(configured) && isTruncatedFinishReason(actual)
+}
+
+// chatWithDuration calls provider.Chat and stamps the elapsed time on the
+// response usage. Throughput reported to clients divides output tokens by this
+// duration, so it measures the provider call only: tool execution between calls
+// must not dilute the rate.
+func chatWithDuration(
+	ctx context.Context,
+	llm providers.LLMProvider,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
+	start := time.Now()
+	resp, err := llm.Chat(ctx, messages, tools, model, options)
+	recordProviderDuration(resp, time.Since(start))
+	return resp, err
+}
+
+// recordProviderDuration stamps the duration of one provider call so the turn
+// aggregate can report generation throughput.
+func recordProviderDuration(resp *providers.LLMResponse, elapsed time.Duration) {
+	if resp == nil || resp.Usage == nil {
+		return
+	}
+	resp.Usage.DurationMS = elapsed.Milliseconds()
 }
 
 // unusableFallbackResponse returns the last unusable response when the chain
