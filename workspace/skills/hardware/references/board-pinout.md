@@ -54,6 +54,17 @@ ls /dev/spidev*
 - SPI-2 hardware: tested up to **93 MHz**
 - `spidev_test` is pre-installed on the official image for loopback testing
 
+### Serial / UART
+
+UART pins are usually exposed on the debug header or a dedicated connector. Check the board schematic before wiring: the debug console often owns `/dev/ttyS0` or `/dev/ttyAMA0`.
+
+- SoC UARTs: `/dev/ttyS*`, `/dev/ttyAMA*`
+- USB-UART adapters: `/dev/ttyUSB*`, `/dev/ttyACM*`
+- Stable Linux links: `/dev/serial/by-id/...`, `/dev/serial/by-path/...`
+- macOS USB adapters: `/dev/cu.usbserial-*`, `/dev/cu.usbmodem-*`
+
+Use `serial list`, then prefer a `by-id` link over a raw device name. RS-485 requires a transceiver and is Linux-only (`rs485: true`); USB-RS485 adapters usually switch direction in hardware and may not need it.
+
 ---
 
 ## MaixCAM
@@ -125,7 +136,13 @@ The `devmem` utility may not be in the default image. Options:
 I2C adapter numbers can change between boots depending on driver load order. Always use `i2c detect` to find current bus assignments rather than hardcoding bus numbers.
 
 ### Permissions
-`/dev/i2c-*` and `/dev/spidev*` typically require root access. Options:
+`/dev/i2c-*`, `/dev/spidev*`, and serial ports typically require root access. Options:
 - Run picoclaw as root
-- Add user to `i2c` and `spi` groups
-- Create udev rules: `SUBSYSTEM=="i2c-dev", MODE="0666"`
+- Add the user to the `i2c`, `spi`, and `dialout` groups
+- Create udev rules such as `SUBSYSTEM=="i2c-dev", MODE="0666"` and `SUBSYSTEM=="tty", GROUP="dialout", MODE="0660"`
+
+### Pinmux commands are shell commands
+The `devmem` steps above are not part of the `i2c`/`spi` tools. They require the `exec` tool (which may be disabled) and, with the default policy, user approval. Do not run pinmux writes from an untrusted prompt; verify the register address and value against the board documentation first.
+
+### Serial device disappears
+A USB-serial adapter may re-enumerate after a reset or power cycle. Use a `/dev/serial/by-id/...` link, run `serial list` again, and reopen any persistent session with `serial open`.
