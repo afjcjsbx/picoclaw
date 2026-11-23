@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 )
 
 // SPITool provides SPI bus interaction for high-speed peripheral communication.
@@ -28,6 +29,7 @@ func NewSPITool(opts ...SPIOptions) *SPITool {
 	return tool
 }
 
+//nolint:unused // called by the Linux-only implementation files.
 func (t *SPITool) writePolicy() *WritePolicy {
 	if t == nil || t.policy == nil {
 		return readOnlySPIPolicy
@@ -184,13 +186,21 @@ func (t *SPITool) list() *ToolResult {
 // Helper function for SPI operations (used by platform-specific implementations)
 
 // parseSPIArgs extracts and validates common SPI parameters
-func parseSPIArgs(args map[string]any) (device string, speed uint32, mode uint8, bits uint8, errMsg string) {
-	dev, ok := args["device"].(string)
-	if !ok || dev == "" {
-		return "", 0, 0, 0, "device is required (e.g. \"2.0\" for /dev/spidev2.0)"
+func parseSPIDevice(args map[string]any) (string, bool) {
+	raw, ok := args["device"].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return "", false
 	}
-	matched, _ := regexp.MatchString(`^\d+\.\d+$`, dev)
-	if !matched {
+	device := strings.TrimSpace(raw)
+	return device, spiDevicePattern.MatchString(device)
+}
+
+func parseSPIArgs(args map[string]any) (device string, speed uint32, mode uint8, bits uint8, errMsg string) {
+	dev, ok := parseSPIDevice(args)
+	if !ok {
+		if _, present := args["device"]; !present {
+			return "", 0, 0, 0, "device is required (e.g. \"2.0\" for /dev/spidev2.0)"
+		}
 		return "", 0, 0, 0, "invalid device identifier: must be in format \"X.Y\" (e.g. \"2.0\")"
 	}
 

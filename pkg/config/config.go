@@ -1638,8 +1638,8 @@ func (c ReadFileToolConfig) EffectiveMode() string {
 // HardwareToolConfig configures one hardware tool. Writes are disabled by
 // default; enabling the tool only enables read/discovery paths.
 type HardwareToolConfig struct {
-	Enabled    bool     `json:"enabled"     yaml:"-" env:"ENABLED"`
-	AllowWrite bool     `json:"allow_write" yaml:"-" env:"ALLOW_WRITE"`
+	Enabled    bool     `json:"enabled"         yaml:"-" env:"ENABLED"`
+	AllowWrite bool     `json:"allow_write"     yaml:"-" env:"ALLOW_WRITE"`
 	Allow      []string `json:"allow,omitempty" yaml:"-" env:"ALLOW"`
 }
 
@@ -1647,10 +1647,10 @@ type HardwareToolConfig struct {
 type HardwareConfig struct {
 	// RequireApproval asks the originating user before a hardware write.
 	// nil means true, so existing configs stay fail-closed.
-	RequireApproval         *bool `json:"require_approval,omitempty"         yaml:"-" env:"REQUIRE_APPROVAL"`
-	ApprovalTimeoutSeconds  int   `json:"approval_timeout_seconds,omitempty" yaml:"-" env:"APPROVAL_TIMEOUT_SECONDS"`
-	MaxWritesPerMinute      int   `json:"max_writes_per_minute,omitempty"    yaml:"-" env:"MAX_WRITES_PER_MINUTE"`
-	DryRun                  bool  `json:"dry_run,omitempty"                  yaml:"-" env:"DRY_RUN"`
+	RequireApproval         *bool `json:"require_approval,omitempty"           yaml:"-" env:"REQUIRE_APPROVAL"`
+	ApprovalTimeoutSeconds  int   `json:"approval_timeout_seconds,omitempty"   yaml:"-" env:"APPROVAL_TIMEOUT_SECONDS"`
+	MaxWritesPerMinute      int   `json:"max_writes_per_minute,omitempty"      yaml:"-" env:"MAX_WRITES_PER_MINUTE"`
+	DryRun                  bool  `json:"dry_run,omitempty"                    yaml:"-" env:"DRY_RUN"`
 	SerialSessionTTLSeconds int   `json:"serial_session_ttl_seconds,omitempty" yaml:"-" env:"SERIAL_SESSION_TTL_SECONDS"`
 	SerialMaxSessions       int   `json:"serial_max_sessions,omitempty"        yaml:"-" env:"SERIAL_MAX_SESSIONS"`
 }
@@ -1751,7 +1751,7 @@ type ToolsConfig struct {
 	SPI                 HardwareToolConfig      `json:"spi"                    yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SPI_"`
 	Subagent            ToolConfig              `json:"subagent"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
 	Todo                ToolConfig              `json:"todo"                   yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_TODO_"`
-	WebFetch            ToolConfig              `json:"web_fetch"             yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
+	WebFetch            ToolConfig              `json:"web_fetch"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
 	WriteFile           ToolConfig              `json:"write_file"             yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }
 

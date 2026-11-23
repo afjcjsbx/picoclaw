@@ -226,7 +226,7 @@ func parseI2CData(args map[string]any, key string) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
-	if text, ok := raw.(string); ok {
+	if text, isString := raw.(string); isString {
 		fields := strings.FieldsFunc(text, func(r rune) bool {
 			return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == ',' || r == ':' || r == '-'
 		})

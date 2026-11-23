@@ -23,6 +23,7 @@ func TestParseI2CAddress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, result := parseI2CAddress(tt.args)
 			if tt.wantErr {
 				if result == nil || !result.IsError {
@@ -58,6 +59,7 @@ func TestParseI2CBus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, result := parseI2CBus(tt.args)
 			if tt.wantErr {
 				if result == nil || !result.IsError {
@@ -97,6 +99,7 @@ func TestParseI2CLength(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := parseI2CLength(tt.args)
 			if tt.wantErr {
 				if err == nil {
@@ -152,6 +155,7 @@ func TestParseI2CDelayMS(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := parseI2CDelayMS(tt.args)
 			if tt.wantErr {
 				if err == nil {
@@ -192,7 +196,11 @@ func TestParseI2CData(t *testing.T) {
 		want    []byte
 		wantErr bool
 	}{
-		{name: "numbers", args: map[string]any{"data": []any{float64(0xac), float64(0x33), float64(0)}}, want: []byte{0xac, 0x33, 0}},
+		{
+			name: "numbers",
+			args: map[string]any{"data": []any{float64(0xac), float64(0x33), float64(0)}},
+			want: []byte{0xac, 0x33, 0},
+		},
 		{name: "hex strings", args: map[string]any{"data": []any{"0xac", "0x33", "0x00"}}, want: []byte{0xac, 0x33, 0}},
 		{name: "byte string", args: map[string]any{"data": "0xac 0x33 0x00"}, want: []byte{0xac, 0x33, 0}},
 		{name: "comma string", args: map[string]any{"data": "172,51,0"}, want: []byte{0xac, 0x33, 0}},
@@ -203,6 +211,7 @@ func TestParseI2CData(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, present, err := parseI2CData(tt.args, "data")
 			if tt.wantErr {
 				if err == nil {

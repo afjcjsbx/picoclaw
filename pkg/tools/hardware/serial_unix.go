@@ -80,6 +80,9 @@ func serialReadHandle(ctx context.Context, handle serialHandle, length int, time
 	if err := serialContextErr(ctx); err != nil {
 		return nil, err
 	}
+	if err := serialSetHandleTimeout(handle, timeout); err != nil {
+		return nil, err
+	}
 
 	buf := make([]byte, length)
 	total := 0
@@ -141,6 +144,9 @@ func serialReadHandleWithStop(
 	if err := serialContextErr(ctx); err != nil {
 		return nil, err
 	}
+	if err := serialSetHandleTimeout(handle, timeout); err != nil {
+		return nil, err
+	}
 
 	buf := make([]byte, 0, min(maxLength, 256))
 	chunk := make([]byte, 256)
@@ -182,6 +188,9 @@ func serialReadHandleWithStop(
 
 func serialWriteHandle(ctx context.Context, handle serialHandle, data []byte, timeout time.Duration) (int, error) {
 	if err := serialContextErr(ctx); err != nil {
+		return 0, err
+	}
+	if err := serialSetHandleTimeout(handle, timeout); err != nil {
 		return 0, err
 	}
 

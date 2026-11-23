@@ -125,6 +125,7 @@ func TestHardwareWriteApprovalBypassesReadOnlyAndDisabled(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			al, mgr, origin, cleanup := newExecApprovalTestLoop(t)
 			defer cleanup()
 			enableHardwareWrites(al)
@@ -176,6 +177,7 @@ func TestHardwareApprovalFailsClosedWithoutInteractiveUser(t *testing.T) {
 	t.Parallel()
 
 	t.Run("agent stopped", func(t *testing.T) {
+		t.Parallel()
 		al, _, origin, cleanup := newExecApprovalTestLoop(t)
 		defer cleanup()
 		enableHardwareWrites(al)
@@ -191,6 +193,7 @@ func TestHardwareApprovalFailsClosedWithoutInteractiveUser(t *testing.T) {
 	})
 
 	t.Run("automated sender", func(t *testing.T) {
+		t.Parallel()
 		al, _, origin, cleanup := newExecApprovalTestLoop(t)
 		defer cleanup()
 		enableHardwareWrites(al)

@@ -101,8 +101,8 @@ func describeI2CWrite(args map[string]any) (WriteRequest, bool) {
 }
 
 func describeSPIWrite(args map[string]any) (WriteRequest, bool) {
-	dev, _, _, _, errMsg := parseSPIArgs(args)
-	if errMsg != "" {
+	dev, ok := parseSPIDevice(args)
+	if !ok {
 		return WriteRequest{}, false
 	}
 	segments, hasSegments, err := parseSPISegments(args)

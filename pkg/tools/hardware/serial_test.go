@@ -193,6 +193,7 @@ func TestDecodeSerialDelimiter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
 			got, err := decodeSerialDelimiter(tt.input)
 			if tt.wantErr {
 				if err == nil {

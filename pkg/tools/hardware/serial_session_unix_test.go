@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 

@@ -21,10 +21,10 @@ type spiTransfer struct {
 	delayUsecs  uint16
 	bitsPerWord uint8
 	csChange    uint8
-	txNbits     uint8
-	rxNbits     uint8
-	wordDelay   uint8
-	pad         uint8
+	// The kernel struct has tx_nbits, rx_nbits, word_delay_usecs, and pad
+	// here. Keeping them as one padding array preserves the 32-byte layout
+	// without pretending this tool uses those fields.
+	padding [4]byte //nolint:unused // required for the kernel struct layout.
 }
 
 type spiSegment struct {
@@ -66,14 +66,23 @@ func buildSPITransfers(segments []spiSegment, speed uint32) (spiTransferBuffers,
 			readLength = len(segment.Data)
 		}
 		if readLength < 0 || readLength > maxSPITransferSize {
-			return spiTransferBuffers{}, fmt.Errorf("segment %d read_length must be between 0 and %d", i, maxSPITransferSize)
+			return spiTransferBuffers{}, fmt.Errorf(
+				"segment %d read_length must be between 0 and %d",
+				i,
+				maxSPITransferSize,
+			)
 		}
 		length := max(len(segment.Data), readLength)
 		if length == 0 {
 			return spiTransferBuffers{}, fmt.Errorf("segment %d has no data and no read_length", i)
 		}
 		if length > maxSPITransferSize {
-			return spiTransferBuffers{}, fmt.Errorf("segment %d is too large: %d bytes (max %d)", i, length, maxSPITransferSize)
+			return spiTransferBuffers{}, fmt.Errorf(
+				"segment %d is too large: %d bytes (max %d)",
+				i,
+				length,
+				maxSPITransferSize,
+			)
 		}
 		if segment.DelayUsecs < 0 || segment.DelayUsecs > 65535 {
 			return spiTransferBuffers{}, fmt.Errorf("segment %d delay_usecs must be between 0 and 65535", i)

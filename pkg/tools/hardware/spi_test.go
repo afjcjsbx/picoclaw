@@ -8,7 +8,12 @@ func TestParseSPISegments(t *testing.T) {
 	segments, present, err := parseSPISegments(map[string]any{
 		"segments": []any{
 			map[string]any{"data": []any{float64(1), float64(2)}},
-			map[string]any{"data": []any{float64(3)}, "read_length": float64(4), "delay_usecs": float64(10), "cs_change": true},
+			map[string]any{
+				"data":        []any{float64(3)},
+				"read_length": float64(4),
+				"delay_usecs": float64(10),
+				"cs_change":   true,
+			},
 			map[string]any{"read_length": float64(2)},
 		},
 	})
@@ -21,7 +26,8 @@ func TestParseSPISegments(t *testing.T) {
 	if string(segments[0].Data) != "\x01\x02" || segments[0].ReadLength != -1 {
 		t.Fatalf("segment 0 = %#v", segments[0])
 	}
-	if string(segments[1].Data) != "\x03" || segments[1].ReadLength != 4 || segments[1].DelayUsecs != 10 || !segments[1].CSChange {
+	if string(segments[1].Data) != "\x03" || segments[1].ReadLength != 4 || segments[1].DelayUsecs != 10 ||
+		!segments[1].CSChange {
 		t.Fatalf("segment 1 = %#v", segments[1])
 	}
 	if len(segments[2].Data) != 0 || segments[2].ReadLength != 2 {
@@ -89,7 +95,10 @@ func TestParseSPIReadCount(t *testing.T) {
 	if got, err := parseSPIReadCount(map[string]any{"count": "4"}); err != nil || got != 4 {
 		t.Fatalf("parseSPIReadCount(count) = (%d, %v)", got, err)
 	}
-	if got, err := parseSPIReadCount(map[string]any{"length": float64(4), "count": float64(4)}); err != nil || got != 4 {
+	if got, err := parseSPIReadCount(
+		map[string]any{"length": float64(4), "count": float64(4)},
+	); err != nil ||
+		got != 4 {
 		t.Fatalf("parseSPIReadCount(both equal) = (%d, %v)", got, err)
 	}
 	for _, args := range []map[string]any{
@@ -123,8 +132,13 @@ func TestParseSPIArgs(t *testing.T) {
 			wantBits:  8,
 		},
 		{
-			name:      "explicit values",
-			args:      map[string]any{"device": "2.0", "speed": float64(4000000), "mode": float64(3), "bits": float64(8)},
+			name: "explicit values",
+			args: map[string]any{
+				"device": "2.0",
+				"speed":  float64(4000000),
+				"mode":   float64(3),
+				"bits":   float64(8),
+			},
 			wantSpeed: 4000000,
 			wantMode:  3,
 			wantBits:  8,
@@ -147,6 +161,7 @@ func TestParseSPIArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, speed, mode, bits, errMsg := parseSPIArgs(tt.args)
 			if tt.wantErr {
 				if errMsg == "" {
