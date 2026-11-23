@@ -44,10 +44,8 @@ func agentCmd(message, sessionKey, model string, debug bool) error {
 		return fmt.Errorf("error creating provider: %w", err)
 	}
 
-	// Use the resolved model ID from provider creation
-	if modelID != "" {
-		cfg.Agents.Defaults.ModelName = modelID
-	}
+	// Use the resolved model ID from provider creation, unless the name is a model_list alias
+	cfg.Agents.Defaults.ModelName = providers.DefaultModelRef(cfg, modelID)
 
 	msgBus := bus.NewMessageBus()
 	defer msgBus.Close()
