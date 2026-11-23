@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	Version        = "1.0"
+	Version        = "1.0" // Major.Minor, as the spec requires for A2A-Version and protocolVersion (release 1.0.0)
 	VersionHeader  = "A2A-Version"
 	WellKnownPath  = "/.well-known/agent-card.json"
 	RPCPath        = "/a2a"

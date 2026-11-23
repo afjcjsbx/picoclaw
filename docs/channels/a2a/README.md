@@ -9,7 +9,7 @@ description: "Let other agents discover and call PicoClaw over the A2A protocol 
 - **Inbound** — the `a2a` channel serves an Agent Card and accepts tasks from other agents.
 - **Outbound** — five tools (`a2a_discover`, `a2a_call`, `a2a_list`, `a2a_history`, `a2a_orchestrate`) call agents you list in `a2a_agents`.
 
-> A2A 0.3 clients (`message/send`, `kind` fields, lower-case states) are **not** supported: the wire format changed in 1.0. They get error `-32009`.
+> Only the **1.0.0** wire format is supported (PascalCase methods such as `SendMessage`, parts without `kind`, `TASK_STATE_*` states). Slash-style method names such as `message/send` get error `-32009`.
 
 ## 🚀 Inbound: expose PicoClaw
 

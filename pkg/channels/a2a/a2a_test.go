@@ -187,7 +187,7 @@ func TestRequestValidation(t *testing.T) {
 	assert.Equal(t, proto.CodeContentType, errCode(out), "output modes")
 
 	_, out = r.rpc("", "message/send", msg("m", "", "x"))
-	assert.Equal(t, proto.CodeVersion, errCode(out), "0.3 method name")
+	assert.Equal(t, proto.CodeVersion, errCode(out), "slash-style method name")
 	_, out = r.rpc("", "Nope", nil)
 	assert.Equal(t, proto.CodeMethodNotFound, errCode(out))
 	_, out = r.rpc("", "CreateTaskPushNotificationConfig", nil)

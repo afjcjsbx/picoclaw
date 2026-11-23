@@ -121,8 +121,13 @@ func (c *Channel) handleRPC(w http.ResponseWriter, r *http.Request) {
 	case "GetExtendedAgentCard":
 		writeErr(w, req.ID, proto.CodeNoExtendedCard, "extended agent card not configured")
 	default:
-		if strings.Contains(req.Method, "/") { // 0.3 names: message/send, tasks/get, ...
-			writeErr(w, req.ID, proto.CodeVersion, "A2A 0.3 method names are not supported; use 1.0")
+		if strings.Contains(req.Method, "/") { // slash-style names (message/send, tasks/get) are not 1.0.0
+			writeErr(
+				w,
+				req.ID,
+				proto.CodeVersion,
+				"only A2A 1.0.0 is supported: use PascalCase methods such as SendMessage",
+			)
 			return
 		}
 		writeErr(w, req.ID, proto.CodeMethodNotFound, "method not found")
