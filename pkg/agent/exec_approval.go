@@ -24,6 +24,9 @@ const (
 	// longer unknown command cannot be reviewed safely in chat, so it is
 	// denied instead of showing a truncated view the user might approve.
 	maxExecApprovalCommandRunes = 12000
+	// maxToolApprovalDetailsRunes leaves room for the "Command: " prefix and
+	// the quoted form while still bounding hardware write summaries.
+	maxToolApprovalDetailsRunes = maxExecApprovalCommandRunes + 2048
 )
 
 // execUnknownCommandApprovalHook asks the originating user to approve a
@@ -194,7 +197,7 @@ func (al *AgentLoop) askToolApproval(
 	if !ok {
 		deadline = time.Now().Add(defaultHookApprovalTimeout)
 	}
-	if len([]rune(details)) > maxExecApprovalCommandRunes {
+	if len([]rune(details)) > maxToolApprovalDetailsRunes {
 		return ApprovalDecision{
 			Reason: "approval details are too long to display safely; shorten the request",
 		}, nil
@@ -311,9 +314,10 @@ func formatExecApprovalCommand(command string) (string, bool) {
 	return fmt.Sprintf("%q", command), true
 }
 
-// tryHandleExecApproval consumes approval replies before they can enter
-// steering or the LLM, including while the original turn is blocked in the
-// approval hook. It reports whether the message was an approval reply.
+// tryHandleExecApproval consumes approval replies for exec and hardware
+// writes before they can enter steering or the LLM, including while the
+// original turn is blocked in the approval hook. It reports whether the
+// message was an approval reply.
 func (al *AgentLoop) tryHandleExecApproval(ctx context.Context, msg bus.InboundMessage) bool {
 	msg = bus.NormalizeInboundMessage(msg)
 	parts := strings.Fields(strings.TrimSpace(msg.Content))
@@ -377,7 +381,7 @@ func (al *AgentLoop) tryHandleExecApproval(ctx context.Context, msg bus.InboundM
 				approved := action == "approve" || action == "/approve"
 				pending.decision <- approved
 				response = "Approval response received."
-				logger.InfoCF("agent", "Unknown-command approval answered", map[string]any{
+				logger.InfoCF("agent", "Tool approval answered", map[string]any{
 					"channel":  origin.Channel,
 					"chat_id":  origin.ChatID,
 					"approved": approved,
