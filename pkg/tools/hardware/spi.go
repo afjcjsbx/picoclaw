@@ -47,7 +47,7 @@ func (t *SPITool) Parameters() map[string]any {
 			},
 			"bits": map[string]any{
 				"type":        "integer",
-				"description": "Bits per word. Default: 8.",
+				"description": "Bits per word. Only 8 is supported; 9-32 bit words are rejected rather than silently mis-encoded. Default: 8.",
 			},
 			"data": map[string]any{
 				"type":        "array",
@@ -133,27 +133,39 @@ func parseSPIArgs(args map[string]any) (device string, speed uint32, mode uint8,
 	}
 
 	speed = 1000000 // default 1 MHz
-	if s, ok := args["speed"].(float64); ok {
-		if s < 1 || s > 125000000 {
+	if raw, ok := args["speed"]; ok && raw != nil {
+		value, err := parseI2CScalar(raw, "speed")
+		if err != nil {
+			return "", 0, 0, 0, err.Error()
+		}
+		if value < 1 || value > 125000000 {
 			return "", 0, 0, 0, "speed must be between 1 Hz and 125 MHz"
 		}
-		speed = uint32(s)
+		speed = uint32(value)
 	}
 
 	mode = 0
-	if m, ok := args["mode"].(float64); ok {
-		if int(m) < 0 || int(m) > 3 {
+	if raw, ok := args["mode"]; ok && raw != nil {
+		value, err := parseI2CScalar(raw, "mode")
+		if err != nil {
+			return "", 0, 0, 0, err.Error()
+		}
+		if value < 0 || value > 3 {
 			return "", 0, 0, 0, "mode must be 0-3"
 		}
-		mode = uint8(m)
+		mode = uint8(value)
 	}
 
 	bits = 8
-	if b, ok := args["bits"].(float64); ok {
-		if int(b) < 1 || int(b) > 32 {
-			return "", 0, 0, 0, "bits must be between 1 and 32"
+	if raw, ok := args["bits"]; ok && raw != nil {
+		value, err := parseI2CScalar(raw, "bits")
+		if err != nil {
+			return "", 0, 0, 0, err.Error()
 		}
-		bits = uint8(b)
+		if value != 8 {
+			return "", 0, 0, 0, "bits other than 8 are not supported; the transfer buffer is byte-oriented"
+		}
+		bits = uint8(value)
 	}
 
 	return dev, speed, mode, bits, ""

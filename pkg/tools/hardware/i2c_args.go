@@ -69,7 +69,10 @@ func parseI2CScalar(value any, field string) (int, error) {
 	switch v := value.(type) {
 	case float64:
 		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) {
-			return 0, fmt.Errorf("%s must be an integer byte value", field)
+			return 0, fmt.Errorf("%s must be an integer value", field)
+		}
+		if v > float64(math.MaxInt) || v < float64(math.MinInt) {
+			return 0, fmt.Errorf("%s is out of range", field)
 		}
 		return int(v), nil
 	case float32:
@@ -83,21 +86,33 @@ func parseI2CScalar(value any, field string) (int, error) {
 	case int32:
 		return int(v), nil
 	case int64:
+		if v > int64(math.MaxInt) || v < int64(math.MinInt) {
+			return 0, fmt.Errorf("%s is out of range", field)
+		}
 		return int(v), nil
 	case uint:
+		if uint64(v) > uint64(math.MaxInt) {
+			return 0, fmt.Errorf("%s is out of range", field)
+		}
 		return int(v), nil
 	case uint8:
 		return int(v), nil
 	case uint16:
 		return int(v), nil
 	case uint32:
+		if uint64(v) > uint64(math.MaxInt) {
+			return 0, fmt.Errorf("%s is out of range", field)
+		}
 		return int(v), nil
 	case uint64:
+		if v > uint64(math.MaxInt) {
+			return 0, fmt.Errorf("%s is out of range", field)
+		}
 		return int(v), nil
 	case json.Number:
-		parsed, err := strconv.ParseInt(v.String(), 0, 32)
+		parsed, err := strconv.ParseInt(v.String(), 0, strconv.IntSize)
 		if err != nil {
-			return 0, fmt.Errorf("%s must be an integer byte value: %v", field, err)
+			return 0, fmt.Errorf("%s must be an integer value: %v", field, err)
 		}
 		return int(parsed), nil
 	case string:
@@ -105,13 +120,13 @@ func parseI2CScalar(value any, field string) (int, error) {
 		if s == "" {
 			return 0, fmt.Errorf("%s must not be empty", field)
 		}
-		parsed, err := strconv.ParseUint(s, 0, 16)
+		parsed, err := strconv.ParseInt(s, 0, strconv.IntSize)
 		if err != nil {
-			return 0, fmt.Errorf("%s must be a byte value such as 56 or \"0x38\"", field)
+			return 0, fmt.Errorf("%s must be an integer value such as 56 or \"0x38\"", field)
 		}
 		return int(parsed), nil
 	default:
-		return 0, fmt.Errorf("%s must be an integer or a string such as \"0x38\"", field)
+		return 0, fmt.Errorf("%s must be an integer or an integer string such as \"0x38\"", field)
 	}
 }
 

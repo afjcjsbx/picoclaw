@@ -44,7 +44,7 @@ This sends the measurement command, waits 80 ms, and reads six bytes in one tool
 | `device` | string | transfer/read | SPI device identifier, for example `"2.0"` for `/dev/spidev2.0` |
 | `speed` | integer | no | Clock speed in Hz. Default: `1000000` (1 MHz) |
 | `mode` | integer | no | SPI mode `0`–`3` (CPOL/CPHA). Default: `0` |
-| `bits` | integer | no | Bits per word. Default: `8` |
+| `bits` | integer | no | Bits per word. Only `8` is supported; other widths are rejected instead of being mis-encoded. Default: `8` |
 | `data` | array | transfer | Bytes to send (`0`–`255` each) |
 | `count` | integer | read | Number of bytes to read (`1`–`4096`) |
 | `confirm` | bool | transfer | Safety guard: must be `true` for transfers |
