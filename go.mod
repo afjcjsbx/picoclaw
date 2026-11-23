@@ -24,7 +24,7 @@ require (
 	github.com/gomarkdown/markdown v0.0.0-20261022144421-6c848fa1b723
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/h2non/filetype v1.1.3
 	github.com/kagisearch/kagi-openapi-golang v0.0.0-20260526215348-96575e864d62
 	github.com/larksuite/oapi-sdk-go/v3 v3.13.0
