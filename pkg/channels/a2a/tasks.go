@@ -29,6 +29,7 @@ var (
 	errFull    = errors.New("task registry full")
 	errBusy    = errors.New("too many running tasks")
 	errCtxBusy = errors.New("a task is already running in this context")
+	errMsgDup  = errors.New("messageId was already used in a different context")
 )
 
 type task struct {
@@ -69,6 +70,9 @@ func newRegistry(limit int) *registry {
 func chatKey(principal, contextID string) string { return "a2a:" + principal + ":" + contextID }
 
 // submit registers a task, or returns the existing one for a retried messageId.
+// An empty contextID means "any": a retry without one matches the original
+// task, and a new task gets a generated one. A retry naming another context
+// is rejected rather than answered with a task from the wrong conversation.
 func (r *registry) submit(
 	principal, messageID, contextID, text string,
 	streaming bool,
@@ -79,7 +83,13 @@ func (r *registry) submit(
 	now := time.Now()
 	r.sweep(now)
 	if t := r.byMsg[principal+"\x00"+messageID]; t != nil {
+		if contextID != "" && contextID != t.contextID {
+			return nil, false, errMsgDup
+		}
 		return t, true, nil
+	}
+	if contextID == "" {
+		contextID = "ctx-" + proto.NewID()
 	}
 	chat := chatKey(principal, contextID)
 	switch {

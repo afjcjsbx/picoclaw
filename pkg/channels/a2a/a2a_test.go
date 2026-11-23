@@ -159,6 +159,12 @@ func TestSendMessageBlockingAndIdempotent(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
+	// A retry may omit contextId, but must not name a different one.
+	_, out2 = r.rpc("", "SendMessage", msg("m1", "", "ping"))
+	assert.Equal(t, tk["id"], taskOf(t, out2)["id"])
+	_, out2 = r.rpc("", "SendMessage", msg("m1", "c2", "ping"))
+	assert.Equal(t, proto.CodeInvalidParams, errCode(out2), "messageId reused in another context")
+
 	// historyLength 0 drops history, 1 keeps the reply only.
 	_, out3 := r.rpc("", "GetTask", map[string]any{"id": tk["id"], "historyLength": 1})
 	h := taskOf(t, out3)["history"].([]any)

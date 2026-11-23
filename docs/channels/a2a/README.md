@@ -66,7 +66,7 @@ Each token is a separate **principal**: it can only see, list, cancel and subscr
 `SendMessage`, `SendStreamingMessage` (SSE), `GetTask`, `ListTasks` (with `nextPageToken`), `CancelTask`, `SubscribeToTask`. Push-notification methods return `-32003`, `GetExtendedAgentCard` returns `-32007`.
 
 - **Blocking by default**: `SendMessage` waits for the task; `configuration.returnImmediately` returns at once.
-- **Idempotent**: a retry with the same `messageId` returns the existing task and does not run a second turn.
+- **Idempotent**: a retry with the same `messageId` returns the existing task and does not run a second turn. Reusing a `messageId` with a different `contextId` is rejected with `-32602`.
 - **Cancel is real**: `CancelTask` ends the task and sends `/stop` to the agent turn. It is best-effort for a command already blocked outside PicoClaw.
 - **Streams**: the first frame is the task snapshot, then `statusUpdate` / `artifactUpdate` frames; the last artifact chunk has `lastChunk: true`; the stream ends on a terminal state. A `: keepalive` comment is sent every 20 s. A dropped client does **not** cancel the task; re-attach with `SubscribeToTask`.
 - **One task per context**: a second message for a `contextId` that still has a running task is rejected (`-32010`). `contextId` maps to a PicoClaw session (`1-128` chars of `[A-Za-z0-9._-]`).

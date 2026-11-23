@@ -167,10 +167,8 @@ func (c *Channel) handleSend(w http.ResponseWriter, r *http.Request, who string,
 			return
 		}
 	}
-	ctxID := m.ContextID
-	if ctxID == "" {
-		ctxID = "ctx-" + proto.NewID()
-	} else if !validID(ctxID) {
+	ctxID := m.ContextID // empty: submit generates one
+	if ctxID != "" && !validID(ctxID) {
 		writeErr(w, req.ID, proto.CodeInvalidParams, "contextId must be 1-128 chars of [A-Za-z0-9._-]")
 		return
 	}
@@ -179,6 +177,9 @@ func (c *Channel) handleSend(w http.ResponseWriter, r *http.Request, who string,
 	switch {
 	case errors.Is(err, errCtxBusy):
 		writeErr(w, req.ID, codeContextBusy, err.Error())
+		return
+	case errors.Is(err, errMsgDup):
+		writeErr(w, req.ID, proto.CodeInvalidParams, err.Error())
 		return
 	case err != nil: // registry full or too many running: shed load, client may retry
 		w.Header().Set("Retry-After", "5")
