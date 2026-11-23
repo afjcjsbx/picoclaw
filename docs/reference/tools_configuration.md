@@ -34,7 +34,7 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `delegate` | — | multi-agent setups | Registered automatically when more than one agent exists |
 | `find_skills` | `tools.find_skills.enabled` | `true` | Requires `tools.skills.enabled`; see [Skills tools](../tools/skills.md) |
 | `install_skill` | `tools.install_skill.enabled` | `true` | Requires `tools.skills.enabled`; see [Skills tools](../tools/skills.md) |
-| `i2c`, `spi`, `serial` | `tools.i2c.enabled`, `tools.spi.enabled`, `tools.serial.enabled` | `false` | Platform-specific; see [Hardware tools](../tools/hardware.md) |
+| `i2c`, `spi`, `serial` | `tools.i2c.enabled`, `tools.spi.enabled`, `tools.serial.enabled` | `false` | Platform-specific and read-only by default; see [Hardware tools](../tools/hardware.md) and [write safety](../tools/hardware.md#write-safety) |
 | MCP tools | `tools.mcp.enabled` | `false` | Servers under `tools.mcp.servers`; see [MCP tools](../tools/mcp.md) |
 | MCP discovery | `tools.mcp.discovery.enabled` | `false` | Registers `tool_search_tool_bm25` / `tool_search_tool_regex`; see [Tool discovery](../tools/mcp.md#tool-discovery-lazy-loading) |
 

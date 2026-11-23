@@ -479,6 +479,13 @@ func DefaultConfig() *Config {
 				MaxInlineTextChars: DefaultMCPMaxInlineTextChars,
 				Servers:            map[string]MCPServerConfig{},
 			},
+			Hardware: HardwareConfig{
+				RequireApproval:         boolPtr(true),
+				ApprovalTimeoutSeconds:  300,
+				MaxWritesPerMinute:      30,
+				SerialSessionTTLSeconds: 60,
+				SerialMaxSessions:       2,
+			},
 			AppendFile: ToolConfig{
 				Enabled: true,
 			},
@@ -488,7 +495,7 @@ func DefaultConfig() *Config {
 			FindSkills: ToolConfig{
 				Enabled: true,
 			},
-			I2C: ToolConfig{
+			I2C: HardwareToolConfig{
 				Enabled: false, // Hardware tool - Linux only
 			},
 			InstallSkill: ToolConfig{
@@ -516,7 +523,7 @@ func DefaultConfig() *Config {
 				MaxLines:        DefaultReadFileMaxLines,
 				MaxLineLength:   DefaultReadFileMaxLineLength,
 			},
-			Serial: ToolConfig{
+			Serial: HardwareToolConfig{
 				Enabled: false, // Hardware tool - requires host serial ports
 			},
 			SearchFiles: ToolConfig{Enabled: true},
@@ -527,7 +534,7 @@ func DefaultConfig() *Config {
 			SpawnStatus: ToolConfig{
 				Enabled: false,
 			},
-			SPI: ToolConfig{
+			SPI: HardwareToolConfig{
 				Enabled: false, // Hardware tool - Linux only
 			},
 			Subagent: ToolConfig{

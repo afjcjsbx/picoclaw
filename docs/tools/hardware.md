@@ -13,6 +13,43 @@ Hardware tools expose real devices to the agent. They are disabled by default an
 
 Environment variables follow the pattern `PICOCLAW_TOOLS_I2C_ENABLED`, `PICOCLAW_TOOLS_SPI_ENABLED`, `PICOCLAW_TOOLS_SERIAL_ENABLED`. See [Hardware compatibility](../guides/hardware-compatibility.md) for supported boards and wiring notes.
 
+## Write safety
+
+Enabling a hardware tool does **not** enable writes. Reads, discovery, and `detect`/`list` work, but every write action is denied until the operator opts in:
+
+```json
+{
+  "tools": {
+    "hardware": {
+      "require_approval": true,
+      "approval_timeout_seconds": 300,
+      "max_writes_per_minute": 30,
+      "dry_run": false
+    },
+    "i2c": {
+      "enabled": true,
+      "allow_write": true,
+      "allow": ["1:0x76", "1:0x38"]
+    }
+  }
+}
+```
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `tools.<tool>.allow_write` | `false` | Must be `true` before `i2c write`, `spi transfer`, or `serial write` can run |
+| `tools.<tool>.allow` | `[]` | Device allowlist. I2C entries are `bus:address` (`"1:0x76"`), SPI entries are `dev` (`"2.0"`), serial entries are port paths (`"/dev/ttyUSB0"`, a resolved `/dev/serial/by-id/...`, or `COM3`). An empty list allows reads on any valid device but never allows writes; a non-empty list restricts both reads and writes to the listed devices |
+| `tools.hardware.require_approval` | `true` | Sends an approval prompt to the originating user before each write. A headless or automated sender has no interactive user, so the write is denied |
+| `tools.hardware.approval_timeout_seconds` | `300` | How long the approval prompt waits before denying |
+| `tools.hardware.max_writes_per_minute` | `30` | Per-tool sliding-window write limit. A negative value disables the limit |
+| `tools.hardware.dry_run` | `false` | Validates the target and returns the exact bytes that would be sent without touching the bus |
+| `tools.hardware.serial_session_ttl_seconds` | `60` | Idle timeout for persistent serial sessions |
+| `tools.hardware.serial_max_sessions` | `2` | Maximum persistent serial sessions per agent conversation; the oldest is evicted |
+
+The `confirm: true` argument is still accepted for compatibility, but it is not a security boundary: the model can set it itself. The real gate is `allow_write` plus the approval hook. If you deliberately run unattended, set `require_approval: false` only after constraining `allow` to the exact devices the automation needs; rate limiting remains active.
+
+Environment overrides use `PICOCLAW_TOOLS_HARDWARE_` and the tool prefix, for example `PICOCLAW_TOOLS_HARDWARE_REQUIRE_APPROVAL=false`, `PICOCLAW_TOOLS_HARDWARE_MAX_WRITES_PER_MINUTE=5`, `PICOCLAW_TOOLS_I2C_ALLOW_WRITE=true`, and `PICOCLAW_TOOLS_I2C_ALLOW=1:0x76,1:0x38`.
+
 ## `i2c`
 
 | Argument | Type | Required | Description |
