@@ -29,7 +29,6 @@ func NewSPITool(opts ...SPIOptions) *SPITool {
 	return tool
 }
 
-//nolint:unused // called by the Linux-only implementation files.
 func (t *SPITool) writePolicy() *WritePolicy {
 	if t == nil || t.policy == nil {
 		return readOnlySPIPolicy

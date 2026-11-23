@@ -31,6 +31,7 @@ func TestConfigureUnixSerialPortAppliesBaudToCflag(t *testing.T) {
 
 	for _, baud := range []int{9600, 115200, 230400, 460800, 921600} {
 		t.Run(strconv.Itoa(baud), func(t *testing.T) {
+			t.Parallel()
 			ptmx, tty, err := pty.Open()
 			if err != nil {
 				t.Fatalf("pty.Open() error = %v", err)
@@ -46,8 +47,8 @@ func TestConfigureUnixSerialPortAppliesBaudToCflag(t *testing.T) {
 				Parity:   "none",
 				StopBits: 1,
 			}
-			if err := configureUnixSerialPort(fd, cfg); err != nil {
-				t.Fatalf("configureUnixSerialPort() error = %v", err)
+			if configErr := configureUnixSerialPort(fd, cfg); configErr != nil {
+				t.Fatalf("configureUnixSerialPort() error = %v", configErr)
 			}
 
 			tio, err := unix.IoctlGetTermios(fd, unix.TCGETS)

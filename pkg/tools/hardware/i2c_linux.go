@@ -118,8 +118,8 @@ func i2cWriteBytes(fd, addr int, data []byte) error {
 	}
 	// Older or SMBus-only adapters do not implement I2C_RDWR. A single write
 	// is still possible through the classic I2C_SLAVE + write path.
-	if err := i2cSetSlave(fd, addr); err != nil {
-		return err
+	if slaveErr := i2cSetSlave(fd, addr); slaveErr != nil {
+		return slaveErr
 	}
 	written, err := syscall.Write(fd, data)
 	if err != nil {
@@ -146,8 +146,8 @@ func i2cReadBytes(fd, addr, length int) ([]byte, error) {
 	if !i2cRdwrUnsupported(err) {
 		return nil, err
 	}
-	if err := i2cSetSlave(fd, addr); err != nil {
-		return nil, err
+	if slaveErr := i2cSetSlave(fd, addr); slaveErr != nil {
+		return nil, slaveErr
 	}
 	n, err := syscall.Read(fd, buf)
 	if err != nil {

@@ -77,6 +77,9 @@ func TestBuildSPITransfers(t *testing.T) {
 	if buffers.transfers[3].length != 1 || buffers.transfers[3].rxBuf != 0 || len(buffers.rxBuffers[3]) != 0 {
 		t.Fatalf("write-only segment = %#v", buffers.transfers[3])
 	}
+	if buffers.transfers[0].padding != [4]byte{} {
+		t.Fatalf("padding = %v, want zero", buffers.transfers[0].padding)
+	}
 
 	if got := spiIocMessage(1); got != 0x40206B00 {
 		t.Fatalf("spiIocMessage(1) = %#x", got)

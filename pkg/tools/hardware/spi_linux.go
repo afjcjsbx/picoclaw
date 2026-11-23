@@ -69,9 +69,9 @@ func (t *SPITool) transfer(args map[string]any) *ToolResult {
 		return ErrorResult(err.Error())
 	}
 	if !hasSegments {
-		segment, ok, err := parseSPISingleSegment(args)
-		if err != nil {
-			return ErrorResult(err.Error())
+		segment, ok, parseErr := parseSPISingleSegment(args)
+		if parseErr != nil {
+			return ErrorResult(parseErr.Error())
 		}
 		if !ok {
 			return ErrorResult("data is required for transfer (array of byte values 0-255), or provide segments")

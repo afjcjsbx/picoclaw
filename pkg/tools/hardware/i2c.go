@@ -42,7 +42,6 @@ func NewI2CTool(opts ...I2COptions) *I2CTool {
 	return tool
 }
 
-//nolint:unused // called by the Linux-only implementation files.
 func (t *I2CTool) writePolicy() *WritePolicy {
 	if t == nil || t.policy == nil {
 		return readOnlyI2CPolicy

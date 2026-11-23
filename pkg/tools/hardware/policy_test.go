@@ -9,6 +9,20 @@ import (
 	"time"
 )
 
+func TestHardwareToolsDefaultToReadOnly(t *testing.T) {
+	t.Parallel()
+
+	if NewI2CTool().writePolicy().AllowWrite {
+		t.Fatal("i2c tool allows writes by default")
+	}
+	if NewSPITool().writePolicy().AllowWrite {
+		t.Fatal("spi tool allows writes by default")
+	}
+	if NewSerialTool().writePolicy().AllowWrite {
+		t.Fatal("serial tool allows writes by default")
+	}
+}
+
 func TestWritePolicyReadOnlyAndAllowlist(t *testing.T) {
 	t.Parallel()
 

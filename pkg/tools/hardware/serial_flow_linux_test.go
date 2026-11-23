@@ -24,6 +24,7 @@ func TestConfigureUnixSerialPortAppliesFlowControl(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			ptmx, tty, err := pty.Open()
 			if err != nil {
 				t.Fatalf("pty.Open() error = %v", err)
@@ -40,8 +41,8 @@ func TestConfigureUnixSerialPortAppliesFlowControl(t *testing.T) {
 				StopBits:    1,
 				FlowControl: tt.flow,
 			}
-			if err := configureUnixSerialPort(fd, cfg); err != nil {
-				t.Fatalf("configureUnixSerialPort() error = %v", err)
+			if configErr := configureUnixSerialPort(fd, cfg); configErr != nil {
+				t.Fatalf("configureUnixSerialPort() error = %v", configErr)
 			}
 			tio, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 			if err != nil {

@@ -24,7 +24,7 @@ type spiTransfer struct {
 	// The kernel struct has tx_nbits, rx_nbits, word_delay_usecs, and pad
 	// here. Keeping them as one padding array preserves the 32-byte layout
 	// without pretending this tool uses those fields.
-	padding [4]byte //nolint:unused // required for the kernel struct layout.
+	padding [4]byte
 }
 
 type spiSegment struct {
