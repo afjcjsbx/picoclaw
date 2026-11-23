@@ -692,6 +692,8 @@ type AgentDefaults struct {
 	SummarizeMessageThreshold int                 `json:"summarize_message_threshold"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"` // Deprecated: ignored; summarization is driven by SummarizeTokenPercent
 	SummarizeTokenPercent     int                 `json:"summarize_token_percent"              env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
 	MaxMediaSize              int                 `json:"max_media_size,omitempty"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	MaxBootstrapChars         int                 `json:"max_bootstrap_chars,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_BOOTSTRAP_CHARS"`       // Caps AGENT.md/AGENTS.md, SOUL.md and IDENTITY.md; USER.md uses Memory.UserCharLimit.
+	MaxBootstrapTotalChars    int                 `json:"max_bootstrap_total_chars,omitempty"  env:"PICOCLAW_AGENTS_DEFAULTS_MAX_BOOTSTRAP_TOTAL_CHARS"` // Caps the rendered bootstrap block, headings included.
 	VisionMaxImageDimension   int                 `json:"vision_max_image_dimension,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MAX_IMAGE_DIMENSION"`
 	VisionJPEGQuality         int                 `json:"vision_jpeg_quality,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_VISION_JPEG_QUALITY"`
 	Routing                   *RoutingConfig      `json:"routing,omitempty"`
@@ -725,6 +727,24 @@ func (d *AgentDefaults) GetMaxMediaSize() int {
 		return d.MaxMediaSize
 	}
 	return DefaultMaxMediaSize
+}
+
+const (
+	// DefaultMaxBootstrapChars caps each workspace bootstrap file (AGENT.md or
+	// AGENTS.md, SOUL.md, IDENTITY.md) injected into the system prompt.
+	DefaultMaxBootstrapChars = 20_000
+	// DefaultMaxBootstrapTotalChars caps the rendered bootstrap block as a
+	// whole, including section headings. A smaller per-file limit wins when it
+	// keeps the block under this budget.
+	DefaultMaxBootstrapTotalChars = 24_000
+)
+
+func (d *AgentDefaults) GetMaxBootstrapChars() int {
+	return positiveOr(d.MaxBootstrapChars, DefaultMaxBootstrapChars)
+}
+
+func (d *AgentDefaults) GetMaxBootstrapTotalChars() int {
+	return positiveOr(d.MaxBootstrapTotalChars, DefaultMaxBootstrapTotalChars)
 }
 
 const (
