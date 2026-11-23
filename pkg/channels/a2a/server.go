@@ -90,8 +90,8 @@ func (c *Channel) handleRPC(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if v := r.Header.Get(proto.VersionHeader); v != "" && v != "1" && !strings.HasPrefix(v, "1.") {
-		writeErr(w, nil, proto.CodeVersion, "only A2A 1.x is supported")
+	if !versionOK(r.Header.Get(proto.VersionHeader)) {
+		writeErr(w, nil, proto.CodeVersion, "only A2A "+proto.Version+" is supported")
 		return
 	}
 	var req rpcRequest
@@ -365,6 +365,11 @@ func textOf(parts []proto.Part) (string, bool) {
 		b.WriteString(*p.Text)
 	}
 	return strings.TrimSpace(b.String()), true
+}
+
+// versionOK accepts an absent header, "1.0" and patch releases such as "1.0.0".
+func versionOK(v string) bool {
+	return v == "" || v == proto.Version || strings.HasPrefix(v, proto.Version+".")
 }
 
 func acceptsText(mode string) bool { return mode == "text/plain" || mode == "text/*" || mode == "*/*" }

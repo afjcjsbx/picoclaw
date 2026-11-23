@@ -174,6 +174,27 @@ func TestSendMessageBlockingAndIdempotent(t *testing.T) {
 	assert.Nil(t, taskOf(t, out4)["history"])
 }
 
+func TestVersionHeader(t *testing.T) {
+	r := newRig(t, config.A2ASettings{})
+	for v, ok := range map[string]bool{"": true, "1.0": true, "1.0.0": true, "1": false, "1.1": false, "2.0": false} {
+		body := `{"jsonrpc":"2.0","id":1,"method":"ListTasks","params":{}}`
+		req, _ := http.NewRequest(http.MethodPost, r.url+proto.RPCPath, strings.NewReader(body))
+		if v != "" {
+			req.Header[proto.VersionHeader] = []string{v}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if ok {
+			assert.Nil(t, out["error"], "A2A-Version %q", v)
+		} else {
+			assert.Equal(t, proto.CodeVersion, errCode(out), "A2A-Version %q", v)
+		}
+	}
+}
+
 func TestRequestValidation(t *testing.T) {
 	r := newRig(t, config.A2ASettings{})
 	_, out := r.rpc("", "SendMessage", map[string]any{"message": map[string]any{"role": proto.RoleUser}})
