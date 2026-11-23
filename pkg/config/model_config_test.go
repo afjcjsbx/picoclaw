@@ -381,3 +381,58 @@ func TestModelConfig_RequestTimeoutDefaultZeroValue(t *testing.T) {
 		t.Fatalf("RequestTimeout = %d, want 0", cfg.RequestTimeout)
 	}
 }
+
+func TestModelConfig_SamplingFieldsJSON(t *testing.T) {
+	var unset ModelConfig
+	if err := json.Unmarshal([]byte(`{"model_name":"m","model":"openai/gpt-4o"}`), &unset); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if unset.MaxTokens != 0 || unset.Temperature != nil || unset.ContextWindow != 0 {
+		t.Fatalf("legacy entry must leave sampling fields unset, got %+v", unset)
+	}
+	data, err := json.Marshal(unset)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	for _, key := range []string{"max_tokens", "temperature", "context_window"} {
+		if strings.Contains(string(data), `"`+key+`"`) {
+			t.Errorf("unset %s must not be serialized: %s", key, data)
+		}
+	}
+
+	var set ModelConfig
+	raw := `{"model_name":"m","model":"openai/gpt-4o","max_tokens":4096,"temperature":0,"context_window":65536}`
+	if err = json.Unmarshal([]byte(raw), &set); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if set.MaxTokens != 4096 || set.ContextWindow != 65536 {
+		t.Fatalf("max_tokens/context_window = %d/%d", set.MaxTokens, set.ContextWindow)
+	}
+	if set.Temperature == nil || *set.Temperature != 0 {
+		t.Fatalf("explicit temperature 0 must be kept distinct from unset, got %v", set.Temperature)
+	}
+	data, err = json.Marshal(set)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"temperature":0`) {
+		t.Errorf("explicit temperature 0 must be serialized: %s", data)
+	}
+}
+
+func TestModelConfig_Validate_RejectsNegativeSampling(t *testing.T) {
+	neg := -0.1
+	tests := []struct {
+		name string
+		mc   ModelConfig
+	}{
+		{"max_tokens", ModelConfig{ModelName: "m", Model: "openai/gpt-4o", MaxTokens: -1}},
+		{"context_window", ModelConfig{ModelName: "m", Model: "openai/gpt-4o", ContextWindow: -1}},
+		{"temperature", ModelConfig{ModelName: "m", Model: "openai/gpt-4o", Temperature: &neg}},
+	}
+	for _, tt := range tests {
+		if err := tt.mc.Validate(); err == nil || !strings.Contains(err.Error(), tt.name) {
+			t.Errorf("Validate() with negative %s = %v, want error naming it", tt.name, err)
+		}
+	}
+}

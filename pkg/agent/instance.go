@@ -264,30 +264,19 @@ func NewAgentInstance(
 	budgetWarnAt := budgetWarnIteration(maxIter, defaults.MaxToolBudgetWarningRatio)
 	runBudget, runBudgetWarnAfter := runBudgetDurations(defaults.RunBudgetSeconds, defaults.RunBudgetWarningThreshold)
 
-	maxTokens := defaults.MaxTokens
-	if maxTokens == 0 {
-		maxTokens = 8192
+	// The primary model's entry may override max_tokens, temperature and
+	// context_window; anything it leaves unset falls back to agents.defaults.
+	var primaryCfg *config.ModelConfig
+	if mc, err := cfg.GetModelConfig(model); err == nil {
+		primaryCfg = mc
 	}
-
-	contextWindow := defaults.ContextWindow
-	if contextWindow == 0 {
-		// Default heuristic: 4x the output token limit.
-		// Most models have context windows well above their output limits
-		// (e.g., GPT-4o 128k ctx / 16k out, Claude 200k ctx / 8k out).
-		// 4x is a conservative lower bound that avoids premature
-		// summarization while remaining safe — the reactive
-		// forceCompression handles any overshoot.
-		contextWindow = maxTokens * 4
-	}
-
-	temperature := 0.7
-	if defaults.Temperature != nil {
-		temperature = *defaults.Temperature
-	}
+	maxTokens := resolveMaxTokens(defaults, primaryCfg)
+	contextWindow := resolveContextWindow(defaults, primaryCfg, maxTokens)
+	temperature := resolveTemperature(defaults, primaryCfg)
 
 	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
+	if primaryCfg != nil {
+		thinkingLevelStr = primaryCfg.ThinkingLevel
 	}
 	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
 	thinkingLevelConfigured := isConfiguredThinkingLevel(thinkingLevelStr)

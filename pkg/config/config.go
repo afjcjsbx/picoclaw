@@ -1136,6 +1136,13 @@ type ModelConfig struct {
 	ExtraBody           map[string]any       `json:"extra_body,omitempty"`            // Additional fields to inject into request body
 	CustomHeaders       map[string]string    `json:"custom_headers,omitempty"`        // Additional headers to inject into every HTTP request
 
+	// MaxTokens, Temperature and ContextWindow override the matching
+	// agents.defaults values for requests sent to this model entry. Zero (or
+	// nil for Temperature, where 0 is a valid value) inherits the global default.
+	MaxTokens     int      `json:"max_tokens,omitempty"`     // Max output tokens per request
+	Temperature   *float64 `json:"temperature,omitempty"`    // Sampling temperature
+	ContextWindow int      `json:"context_window,omitempty"` // Context window size in tokens
+
 	APIKeys SecureStrings `json:"api_keys,omitzero" yaml:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
 
 	// Enabled indicates whether this model entry is active. When omitted in
@@ -1200,6 +1207,15 @@ func (c *ModelConfig) Validate() error {
 	}
 	if _, err := providercommon.NormalizeProviderSort(c.ProviderSort); err != nil {
 		return err
+	}
+	if c.MaxTokens < 0 {
+		return fmt.Errorf("max_tokens must not be negative")
+	}
+	if c.ContextWindow < 0 {
+		return fmt.Errorf("context_window must not be negative")
+	}
+	if c.Temperature != nil && *c.Temperature < 0 {
+		return fmt.Errorf("temperature must not be negative")
 	}
 
 	// Reject whitespace in model identifier
@@ -2417,6 +2433,9 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 				MaxTokensField:      m.MaxTokensField,
 				RequestTimeout:      m.RequestTimeout,
 				ProviderSort:        m.ProviderSort,
+				MaxTokens:           m.MaxTokens,
+				Temperature:         m.Temperature,
+				ContextWindow:       m.ContextWindow,
 				ThinkingLevel:       m.ThinkingLevel,
 				ToolSchemaTransform: m.ToolSchemaTransform,
 				Streaming:           m.Streaming,
@@ -2446,6 +2465,9 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 			MaxTokensField:      m.MaxTokensField,
 			RequestTimeout:      m.RequestTimeout,
 			ProviderSort:        m.ProviderSort,
+			MaxTokens:           m.MaxTokens,
+			Temperature:         m.Temperature,
+			ContextWindow:       m.ContextWindow,
 			ThinkingLevel:       m.ThinkingLevel,
 			ToolSchemaTransform: m.ToolSchemaTransform,
 			Streaming:           m.Streaming,
