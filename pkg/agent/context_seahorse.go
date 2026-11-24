@@ -47,10 +47,15 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	dbPath := agent.Workspace + "/sessions/seahorse.db"
 
 	// Create CompleteFn from provider
-	completeFn := providerToCompleteFn(
-		agent.Provider,
-		resolvedCandidateModel(agent.Candidates, agent.Model),
+	target := agent.compactionTarget(al.cfg)
+	// seahorse chooses its own output budget per call, so only thinking applies.
+	extraOpts := map[string]any{}
+	target.applyThinking(extraOpts, agent.ID)
+	completeFn := providerToCompleteFnWithOptions(
+		target.provider,
+		target.model,
 		llmRetryFromConfig(al.cfg),
+		extraOpts,
 	)
 
 	// Create engine
@@ -213,18 +218,33 @@ func (m *seahorseContextManager) Close() error {
 // transient upstream failure is retried with backoff, since seahorse does not
 // retry a failed summarization itself.
 func providerToCompleteFn(provider providers.LLMProvider, model string, retry llmRetry) seahorse.CompleteFn {
+	return providerToCompleteFnWithOptions(provider, model, retry, nil)
+}
+
+// providerToCompleteFnWithOptions is providerToCompleteFn with extra request
+// options (for example thinking_level) merged into every call.
+func providerToCompleteFnWithOptions(
+	provider providers.LLMProvider,
+	model string,
+	retry llmRetry,
+	extra map[string]any,
+) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
+		callOpts := map[string]any{
+			"max_tokens":       opts.MaxTokens,
+			"temperature":      opts.Temperature,
+			"prompt_cache_key": "seahorse",
+		}
+		for k, v := range extra {
+			callOpts[k] = v
+		}
 		resp, err := chatRetryingTransient(
 			ctx,
 			provider,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil, // no tools for summarization
 			model,
-			map[string]any{
-				"max_tokens":       opts.MaxTokens,
-				"temperature":      opts.Temperature,
-				"prompt_cache_key": "seahorse",
-			},
+			callOpts,
 			retry,
 		)
 		if err != nil {

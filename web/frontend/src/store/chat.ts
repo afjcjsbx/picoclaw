@@ -66,6 +66,8 @@ export interface TokenUsage {
   requests?: number
   /** Prompt size of the last LLM call (the context currently in the window). */
   context_tokens?: number
+  /** Provider time of the turn's LLM calls, excluding tool execution. */
+  duration_ms?: number
   /** Absolute turn cost in USD when the backend reports it. */
   cost_usd?: number
 }

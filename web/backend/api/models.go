@@ -52,6 +52,9 @@ type modelResponse struct {
 	MaxTokensField      string                      `json:"max_tokens_field,omitempty"`
 	RequestTimeout      int                         `json:"request_timeout,omitempty"`
 	ProviderSort        string                      `json:"provider_sort,omitempty"`
+	MaxTokens           int                         `json:"max_tokens,omitempty"`
+	Temperature         *float64                    `json:"temperature,omitempty"`
+	ContextWindow       int                         `json:"context_window,omitempty"`
 	ThinkingLevel       string                      `json:"thinking_level,omitempty"`
 	ToolSchemaTransform string                      `json:"tool_schema_transform,omitempty"`
 	Streaming           config.ModelStreamingConfig `json:"streaming,omitempty"`
@@ -640,6 +643,9 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			MaxTokensField:      m.MaxTokensField,
 			RequestTimeout:      m.RequestTimeout,
 			ProviderSort:        m.ProviderSort,
+			MaxTokens:           m.MaxTokens,
+			Temperature:         m.Temperature,
+			ContextWindow:       m.ContextWindow,
 			ThinkingLevel:       m.ThinkingLevel,
 			ToolSchemaTransform: m.ToolSchemaTransform,
 			Streaming:           m.Streaming,
@@ -832,6 +838,16 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := rawFields["provider_sort"]; !ok {
 		mc.ProviderSort = cfg.ModelList[idx].ProviderSort
+	}
+	// Clients that predate the per-model sampling fields must not wipe them.
+	if _, ok := rawFields["max_tokens"]; !ok {
+		mc.MaxTokens = cfg.ModelList[idx].MaxTokens
+	}
+	if _, ok := rawFields["temperature"]; !ok {
+		mc.Temperature = cfg.ModelList[idx].Temperature
+	}
+	if _, ok := rawFields["context_window"]; !ok {
+		mc.ContextWindow = cfg.ModelList[idx].ContextWindow
 	}
 	if _, ok := rawFields["streaming"]; !ok {
 		mc.Streaming = cfg.ModelList[idx].Streaming

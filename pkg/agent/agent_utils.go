@@ -217,7 +217,10 @@ func toolFeedbackExplanationFromMessages(messages []providers.Message) string {
 }
 
 func toolFeedbackArgsPreview(args map[string]any, maxLen int) string {
-	argsJSON := utils.FormatArgsJSON(args, true, false)
+	// Keep the preview human-readable: HTML escaping would turn "2>" into
+	// "\u003e", which Telegram MarkdownV2 renders as "u003e" because the
+	// backslash is consumed as an escape character inside code blocks.
+	argsJSON := utils.FormatArgsJSON(args, true, true)
 	return utils.Truncate(argsJSON, maxLen)
 }
 
@@ -589,6 +592,7 @@ func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
 		CostUSD:             usage.CostUSD,
 		Requests:            usage.Requests,
 		ContextTokens:       usage.ContextTokens,
+		DurationMS:          usage.DurationMS,
 	}
 }
 

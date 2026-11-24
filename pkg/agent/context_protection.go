@@ -131,6 +131,41 @@ func computeHistoryProtection(
 	}
 }
 
+// pruneProtectedHistory evicts tool outputs in the unprotected middle and, if
+// the protected tail is over budget, in the tail as well. The head is never
+// touched.
+func pruneProtectedHistory(
+	history []providers.Message,
+	protection historyProtection,
+	limit int,
+	agent *AgentInstance,
+) bool {
+	if agent == nil {
+		return false
+	}
+	historicalTailStart := min(protection.tailStartFull, limit)
+	if historicalTailStart < protection.headEnd {
+		historicalTailStart = protection.headEnd
+	}
+	pruned := pruneToolResultsInRange(
+		history,
+		protection.headEnd,
+		historicalTailStart,
+		agent.Workspace,
+	)
+	if pruneToolResultsToBudget(
+		history,
+		historicalTailStart,
+		limit,
+		agent.Workspace,
+		agent.Provider,
+		protection.tailTokenBudget,
+	) {
+		pruned = true
+	}
+	return pruned
+}
+
 func agentProvider(agent *AgentInstance) providers.LLMProvider {
 	if agent == nil {
 		return nil

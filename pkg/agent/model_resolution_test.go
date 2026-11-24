@@ -225,3 +225,38 @@ func TestResolveActiveModelConfig_DoesNotFallbackToOpenAIForDefaultProviderCandi
 		t.Fatalf("resolveActiveModelConfig() = %#v, want nil for non-active provider config", got)
 	}
 }
+
+// An entry whose model_name differs from its upstream model ID must still be
+// found after the startup path has swapped in the name CreateProvider returned:
+// otherwise the agent resolves the bare ID under the default provider and
+// ignores the entry's per-model settings.
+func TestActiveModelConfigSurvivesProviderCreationWithAlias(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = "glm"
+	entry := &config.ModelConfig{
+		ModelName: "glm",
+		Provider:  "opencode-go",
+		Model:     "glm-5.3-flash",
+		Streaming: config.ModelStreamingConfig{Enabled: true},
+	}
+	entry.SetAPIKey("fake-key")
+	cfg.ModelList = []*config.ModelConfig{entry}
+
+	_, modelID, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatalf("CreateProvider() error = %v", err)
+	}
+	if modelID != "glm-5.3-flash" {
+		t.Fatalf("CreateProvider() model ID = %q, want the upstream ID", modelID)
+	}
+	cfg.Agents.Defaults.ModelName = providers.DefaultModelRef(cfg, modelID)
+
+	candidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, cfg.Agents.Defaults.ModelName, nil)
+	if len(candidates) != 1 || candidates[0].Provider != "opencode-go" {
+		t.Fatalf("candidates = %+v, want one opencode-go candidate", candidates)
+	}
+	got := resolveActiveModelConfig(cfg, "/workspace", candidates, candidates[0].Model, cfg.Agents.Defaults.Provider)
+	if got == nil || !got.Streaming.Enabled {
+		t.Fatalf("resolveActiveModelConfig() = %+v, want the glm entry with streaming enabled", got)
+	}
+}

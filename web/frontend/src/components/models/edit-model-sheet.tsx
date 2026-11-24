@@ -44,6 +44,7 @@ import {
   getSubmittedAPIBase,
   normalizeApiBase,
 } from "./model-provider-form-shared"
+import { validateModelSampling } from "./model-sampling"
 import { type FieldValidation, validateModelField } from "./model-validation"
 import { ProviderCombobox } from "./provider-combobox"
 import {
@@ -68,6 +69,9 @@ interface EditForm {
   workspace: string
   rpm: string
   maxTokensField: string
+  maxTokens: string
+  temperature: string
+  contextWindow: string
   requestTimeout: string
   providerSort: string
   thinkingLevel: string
@@ -101,6 +105,9 @@ function buildInitialEditForm(model: ModelInfo): EditForm {
     workspace: model.workspace ?? "",
     rpm: model.rpm ? String(model.rpm) : "",
     maxTokensField: model.max_tokens_field ?? "",
+    maxTokens: model.max_tokens ? String(model.max_tokens) : "",
+    temperature: model.temperature != null ? String(model.temperature) : "",
+    contextWindow: model.context_window ? String(model.context_window) : "",
     requestTimeout: model.request_timeout ? String(model.request_timeout) : "",
     providerSort: model.provider_sort ?? "",
     thinkingLevel: model.thinking_level ?? "",
@@ -138,6 +145,9 @@ export function EditModelSheet({
     workspace: "",
     rpm: "",
     maxTokensField: "",
+    maxTokens: "",
+    temperature: "",
+    contextWindow: "",
     requestTimeout: "",
     providerSort: "",
     thinkingLevel: "",
@@ -370,6 +380,16 @@ export function EditModelSheet({
       return
     }
 
+    const sampling = validateModelSampling(form)
+    if (!sampling.ok) {
+      setError(
+        t(`models.field.${sampling.field}`) +
+          ": " +
+          t(`models.field.samplingError.${sampling.reason}`),
+      )
+      return
+    }
+
     onUpdateStarted()
     setSaving(true)
     setError("")
@@ -394,6 +414,9 @@ export function EditModelSheet({
         workspace: form.workspace.trim() || undefined,
         rpm: form.rpm ? Number(form.rpm) : undefined,
         max_tokens_field: form.maxTokensField.trim() || undefined,
+        max_tokens: sampling.payload.max_tokens,
+        temperature: sampling.payload.temperature,
+        context_window: sampling.payload.context_window,
         request_timeout: form.requestTimeout
           ? Number(form.requestTimeout)
           : undefined,
@@ -732,6 +755,48 @@ export function EditModelSheet({
                     value={form.maxTokensField}
                     onChange={setField("maxTokensField")}
                     placeholder="max_completion_tokens"
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.maxTokens")}
+                  hint={t("models.field.maxTokensHint")}
+                >
+                  <Input
+                    value={form.maxTokens}
+                    onChange={setField("maxTokens")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={1}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.temperature")}
+                  hint={t("models.field.temperatureHint")}
+                >
+                  <Input
+                    value={form.temperature}
+                    onChange={setField("temperature")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={0.1}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.contextWindow")}
+                  hint={t("models.field.contextWindowHint")}
+                >
+                  <Input
+                    value={form.contextWindow}
+                    onChange={setField("contextWindow")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={1}
                   />
                 </Field>
 

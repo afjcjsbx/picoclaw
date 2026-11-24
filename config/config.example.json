@@ -20,6 +20,8 @@
       "max_tool_budget_warning_ratio": 0.75,
       "max_parallel_turns": 5,
       "max_parallel_tool_calls": 4,
+      "max_bootstrap_chars": 20000,
+      "max_bootstrap_total_chars": 24000,
       "subturn": {
         "max_depth": 3,
         "max_concurrent": 3

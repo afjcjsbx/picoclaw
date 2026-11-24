@@ -170,6 +170,10 @@ func TestLegacySummarize_KeepsProtectedHeadAndTokenTail(t *testing.T) {
 
 func TestLegacyForceCompression_DoesNotCutActiveTurn(t *testing.T) {
 	al, agent, ts, turn := activeTurnFixture(t, 2)
+	// Oversized prior messages cannot be summarized, and a two-round active
+	// turn has no middle of its own to summarize. This forces the destructive
+	// fallback while still exercising the active-turn cut boundary.
+	agent.ContextWindow = 8
 	prior := []providers.Message{
 		{Role: "user", Content: "old question"},
 		{Role: "assistant", Content: "old answer"},
@@ -183,7 +187,7 @@ func TestLegacyForceCompression_DoesNotCutActiveTurn(t *testing.T) {
 	}
 
 	lcm := al.contextManager.(*legacyContextManager)
-	result, ok := lcm.forceCompression(sessionKey, ts)
+	result, ok := lcm.forceCompression(withTurnState(context.Background(), ts), sessionKey)
 	if !ok {
 		t.Fatal("expected compression")
 	}
@@ -211,6 +215,12 @@ func TestLegacyForceCompression_PreservesHeadAndTail(t *testing.T) {
 	first, last := 2, 4
 	cfg.Agents.Defaults.ProtectFirstN = &first
 	cfg.Agents.Defaults.ProtectLastN = &last
+	// Make every conversational message too large for the summarizer's
+	// per-message limit, so this test exercises the destructive fallback rather
+	// than the lossless summarization path that emergency compression tries first.
+	cfg.Agents.Defaults.ContextWindow = 8
+	budget := 0
+	cfg.Agents.Defaults.TailTokenBudget = &budget
 	al := newCMTestAgentLoop(cfg)
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
@@ -220,8 +230,8 @@ func TestLegacyForceCompression_PreservesHeadAndTail(t *testing.T) {
 	history := make([]providers.Message, 0, 12)
 	for i := 0; i < 6; i++ {
 		history = append(history,
-			providers.Message{Role: "user", Content: "question " + string(rune('a'+i))},
-			providers.Message{Role: "assistant", Content: "answer " + string(rune('a'+i))},
+			providers.Message{Role: "user", Content: "question " + string(rune('a'+i)) + strings.Repeat("q", 20)},
+			providers.Message{Role: "assistant", Content: "answer " + string(rune('a'+i)) + strings.Repeat("a", 20)},
 		)
 	}
 	const sessionKey = "session-head-tail-drop"
@@ -230,12 +240,12 @@ func TestLegacyForceCompression_PreservesHeadAndTail(t *testing.T) {
 	}
 
 	lcm := al.contextManager.(*legacyContextManager)
-	result, ok := lcm.forceCompression(sessionKey, nil)
+	result, ok := lcm.forceCompression(context.Background(), sessionKey)
 	if !ok {
 		t.Fatal("expected compression")
 	}
-	if result.DroppedMessages == 0 {
-		t.Fatal("expected messages to be dropped")
+	if !result.Fallback || result.DroppedMessages == 0 {
+		t.Fatalf("expected a destructive fallback, got %+v", result)
 	}
 
 	got, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
@@ -253,6 +263,13 @@ func TestLegacyForceCompression_PreservesHeadAndTail(t *testing.T) {
 		if got[len(got)-last+i].Content != want.Content {
 			t.Fatalf("protected tail message %d = %q, want %q", i, got[len(got)-last+i].Content, want.Content)
 		}
+	}
+	summary, err := agent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
+	if !strings.Contains(summary, "archived at "+result.ArchivedPath) {
+		t.Fatalf("summary does not point at the archive: %q", summary)
 	}
 }
 
@@ -298,7 +315,8 @@ func TestLegacyPrune_ArchivesHugeToolResultInTheTail(t *testing.T) {
 		{Role: "assistant", Content: "done"},
 	}
 
-	if !pruneOldToolResults(history, agent, len(history)) {
+	protection := computeHistoryProtection(history, len(history), agent)
+	if !pruneProtectedHistory(history, protection, len(history), agent) {
 		t.Fatal("expected the huge tail tool result to be evicted")
 	}
 	if len(history) != 8 {
@@ -312,6 +330,43 @@ func TestLegacyPrune_ArchivesHugeToolResultInTheTail(t *testing.T) {
 	}
 	if history[2].Content != "small old output" {
 		t.Fatalf("short output changed: %q", history[2].Content)
+	}
+}
+
+func TestPruneProtectedHistory_KeepsHeadAndPrunesMiddle(t *testing.T) {
+	workspace := t.TempDir()
+	bulky := strings.Repeat("bulky output ", 100)
+	agent := &AgentInstance{
+		Workspace:       workspace,
+		ProtectFirstN:   3,
+		ProtectLastN:    2,
+		TailTokenBudget: 0,
+	}
+	history := []providers.Message{
+		{Role: "user", Content: "opening instruction"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "head-call", Name: "read"}}},
+		{Role: "tool", ToolCallID: "head-call", Content: bulky},
+		{Role: "user", Content: "middle question"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "middle-call", Name: "read"}}},
+		{Role: "tool", ToolCallID: "middle-call", Content: bulky},
+		{Role: "user", Content: "tail question"},
+		{Role: "assistant", Content: "tail answer"},
+	}
+	protection := computeHistoryProtection(history, len(history), agent)
+	if protection.headEnd != 3 || protection.tailStart != 6 {
+		t.Fatalf("protection = %+v, want head end 3 and tail start 6", protection)
+	}
+	if !pruneProtectedHistory(history, protection, len(history), agent) {
+		t.Fatal("expected the middle tool output to be evicted")
+	}
+	if history[2].Content != bulky {
+		t.Fatal("protected head tool output changed")
+	}
+	if data := readArchivedToolResult(t, history[5].Content); string(data) != bulky {
+		t.Fatalf("archived middle output = %q, want the original", data)
+	}
+	if history[6].Content != "tail question" || history[7].Content != "tail answer" {
+		t.Fatalf("protected tail changed: %+v", history[6:])
 	}
 }
 
