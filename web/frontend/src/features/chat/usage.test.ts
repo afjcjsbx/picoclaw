@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest"
 import {
   estimateUsageCostUsd,
   formatTokenCount,
+  formatTokensPerSecond,
   formatUsageCostUsd,
   parseTokenUsage,
   resolveModelPricing,
+  tokensPerSecond,
 } from "./usage"
 
 describe("parseTokenUsage", () => {
@@ -56,6 +58,7 @@ describe("parseTokenUsage", () => {
           total_tokens: 106_838,
           requests: 5,
           context_tokens: 24_310,
+          duration_ms: 64_200,
         },
       }),
     ).toEqual({
@@ -64,6 +67,7 @@ describe("parseTokenUsage", () => {
       total_tokens: 106_838,
       requests: 5,
       context_tokens: 24_310,
+      duration_ms: 64_200,
     })
   })
 
@@ -178,5 +182,34 @@ describe("formatting helpers", () => {
     expect(formatUsageCostUsd(0.0042)).toBe("$0.0042")
     expect(formatUsageCostUsd(0.125)).toBe("$0.125")
     expect(formatUsageCostUsd(1.5)).toBe("$1.50")
+  })
+})
+
+describe("tokensPerSecond", () => {
+  it("divides output tokens by provider time", () => {
+    expect(
+      tokensPerSecond({
+        output_tokens: 500,
+        total_tokens: 500,
+        duration_ms: 2000,
+      }),
+    ).toBe(250)
+  })
+
+  it("returns undefined without output tokens or a duration", () => {
+    expect(tokensPerSecond({ total_tokens: 0 })).toBeUndefined()
+    expect(
+      tokensPerSecond({ output_tokens: 10, total_tokens: 10 }),
+    ).toBeUndefined()
+    expect(
+      tokensPerSecond({ output_tokens: 10, total_tokens: 10, duration_ms: 0 }),
+    ).toBeUndefined()
+  })
+
+  it("formats rates at different magnitudes", () => {
+    expect(formatTokensPerSecond(250.4)).toBe("250")
+    expect(formatTokensPerSecond(42.36)).toBe("42.4")
+    expect(formatTokensPerSecond(3.456)).toBe("3.46")
+    expect(formatTokensPerSecond(0)).toBe("0")
   })
 })

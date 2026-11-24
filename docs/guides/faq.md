@@ -74,6 +74,9 @@ Cron jobs are scheduled tasks that deliver messages to a channel ([Scheduled Tas
 **What is the difference between skills, plugins, and MCP?**
 Skills are `SKILL.md` folders with instructions and resources ([authoring guide](skills-authoring.md)). Agent Plugins are installable packages that can bundle skills plus MCP servers ([Plugin Installation](plugins.md)). MCP connects external tool servers ([MCP tools](../tools/mcp.md)).
 
+**Can PicoClaw do browser automation?**
+Yes. Connect Playwright MCP and PicoClaw can drive a real Chromium browser: render JavaScript-heavy pages, click, fill forms, keep sessions, and take screenshots. The Go core stays small; the browser is a separate process. See [Browser automation](../tools/browser-automation.md).
+
 **Where are sessions and memory stored?**
 Session history is stored per session as JSONL files in the workspace, with summaries and scoping rules described in the [Session Guide](session-guide.md) and [Session System](../architecture/session-system.md).
 

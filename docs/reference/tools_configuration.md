@@ -43,6 +43,8 @@ Two related settings sit outside the pattern:
 - `tools.media_cleanup.*` prunes stored media and uses the `PICOCLAW_MEDIA_CLEANUP_` environment prefix; see [Media tools](../tools/media.md#media-cleanup).
 - `tools.skills.registries` configures the registries used by `find_skills` and `install_skill`; see [Skills tools](../tools/skills.md).
 
+Browser automation is not a separate built-in switch: it is provided by an MCP server such as Playwright, configured under `tools.mcp.servers`. See [Browser automation](../tools/browser-automation.md).
+
 Agents can see a narrower tool set than the global switches allow: an `AGENT.md` frontmatter `tools:` list acts as an allowlist per agent, and `turn_profile` can narrow the exposed tools further for specific requests (see [Configuration](../guides/configuration.md)).
 
 Tool parameter schemas are adapted per provider. Native Google Gemini endpoints receive full JSON Schema through `parametersJsonSchema`, while Vertex AI and Gemini-compatible proxies receive sanitized OpenAPI-style schemas. No tool setting is required; see [Provider tool schema compatibility](../guides/providers.md#tool-schema-compatibility).

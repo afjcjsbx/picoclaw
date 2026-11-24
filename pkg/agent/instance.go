@@ -55,6 +55,9 @@ type AgentInstance struct {
 	MCPServerAllowlist      map[string]struct{}
 	Candidates              []providers.FallbackCandidate
 	ImageCandidates         []providers.FallbackCandidate
+	// CompactionCandidates is the resolved auxiliary.compaction model; empty
+	// means summarization runs on the agent's own model.
+	CompactionCandidates []providers.FallbackCandidate
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -112,7 +115,7 @@ func NewAgentInstance(
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
 
-	definition := loadAgentDefinition(workspace)
+	definition := loadAgentDefinitionWithLimit(workspace, defaults.GetMaxBootstrapChars())
 
 	model := resolveAgentModel(agentCfg, defaults, definition)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -229,6 +232,7 @@ func NewAgentInstance(
 		).
 		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
 		WithMemoryConfig(defaults.Memory).
+		WithBootstrapLimits(defaults.GetMaxBootstrapChars(), defaults.GetMaxBootstrapTotalChars()).
 		WithIsolation(
 			cfg.Isolation,
 			defaults.RestrictToWorkspace,
@@ -264,30 +268,19 @@ func NewAgentInstance(
 	budgetWarnAt := budgetWarnIteration(maxIter, defaults.MaxToolBudgetWarningRatio)
 	runBudget, runBudgetWarnAfter := runBudgetDurations(defaults.RunBudgetSeconds, defaults.RunBudgetWarningThreshold)
 
-	maxTokens := defaults.MaxTokens
-	if maxTokens == 0 {
-		maxTokens = 8192
+	// The primary model's entry may override max_tokens, temperature and
+	// context_window; anything it leaves unset falls back to agents.defaults.
+	var primaryCfg *config.ModelConfig
+	if mc, err := cfg.GetModelConfig(model); err == nil {
+		primaryCfg = mc
 	}
-
-	contextWindow := defaults.ContextWindow
-	if contextWindow == 0 {
-		// Default heuristic: 4x the output token limit.
-		// Most models have context windows well above their output limits
-		// (e.g., GPT-4o 128k ctx / 16k out, Claude 200k ctx / 8k out).
-		// 4x is a conservative lower bound that avoids premature
-		// summarization while remaining safe — the reactive
-		// forceCompression handles any overshoot.
-		contextWindow = maxTokens * 4
-	}
-
-	temperature := 0.7
-	if defaults.Temperature != nil {
-		temperature = *defaults.Temperature
-	}
+	maxTokens := resolveMaxTokens(defaults, primaryCfg)
+	contextWindow := resolveContextWindow(defaults, primaryCfg, maxTokens)
+	temperature := resolveTemperature(defaults, primaryCfg)
 
 	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
+	if primaryCfg != nil {
+		thinkingLevelStr = primaryCfg.ThinkingLevel
 	}
 	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
 	thinkingLevelConfigured := isConfiguredThinkingLevel(thinkingLevelStr)
@@ -315,7 +308,7 @@ func NewAgentInstance(
 	imageCandidates := resolveModelCandidates(
 		cfg,
 		defaults.Provider,
-		defaults.ImageModel,
+		defaults.GetImageModel(),
 		defaults.ImageModelFallbacks,
 	)
 
@@ -331,7 +324,7 @@ func NewAgentInstance(
 		)
 		populateCandidateProvidersFromCandidates(cfg, workspace, candidates[1:], candidateProviders)
 	}
-	if strings.TrimSpace(defaults.ImageModel) != "" {
+	if strings.TrimSpace(defaults.GetImageModel()) != "" {
 		if len(candidates) > 0 {
 			inheritPrimaryProviderForCandidates(
 				cfg,
@@ -344,6 +337,11 @@ func NewAgentInstance(
 		}
 		populateCandidateProvidersFromCandidates(cfg, workspace, imageCandidates, candidateProviders)
 	}
+
+	compactionCandidates := resolveAuxiliaryCandidates(
+		cfg, defaults, "compaction", defaults.Auxiliary.Compaction, workspace,
+		candidates, provider, candidateProviders,
+	)
 
 	// Model routing setup: pre-resolve light model candidates at creation time
 	// to avoid repeated model_list lookups on every incoming message.
@@ -415,6 +413,7 @@ func NewAgentInstance(
 		MCPServerAllowlist:      agentMCPServerAllowlist,
 		Candidates:              candidates,
 		ImageCandidates:         imageCandidates,
+		CompactionCandidates:    compactionCandidates,
 		Router:                  router,
 		LightCandidates:         lightCandidates,
 		LightProvider:           lightProvider,

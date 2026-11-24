@@ -56,11 +56,11 @@ Rules:
 - Be concise and omit chit-chat. Return only the checkpoint, with no preamble.`
 )
 
-// summaryMaxTokens returns the per-checkpoint output cap: 5% of the context
-// window, never above 12K tokens and never above the model's configured
-// output limit. The model output limit wins because the summarizer runs on the
-// agent's own model; sending a larger max_tokens would be rejected by providers
-// that enforce it.
+// summaryMaxTokens returns the per-checkpoint output cap: 5% of the consuming
+// agent's context window, never above 12K tokens and never above that agent's
+// configured output limit. An auxiliary compaction model may impose a stricter
+// request cap, but the stored checkpoint remains bounded by this budget because
+// it is injected into the consuming agent's future prompts.
 func summaryMaxTokens(agent *AgentInstance) int {
 	if agent == nil {
 		return summaryMaxTokensCeiling

@@ -323,7 +323,11 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	if finalMessage.Usage == nil {
 		t.Fatal("expected final message usage to be persisted")
 	}
-	if got, want := *finalMessage.Usage, (providers.UsageInfo{
+	// The provider call is timed at runtime; zero the measurement so this test
+	// asserts the aggregated counters without depending on wall-clock time.
+	gotUsage := *finalMessage.Usage
+	gotUsage.DurationMS = 0
+	if got, want := gotUsage, (providers.UsageInfo{
 		PromptTokens:     120 + 200,
 		CompletionTokens: 30 + 50,
 		TotalTokens:      150 + 250,
@@ -572,8 +576,15 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	if payload.Reason != ContextCompressReasonRetry {
 		t.Fatalf("expected retry compress reason, got %q", payload.Reason)
 	}
-	if payload.DroppedMessages == 0 {
-		t.Fatal("expected dropped messages to be recorded")
+	if payload.DroppedMessages != 0 || payload.Fallback {
+		t.Fatalf("expected a non-destructive recovery, got dropped=%d fallback=%v",
+			payload.DroppedMessages, payload.Fallback)
+	}
+	if payload.SummarizedMessages == 0 {
+		t.Fatal("expected summarized messages to be recorded")
+	}
+	if payload.Attempts < 2 {
+		t.Fatalf("attempts = %d, want at least 2", payload.Attempts)
 	}
 }
 

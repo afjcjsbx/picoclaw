@@ -73,6 +73,8 @@ PicoClaw 将数据存储在您配置的工作区中（默认：`~/.picoclaw/work
 
 > **提示：** 对 `AGENT.md`、`SOUL.md`、`USER.md` 和 `memory/MEMORY.md` 的修改会通过文件修改时间（mtime）在运行时自动检测。**无需重启 gateway**，Agent 将在下一次请求时自动加载最新内容。
 
+`agents.defaults.max_bootstrap_chars` 和 `agents.defaults.max_bootstrap_total_chars` 限制注入系统提示的工作区引导文件（`AGENT.md`/`AGENTS.md`、`SOUL.md`、`IDENTITY.md`）。默认每个文件最多 `20000` 个字符，整个引导区块最多 `24000` 个字符（包含标题）。超限内容会按 UTF-8 边界截断，并附带原文件大小和 `read_file` 提示。无论配置如何，从磁盘读取的单个文件最多 2 MiB。`USER.md` 不属于该缓存区块，而是通过记忆区块注入，并由 `memory.user_char_limit` 限制。
+
 ### Agent 自进化
 
 `evolution` 配置块控制 PicoClaw 的自进化运行时。启用后，Agent 会把已完成的回合记录为学习记录。在更高模式下，它可以聚类重复出现的成功模式、生成技能草稿，并可选择把已接受的草稿应用到工作区技能中。

@@ -2444,6 +2444,19 @@ func TestToolFeedbackArgsPreview_UsesJSONAndTruncates(t *testing.T) {
 	}
 }
 
+func TestToolFeedbackArgsPreview_DoesNotHTMLEscapeJSON(t *testing.T) {
+	got := toolFeedbackArgsPreview(map[string]any{
+		"command": "ls -d */ 2>/dev/null; true && echo done",
+	}, 512)
+	want := "{\n  \"command\": \"ls -d */ 2>/dev/null; true && echo done\"\n}"
+	if got != want {
+		t.Fatalf("toolFeedbackArgsPreview() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, `\u003c`) || strings.Contains(got, `\u003e`) || strings.Contains(got, `\u0026`) {
+		t.Fatalf("toolFeedbackArgsPreview() = %q, want no HTML-escaped runes", got)
+	}
+}
+
 type picoInterleavedContentProvider struct {
 	calls int
 }
@@ -4392,9 +4405,10 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 		t.Errorf("Expected 'Recovered from context error', got '%s'", response)
 	}
 
-	// We expect 2 calls: 1st failed, 2nd succeeded
-	if provider.currentCall != 2 {
-		t.Errorf("Expected 2 calls (1 fail + 1 success), got %d", provider.currentCall)
+	// We expect 3 calls: the failed call, the summarization call that
+	// recovers context without dropping turns, and the successful retry.
+	if provider.currentCall != 3 {
+		t.Errorf("Expected 3 calls (1 fail + 1 summary + 1 success), got %d", provider.currentCall)
 	}
 
 	// Check final history length

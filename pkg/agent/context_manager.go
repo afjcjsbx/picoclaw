@@ -101,6 +101,33 @@ type ContextTokenReporter interface {
 // history is too short (or already compacted) for anything to be summarized.
 var ErrNothingToCompact = errors.New("nothing to compact")
 
+// ErrCompactionInProgress is returned when another compaction already owns the
+// session. Callers must treat it as transient, not as a failed attempt.
+var ErrCompactionInProgress = errors.New("a summarization is already in progress")
+
+// ErrCompactionThrottled is returned when automatic compaction is skipped
+// because an earlier attempt failed or did not reduce the context below the
+// threshold. Manual compaction bypasses the throttle.
+var ErrCompactionThrottled = errors.New("compaction throttled")
+
+// CompactionHealthOutcome describes one automatic compaction check.
+// Attempted is false when the prompt was already below the threshold; Effective
+// then tells the manager that any stale backoff state can be cleared.
+type CompactionHealthOutcome struct {
+	// AgentID scopes the health state to the agent that owns the session.
+	AgentID      string
+	Attempted    bool
+	Effective    bool
+	PromptTokens int
+	Threshold    int
+}
+
+// CompactionHealthReporter is an optional extension implemented by context
+// managers that throttle repeated ineffective or failing automatic compactions.
+type CompactionHealthReporter interface {
+	RecordCompactionHealth(ctx context.Context, sessionKey string, outcome CompactionHealthOutcome)
+}
+
 // IngestRequest is the input to Ingest.
 type IngestRequest struct {
 	SessionKey string            // session identifier

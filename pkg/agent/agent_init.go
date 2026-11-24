@@ -449,6 +449,11 @@ func registerSharedTools(
 			agent.Tools.Register(delegateTool)
 		}
 
+		// A2A tools exist only when remote agents are configured (a2a_agents).
+		for _, tool := range integrationtools.NewA2ATools(cfg.A2AAgents) {
+			agent.Tools.Register(tool)
+		}
+
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)
 	}
 }

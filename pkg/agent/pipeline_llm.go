@@ -70,9 +70,10 @@ func (p *Pipeline) CallLLM(
 		return ControlBreak, err
 	}
 
+	maxTokens, temperature := ts.agent.llmSampling(p.Cfg, exec.activeModelConfig)
 	exec.llmOpts = map[string]any{
-		"max_tokens":       ts.agent.MaxTokens,
-		"temperature":      ts.agent.Temperature,
+		"max_tokens":       maxTokens,
+		"temperature":      temperature,
 		"prompt_cache_key": ts.agent.ID,
 		"session_key":      ts.sessionKey,
 	}
@@ -161,8 +162,8 @@ func (p *Pipeline) CallLLM(
 			Model:         exec.llmModel,
 			MessagesCount: len(exec.callMessages),
 			ToolsCount:    len(exec.providerToolDefs),
-			MaxTokens:     ts.agent.MaxTokens,
-			Temperature:   ts.agent.Temperature,
+			MaxTokens:     maxTokens,
+			Temperature:   temperature,
 		},
 	)
 
@@ -176,8 +177,8 @@ func (p *Pipeline) CallLLM(
 				"model":             exec.llmModel,
 				"messages_count":    len(exec.callMessages),
 				"tools_count":       len(exec.providerToolDefs),
-				"max_tokens":        ts.agent.MaxTokens,
-				"temperature":       ts.agent.Temperature,
+				"max_tokens":        maxTokens,
+				"temperature":       temperature,
 				"system_prompt_len": len(exec.callMessages[0].Content),
 			})
 		logger.DebugCF("agent", "Full LLM request",
@@ -283,6 +284,7 @@ func (p *Pipeline) CallLLM(
 				candidate.Model,
 				p.Cfg.Agents.Defaults.Provider,
 			)
+			p.applyCandidateSampling(ts.agent, exec.activeModelConfig, candidateCfg, callOpts)
 			candidateThinking := thinkingSettingsFromModelConfig(candidateCfg)
 			applyThinkingOption(callOpts, candidateProvider, candidateThinking, true, ts.agent.ID)
 			exec.suppressReasoning = shouldSuppressReasoningFor(candidateThinking)
@@ -292,8 +294,8 @@ func (p *Pipeline) CallLLM(
 				ctx, cancel = context.WithTimeout(ctx, d)
 				defer cancel()
 			}
-			resp, err := candidateProvider.Chat(
-				ctx, messagesForCall, candidateTools, candidate.Model, callOpts,
+			resp, err := chatWithDuration(
+				ctx, candidateProvider, messagesForCall, candidateTools, candidate.Model, callOpts,
 			)
 			if err != nil {
 				return nil, err
@@ -369,7 +371,9 @@ func (p *Pipeline) CallLLM(
 			}
 			return fbResult.Response, nil
 		}
-		return exec.activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, exec.llmModel, exec.llmOpts)
+		return chatWithDuration(
+			providerCtx, exec.activeProvider, messagesForCall, toolDefsForCall, exec.llmModel, exec.llmOpts,
+		)
 	}
 
 	// Retry loop
@@ -1055,6 +1059,33 @@ func finishReasonMatches(configured, actual string) bool {
 		return true
 	}
 	return isTruncatedFinishReason(configured) && isTruncatedFinishReason(actual)
+}
+
+// chatWithDuration calls provider.Chat and stamps the elapsed time on the
+// response usage. Throughput reported to clients divides output tokens by this
+// duration, so it measures the provider call only: tool execution between calls
+// must not dilute the rate.
+func chatWithDuration(
+	ctx context.Context,
+	llm providers.LLMProvider,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
+	start := time.Now()
+	resp, err := llm.Chat(ctx, messages, tools, model, options)
+	recordProviderDuration(resp, time.Since(start))
+	return resp, err
+}
+
+// recordProviderDuration stamps the duration of one provider call so the turn
+// aggregate can report generation throughput.
+func recordProviderDuration(resp *providers.LLMResponse, elapsed time.Duration) {
+	if resp == nil || resp.Usage == nil {
+		return
+	}
+	resp.Usage.DurationMS = elapsed.Milliseconds()
 }
 
 // unusableFallbackResponse returns the last unusable response when the chain

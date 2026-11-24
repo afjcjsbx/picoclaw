@@ -89,6 +89,10 @@ type TokenUsage struct {
 	// size of the last call, which is the context currently in the window.
 	Requests      int `json:"requests,omitempty"`
 	ContextTokens int `json:"context_tokens,omitempty"`
+
+	// DurationMS is the total provider time of those calls, excluding tool
+	// execution, so clients can derive output tokens per second.
+	DurationMS int64 `json:"duration_ms,omitempty"`
 }
 
 type OutboundMessage struct {
