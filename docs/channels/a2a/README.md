@@ -13,6 +13,12 @@ description: "Let other agents discover and call PicoClaw over the A2A protocol 
 
 ## 🚀 Inbound: expose PicoClaw
 
+Open **Channels → A2A** in the Web UI to enable the listener, configure its
+address and Agent Card, and manage bearer tokens. The page uses the same save
+and gateway-restart flow as the other channels.
+
+You can also configure it directly:
+
 ```json
 {
   "channel_list": {

@@ -1,5 +1,5 @@
 import { IconChevronDown, IconEye, IconEyeOff } from "@tabler/icons-react"
-import { type ReactNode, useState } from "react"
+import { type KeyboardEventHandler, type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -91,6 +91,8 @@ interface KeyInputProps {
   onChange: (v: string) => void
   placeholder?: string
   className?: string
+  onKeyDown?: KeyboardEventHandler<HTMLInputElement>
+  ariaLabel?: string
 }
 
 export function KeyInput({
@@ -98,6 +100,8 @@ export function KeyInput({
   onChange,
   placeholder,
   className,
+  onKeyDown,
+  ariaLabel,
 }: KeyInputProps) {
   const [show, setShow] = useState(false)
 
@@ -107,6 +111,8 @@ export function KeyInput({
         type={show ? "text" : "password"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        aria-label={ariaLabel}
         placeholder={placeholder}
         className={cn("pr-10", className)}
       />

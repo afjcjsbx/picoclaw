@@ -12,7 +12,7 @@ import {
   mergeUniqueStringItems,
   parseConservativeStringListInput,
 } from "@/components/channels/channel-array-utils"
-import { Field } from "@/components/shared-form"
+import { Field, KeyInput } from "@/components/shared-form"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -43,6 +43,7 @@ interface ChannelArrayListFieldProps {
   fieldPath?: string
   registerFlusher?: RegisterArrayFieldFlusher
   resetVersion?: number
+  secret?: boolean
 }
 
 export function ChannelArrayListField({
@@ -57,6 +58,7 @@ export function ChannelArrayListField({
   fieldPath,
   registerFlusher,
   resetVersion,
+  secret = false,
 }: ChannelArrayListFieldProps) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState("")
@@ -138,14 +140,20 @@ export function ChannelArrayListField({
                 key={`${item}-${index}`}
                 className="bg-muted text-foreground inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 text-xs"
               >
-                <span className="break-all">{item}</span>
+                <span className="break-all">{secret ? "••••••••" : item}</span>
                 <button
                   type="button"
                   onClick={() => handleRemove(index)}
                   className="text-muted-foreground hover:text-foreground shrink-0 transition-colors"
-                  aria-label={t("channels.field.removeListItem", {
-                    value: item,
-                  })}
+                  aria-label={
+                    secret
+                      ? t("channels.field.removeSecretListItem", {
+                          index: index + 1,
+                        })
+                      : t("channels.field.removeListItem", {
+                          value: item,
+                        })
+                  }
                 >
                   <IconX className="size-3" />
                 </button>
@@ -155,16 +163,30 @@ export function ChannelArrayListField({
         )}
 
         <div className="flex gap-2">
-          <Input
-            value={draft}
-            onChange={(event) => {
-              const nextDraft = event.target.value
-              draftRef.current = nextDraft
-              setDraft(nextDraft)
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-          />
+          {secret ? (
+            <KeyInput
+              value={draft}
+              onChange={(nextDraft) => {
+                draftRef.current = nextDraft
+                setDraft(nextDraft)
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder={placeholder}
+              ariaLabel={label}
+              className="min-w-0 flex-1"
+            />
+          ) : (
+            <Input
+              value={draft}
+              onChange={(event) => {
+                const nextDraft = event.target.value
+                draftRef.current = nextDraft
+                setDraft(nextDraft)
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder={placeholder}
+            />
+          )}
           <Button
             type="button"
             size="sm"

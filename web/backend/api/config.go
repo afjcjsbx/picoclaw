@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -399,6 +400,32 @@ func validateConfig(cfg *config.Config) []string {
 		}
 	}
 
+	// A2A: a dedicated listener may only be exposed with bearer tokens.
+	{
+		bc := cfg.Channels.Get(config.ChannelA2A)
+		if bc != nil && bc.Enabled {
+			if decoded, err := bc.GetDecoded(); err == nil && decoded != nil {
+				if c, ok := decoded.(*config.A2ASettings); ok {
+					if c.Port < 0 || c.Port > 65535 {
+						errs = append(errs, "channels.a2a.settings.port must be between 1 and 65535")
+					}
+					host := c.Host
+					if host == "" {
+						host = "127.0.0.1"
+					}
+					ip := net.ParseIP(host)
+					loopback := host == "localhost" || (ip != nil && ip.IsLoopback())
+					if !loopback && len(c.Tokens.Values()) == 0 {
+						errs = append(
+							errs,
+							"channels.a2a.settings.tokens is required when binding A2A to a non-loopback host",
+						)
+					}
+				}
+			}
+		}
+	}
+
 	{
 		bc := cfg.Channels.GetByType(config.ChannelWeCom)
 		if bc != nil && bc.Enabled {
@@ -761,6 +788,21 @@ func applySecureStringsToStruct(rv reflect.Value, rawMap map[string]any) {
 			}
 			sf := rv.Field(i)
 			if !sf.CanSet() {
+				continue
+			}
+			// SecureStrings arrays replace the whole list. An omitted field (or
+			// the JSON redaction placeholder) leaves the security-loaded values
+			// untouched; an explicit empty array clears them.
+			if f.Type == reflect.TypeOf(config.SecureStrings{}) {
+				if rawSlice, ok := rawVal.([]any); ok {
+					values := make([]string, 0, len(rawSlice))
+					for _, item := range rawSlice {
+						if value, ok := item.(string); ok {
+							values = append(values, value)
+						}
+					}
+					sf.Set(reflect.ValueOf(config.SimpleSecureStrings(values...)))
+				}
 				continue
 			}
 			// Direct SecureString field

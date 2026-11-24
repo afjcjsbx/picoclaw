@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"slices"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -32,6 +33,7 @@ var channelCatalog = []channelCatalogItem{
 	{Name: "matrix", ConfigKey: "matrix"},
 	{Name: "irc", ConfigKey: "irc"},
 	{Name: "mqtt", ConfigKey: "mqtt"},
+	{Name: "a2a", ConfigKey: "a2a"},
 }
 
 type channelConfigResponse struct {
@@ -109,6 +111,7 @@ var channelSecretFieldMap = map[string][]string{
 	"whatsapp_native": {},
 	"maixcam":         {},
 	"mqtt":            {"username", "password"},
+	"a2a":             {"tokens"},
 }
 
 func buildChannelConfigResponse(cfg *config.Config, item channelCatalogItem) channelConfigResponse {
@@ -139,6 +142,7 @@ func buildChannelConfigResponse(cfg *config.Config, item channelCatalogItem) cha
 			return resp
 		}
 	}
+	mergeA2ADefaultSettings(settings, item)
 
 	// Remove secure fields from response
 	for _, key := range secrets {
@@ -152,6 +156,28 @@ func buildChannelConfigResponse(cfg *config.Config, item channelCatalogItem) cha
 
 func defaultChannelConfig(configKey string) *config.Channel {
 	return config.DefaultConfig().Channels.Get(configKey)
+}
+
+// mergeA2ADefaultSettings keeps the Web UI useful for existing configs that
+// only set a few A2A fields. The channel itself applies the same defaults at
+// runtime; here they are exposed so the form can display and edit them.
+func mergeA2ADefaultSettings(settings map[string]any, item channelCatalogItem) {
+	if item.Name != config.ChannelA2A {
+		return
+	}
+	bc := defaultChannelConfig(item.ConfigKey)
+	if bc == nil || len(bc.Settings) == 0 {
+		return
+	}
+	var defaults map[string]any
+	if err := json.Unmarshal(bc.Settings, &defaults); err != nil {
+		return
+	}
+	for key, value := range defaults {
+		if _, exists := settings[key]; !exists {
+			settings[key] = value
+		}
+	}
 }
 
 func addChannelCommonConfig(settings map[string]any, bc *config.Channel) {
@@ -231,6 +257,22 @@ func detectConfiguredSecrets(settings config.RawNode, channelName string) []stri
 			case map[string]any:
 				if s, ok := v["s"].(string); ok && s != "" {
 					found = append(found, key)
+				}
+			case []any:
+				for _, item := range v {
+					switch secret := item.(type) {
+					case string:
+						if secret != "" {
+							found = append(found, key)
+						}
+					case map[string]any:
+						if s, ok := secret["s"].(string); ok && s != "" {
+							found = append(found, key)
+						}
+					}
+					if slices.Contains(found, key) {
+						break
+					}
 				}
 			}
 		}

@@ -17,10 +17,12 @@ import {
 import {
   SECRET_FIELD_MAP,
   buildEditConfig,
+  getA2ATokenUpdate,
   getFieldValueForValidation,
   isSecretField,
 } from "@/components/channels/channel-config-fields"
 import { getChannelDisplayName } from "@/components/channels/channel-display-name"
+import { A2AForm } from "@/components/channels/channel-forms/a2a-form"
 import { DiscordForm } from "@/components/channels/channel-forms/discord-form"
 import { FeishuForm } from "@/components/channels/channel-forms/feishu-form"
 import { GenericForm } from "@/components/channels/channel-forms/generic-form"
@@ -126,6 +128,7 @@ function buildSavePayload(
   for (const [key, value] of Object.entries(editConfig)) {
     if (key.startsWith("_")) continue
     if (key === "enabled") continue
+    if (channel.name === "a2a" && key === "tokens") continue
     if (CHANNEL_COMMON_CONFIG_KEYS.has(key)) {
       if (key === "allow_from") {
         payload[key] = serializeStringArrayForSubmit(
@@ -152,6 +155,13 @@ function buildSavePayload(
     const existing = asString(editConfig[secretKey]).trim()
     if (existing !== "") {
       settings[secretKey] = existing
+    }
+  }
+
+  if (channel.name === "a2a") {
+    const tokens = getA2ATokenUpdate(editConfig)
+    if (tokens !== undefined) {
+      settings.tokens = tokens
     }
   }
 
@@ -218,6 +228,8 @@ function isConfigured(
       return hasValue("server")
     case "mqtt":
       return hasValue("broker") && hasValue("agent_id")
+    case "a2a":
+      return hasValue("host") && hasValue("port")
     default:
       return false
   }
@@ -255,6 +267,8 @@ function getRequiredFieldKeys(channelName: string): string[] {
       return ["server"]
     case "mqtt":
       return ["broker", "agent_id"]
+    case "a2a":
+      return ["host"]
     default:
       return []
   }
@@ -631,6 +645,17 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             onChange={handleChange}
             configuredSecrets={configuredSecrets}
             fieldErrors={fieldErrors}
+          />
+        )
+      case "a2a":
+        return (
+          <A2AForm
+            config={editConfig}
+            onChange={handleChange}
+            configuredSecrets={configuredSecrets}
+            fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       case "weixin":

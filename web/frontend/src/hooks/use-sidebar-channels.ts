@@ -11,6 +11,7 @@ import {
   IconBrandWhatsapp,
   IconCamera,
   IconMessages,
+  IconNetwork,
   IconPlug,
   IconRobot,
 } from "@tabler/icons-react"
@@ -41,6 +42,7 @@ const CHANNEL_IMPORTANCE_TAIL = [
   "irc",
   "whatsapp",
   "whatsapp_native",
+  "a2a",
 ]
 
 function getChannelImportanceOrder(language: string): string[] {
@@ -83,6 +85,7 @@ const CHANNEL_ICON_MAP: Record<
   onebot: IconRobot,
   pico: IconBrandChrome,
   irc: IconMessages,
+  a2a: IconNetwork,
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
