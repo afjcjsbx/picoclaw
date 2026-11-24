@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -201,6 +202,28 @@ func TestStreamSurfacesRPCErrorFrame(t *testing.T) {
 	var rpc *RPCError
 	require.ErrorAs(t, err, &rpc)
 	assert.Equal(t, CodeTaskNotFound, rpc.Code)
+}
+
+func TestStreamRejectsFrameLargerThanLimit(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+WellKnownPath, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(AgentCard{})
+	})
+	mux.HandleFunc("POST "+RPCPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		line := "data: " + strings.Repeat("x", 64<<10) + "\n"
+		for range 2 * maxResponseBytes / len(line) { // many small lines, never a blank one
+			if _, err := w.Write([]byte(line)); err != nil {
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	err := (&Client{BaseURL: srv.URL}).Stream(context.Background(), "SubscribeToTask", nil,
+		func(*StreamResult) bool { return true })
+	require.ErrorContains(t, err, "frame too large")
 }
 
 func TestApplyFoldsArtifactChunks(t *testing.T) {

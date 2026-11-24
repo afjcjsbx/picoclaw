@@ -195,10 +195,14 @@ func (c *Client) Stream(ctx context.Context, method string, params any, fn func(
 	for sc.Scan() {
 		line := sc.Bytes()
 		if v, ok := bytes.CutPrefix(line, []byte("data:")); ok {
+			v = bytes.TrimPrefix(v, []byte(" "))
+			if len(data)+1+len(v) > maxResponseBytes { // the scanner caps a line, this caps the whole frame
+				return errors.New("a2a: stream frame too large")
+			}
 			if len(data) > 0 {
 				data = append(data, '\n')
 			}
-			data = append(data, bytes.TrimPrefix(v, []byte(" "))...)
+			data = append(data, v...)
 			continue
 		}
 		if len(line) > 0 || len(data) == 0 { // comments (keepalive) and other fields are ignored
