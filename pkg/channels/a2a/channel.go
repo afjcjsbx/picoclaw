@@ -3,7 +3,8 @@
 //
 // Resource model: one listener goroutine, one goroutine per live HTTP request
 // (net/http), tasks in a bounded in-RAM registry, no polling loops. A task
-// costs one registry entry (<= ~66 KiB, normally far less) and one timer.
+// costs one registry entry (<= ~66 KiB, normally far less) and one timer; its
+// push webhooks (<= 3, ~2 KiB each) are freed when it finishes.
 package a2a
 
 import (
@@ -52,6 +53,8 @@ type Channel struct {
 	tokens  []principal
 	reg     *registry
 	rl      *limiter
+	push    *http.Client  // webhook deliveries (SSRF-guarded dialer)
+	pushSem chan struct{} // bounds concurrent deliveries
 
 	mu   sync.Mutex
 	srv  *http.Server
@@ -82,7 +85,10 @@ func New(bc *config.Channel, cfg *config.A2ASettings, b *bus.MessageBus) (*Chann
 		maxConc: orDefault(cfg.MaxConcurrent, defaultConcurrent),
 		reg:     newRegistry(orDefault(cfg.MaxTasks, defaultMaxTasks)),
 		rl:      &limiter{max: orDefault(cfg.RateLimitPerMinute, defaultRate), win: map[string]*window{}},
+		pushSem: make(chan struct{}, pushParallel),
 	}
+	c.push = c.newPushClient()
+	c.reg.onDone = c.notify
 	for _, tok := range cfg.Tokens.Values() {
 		if tok != "" {
 			sum := sha256.Sum256([]byte(tok))

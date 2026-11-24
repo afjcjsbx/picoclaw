@@ -218,7 +218,7 @@ func TestRequestValidation(t *testing.T) {
 	_, out = r.rpc("", "Nope", nil)
 	assert.Equal(t, proto.CodeMethodNotFound, errCode(out))
 	_, out = r.rpc("", "CreateTaskPushNotificationConfig", nil)
-	assert.Equal(t, proto.CodePushUnsupported, errCode(out))
+	assert.Equal(t, proto.CodeInvalidParams, errCode(out), "push config without taskId")
 	_, out = r.rpc("", "GetTask", map[string]any{"id": "nope"})
 	assert.Equal(t, proto.CodeTaskNotFound, errCode(out))
 }

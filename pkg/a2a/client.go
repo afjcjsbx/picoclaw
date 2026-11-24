@@ -1,11 +1,13 @@
 package a2a
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -116,15 +118,7 @@ func (c *Client) Call(ctx context.Context, method string, params, out any) error
 
 func (c *Client) do(req *http.Request, out any) error {
 	req.Header.Set("Accept", "application/json")
-	req.Header[VersionHeader] = []string{Version} // set raw: keeps the spec's spelling on the wire
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	resp, err := hc.Do(req)
+	resp, err := c.roundTrip(req)
 	if err != nil {
 		return err
 	}
@@ -133,17 +127,99 @@ func (c *Client) do(req *http.Request, out any) error {
 	if err != nil {
 		return err
 	}
-	// JSON-RPC errors may ride on non-2xx; let the envelope speak when it parses.
 	if resp.StatusCode/100 != 2 {
+		return httpError(resp.StatusCode, data)
+	}
+	return json.Unmarshal(data, out)
+}
+
+func (c *Client) roundTrip(req *http.Request) (*http.Response, error) {
+	req.Header[VersionHeader] = []string{Version} // set raw: keeps the spec's spelling on the wire
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	hc := c.HTTP
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	return hc.Do(req)
+}
+
+// httpError prefers the JSON-RPC error carried by a non-2xx reply.
+func httpError(status int, data []byte) error {
+	var env struct {
+		Error *RPCError `json:"error"`
+	}
+	if json.Unmarshal(data, &env) == nil && env.Error != nil {
+		return env.Error
+	}
+	return fmt.Errorf("http %d: %s", status, truncate(string(data), 200))
+}
+
+// Stream calls a streaming method (SendStreamingMessage, SubscribeToTask) and
+// hands each frame to fn until fn returns false, the stream ends or ctx is done.
+// The read blocks on the socket: no timers or polling while the remote works.
+// Memory is one frame at a time (<= maxResponseBytes).
+func (c *Client) Stream(ctx context.Context, method string, params any, fn func(*StreamResult) bool) error {
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.rpcURL(ctx), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := c.roundTrip(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+		if resp.StatusCode/100 != 2 {
+			return httpError(resp.StatusCode, data)
+		}
 		var env struct {
 			Error *RPCError `json:"error"`
 		}
 		if json.Unmarshal(data, &env) == nil && env.Error != nil {
 			return env.Error
 		}
-		return fmt.Errorf("http %d: %s", resp.StatusCode, truncate(string(data), 200))
+		return errors.New("peer did not stream")
 	}
-	return json.Unmarshal(data, out)
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 0, 4<<10), maxResponseBytes)
+	var data []byte
+	for sc.Scan() {
+		line := sc.Bytes()
+		if v, ok := bytes.CutPrefix(line, []byte("data:")); ok {
+			if len(data) > 0 {
+				data = append(data, '\n')
+			}
+			data = append(data, bytes.TrimPrefix(v, []byte(" "))...)
+			continue
+		}
+		if len(line) > 0 || len(data) == 0 { // comments (keepalive) and other fields are ignored
+			continue
+		}
+		var env struct {
+			Result *StreamResult `json:"result"`
+			Error  *RPCError     `json:"error"`
+		}
+		err := json.Unmarshal(data, &env)
+		data = data[:0]
+		switch {
+		case err != nil:
+			return err
+		case env.Error != nil:
+			return env.Error
+		case env.Result != nil && !fn(env.Result):
+			return nil
+		}
+	}
+	return sc.Err()
 }
 
 // Send submits a text message. Blocking unless cfg.ReturnImmediately.
@@ -168,13 +244,52 @@ func (c *Client) GetTask(ctx context.Context, id string, historyLength int) (*Ta
 	return &t, c.Call(ctx, "GetTask", p, &t)
 }
 
-// CancelTask asks the remote agent to stop a task.
-func (c *Client) CancelTask(ctx context.Context, id string) error {
-	return c.Call(ctx, "CancelTask", map[string]any{"id": id}, nil)
+// CancelTask asks the remote agent to stop a task and returns its new state.
+func (c *Client) CancelTask(ctx context.Context, id string) (*Task, error) {
+	var t Task
+	return &t, c.Call(ctx, "CancelTask", map[string]any{"id": id}, &t)
 }
 
-// Ask sends text and waits for a settled task: servers that answer before the
-// task is done are polled with a 1s→5s backoff. On ctx expiry the remote task
+// CancelDetached cancels best-effort, even when ctx is already done.
+func (c *Client) CancelDetached(ctx context.Context, id string) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, _ = c.CancelTask(cctx, id)
+}
+
+// Wait blocks until t is settled and returns its final state without history.
+// It subscribes first (event-driven: the socket stays idle while the remote
+// works), then falls back to GetTask with a 1s→5s backoff for peers that do not
+// stream or dropped the link. It never cancels the remote task: that is the
+// caller's call. On ctx expiry it returns the last known task and ctx.Err().
+func (c *Client) Wait(ctx context.Context, t *Task) (*Task, error) {
+	if IsSettled(t.Status.State) {
+		return t, nil
+	}
+	// Errors are fine here: the GetTask below is authoritative.
+	_ = c.Stream(ctx, "SubscribeToTask", map[string]any{"id": t.ID}, func(r *StreamResult) bool {
+		return !IsSettled(r.State())
+	})
+	for wait := pollStart; ; wait = min(wait*2, 5*time.Second) {
+		next, err := c.GetTask(ctx, t.ID, 0)
+		switch {
+		case ctx.Err() != nil:
+			return t, ctx.Err()
+		case err != nil:
+			return t, err
+		}
+		if t = next; IsSettled(t.Status.State) {
+			return t, nil
+		}
+		select {
+		case <-ctx.Done():
+			return t, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// Ask sends text and waits for a settled task. On ctx expiry the remote task
 // is canceled best-effort. Returns the last known task even on error.
 func (c *Client) Ask(ctx context.Context, contextID, text string) (*Task, error) {
 	res, err := c.Send(ctx, contextID, text, &SendConfig{AcceptedOutputModes: []string{"text/plain"}})
@@ -188,24 +303,11 @@ func (c *Client) Ask(ctx context.Context, contextID, text string) (*Task, error)
 			Status:    TaskStatus{State: StateCompleted, Message: res.Message},
 		}, nil
 	}
-	t := res.Task
-	for wait := pollStart; !IsTerminal(t.Status.State) && !IsInterrupted(t.Status.State); {
-		select {
-		case <-ctx.Done():
-			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			_ = c.CancelTask(cctx, t.ID)
-			cancel()
-			return t, ctx.Err()
-		case <-time.After(wait):
-		}
-		next, err := c.GetTask(ctx, t.ID, -1)
-		if err != nil {
-			return t, err
-		}
-		t = next
-		wait = min(wait*2, 5*time.Second)
+	t, err := c.Wait(ctx, res.Task)
+	if err != nil && ctx.Err() != nil {
+		c.CancelDetached(ctx, t.ID)
 	}
-	return t, nil
+	return t, err
 }
 
 func truncate(s string, n int) string {

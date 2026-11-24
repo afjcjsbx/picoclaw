@@ -1,6 +1,7 @@
 // Package a2a holds the wire types of the A2A protocol v1.0 (JSON-RPC binding)
 // and a small client. Only the subset PicoClaw needs is modeled: text parts,
-// blocking and streaming message send, task get/list/cancel.
+// blocking and streaming message send, task get/list/cancel/subscribe, and
+// push notification configs.
 package a2a
 
 import (
@@ -57,6 +58,10 @@ func IsTerminal(state string) bool {
 	}
 	return false
 }
+
+// IsSettled reports that a waiting client has its answer: terminal, or the
+// agent needs the client's input.
+func IsSettled(state string) bool { return IsTerminal(state) || IsInterrupted(state) }
 
 // IsInterrupted reports states that wait for the client (the task is not running).
 func IsInterrupted(state string) bool {
@@ -158,6 +163,68 @@ type ArtifactUpdate struct {
 	LastChunk bool     `json:"lastChunk,omitempty"`
 }
 
+// State is the task state a frame reports ("" for artifact updates).
+func (r *StreamResult) State() string {
+	switch {
+	case r.Task != nil:
+		return r.Task.Status.State
+	case r.Message != nil:
+		return StateCompleted // a message-only reply settles the exchange
+	case r.StatusUpdate != nil:
+		return r.StatusUpdate.Status.State
+	}
+	return ""
+}
+
+// Caps on what a remote peer can make a client hold in RAM while folding a stream.
+const (
+	maxFoldArtifacts = 16
+	maxFoldParts     = 64
+	maxFoldText      = 256 << 10
+)
+
+// Apply folds one stream frame into t. Artifact chunks are merged by
+// artifactId (append=true extends, otherwise replaces); adjacent text parts are
+// joined so token deltas do not cost one allocation each.
+func (t *Task) Apply(r *StreamResult) {
+	switch {
+	case r.Task != nil:
+		*t = *r.Task
+	case r.Message != nil:
+		t.Status = TaskStatus{State: StateCompleted, Message: r.Message}
+	case r.StatusUpdate != nil:
+		t.Status = r.StatusUpdate.Status
+	case r.ArtifactUpdate != nil:
+		u := r.ArtifactUpdate
+		i := 0
+		for i < len(t.Artifacts) && t.Artifacts[i].ArtifactID != u.Artifact.ArtifactID {
+			i++
+		}
+		if i == len(t.Artifacts) {
+			if i >= maxFoldArtifacts {
+				return
+			}
+			t.Artifacts = append(t.Artifacts, Artifact{ArtifactID: u.Artifact.ArtifactID, Name: u.Artifact.Name})
+		}
+		a := &t.Artifacts[i]
+		if !u.Append {
+			a.Parts = nil
+		}
+		for _, p := range u.Artifact.Parts {
+			n := len(a.Parts)
+			switch {
+			case p.Text != nil && n > 0 && a.Parts[n-1].Text != nil:
+				if len(*a.Parts[n-1].Text) < maxFoldText {
+					s := *a.Parts[n-1].Text + *p.Text
+					a.Parts[n-1].Text = &s
+				}
+			case n < maxFoldParts:
+				a.Parts = append(a.Parts, p)
+			}
+		}
+	}
+}
+
 // SendResult is the SendMessage result (oneof task|message).
 type SendResult struct {
 	Task    *Task    `json:"task,omitempty"`
@@ -167,14 +234,33 @@ type SendResult struct {
 // StreamResult is one SSE frame payload (oneof).
 type StreamResult struct {
 	Task           *Task           `json:"task,omitempty"`
+	Message        *Message        `json:"message,omitempty"`
 	StatusUpdate   *StatusUpdate   `json:"statusUpdate,omitempty"`
 	ArtifactUpdate *ArtifactUpdate `json:"artifactUpdate,omitempty"`
 }
 
 type SendConfig struct {
-	AcceptedOutputModes []string `json:"acceptedOutputModes,omitempty"`
-	HistoryLength       *int     `json:"historyLength,omitempty"`
-	ReturnImmediately   bool     `json:"returnImmediately,omitempty"`
+	AcceptedOutputModes []string    `json:"acceptedOutputModes,omitempty"`
+	HistoryLength       *int        `json:"historyLength,omitempty"`
+	ReturnImmediately   bool        `json:"returnImmediately,omitempty"`
+	PushConfig          *PushConfig `json:"taskPushNotificationConfig,omitempty"`
+}
+
+// AuthInfo is how the agent authenticates to a webhook: it is sent as the
+// Authorization header "<scheme> <credentials>".
+type AuthInfo struct {
+	Scheme      string `json:"scheme"`
+	Credentials string `json:"credentials,omitempty"`
+}
+
+// PushConfig is the spec's TaskPushNotificationConfig: a webhook for one task.
+// It is also the flat params object of the four push config methods.
+type PushConfig struct {
+	ID             string    `json:"id,omitempty"`
+	TaskID         string    `json:"taskId,omitempty"`
+	URL            string    `json:"url"`
+	Token          string    `json:"token,omitempty"`
+	Authentication *AuthInfo `json:"authentication,omitempty"`
 }
 
 type SendParams struct {
