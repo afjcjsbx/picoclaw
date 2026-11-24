@@ -30,6 +30,8 @@ var (
 	errBusy    = errors.New("too many running tasks")
 	errCtxBusy = errors.New("a task is already running in this context")
 	errMsgDup  = errors.New("messageId was already used in a different context")
+	errPushMax = errors.New("too many push notification configs on this task")
+	errPushEnd = errors.New("task already finished: nothing left to notify")
 )
 
 type task struct {
@@ -42,6 +44,8 @@ type task struct {
 
 	streaming bool // a client is attached to receive deltas
 	chunks    int  // artifact chunks emitted so far
+
+	pushes []pushCfg // webhooks; dropped (with their secrets) once the task is terminal
 
 	done  chan struct{}
 	subs  map[chan []byte]struct{}
@@ -56,6 +60,9 @@ type registry struct {
 	byMsg  map[string]*task // principal\x00messageId -> task (idempotency)
 	byChat map[string]*task // running task per chat (= per principal+context)
 	max    int
+	// onDone is called once, under mu, when a task with webhooks turns terminal.
+	// It must not block: it only hands the work to a goroutine.
+	onDone func(snap proto.Task, cfgs []pushCfg)
 }
 
 func newRegistry(limit int) *registry {
@@ -172,6 +179,10 @@ func (r *registry) move(t *task, state, reason string) bool {
 	if t.timer != nil {
 		t.timer.Stop()
 	}
+	if cfgs := t.pushes; len(cfgs) > 0 && r.onDone != nil {
+		r.onDone(t.snap(new(int), true), cfgs)
+	}
+	t.pushes = nil
 	close(t.done)
 	for ch := range t.subs {
 		close(ch)
@@ -301,6 +312,51 @@ func (r *registry) snapshot(t *task, hist *int, artifacts bool) proto.Task {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return t.snap(hist, artifacts)
+}
+
+// addPush registers a webhook, replacing one with the same id.
+func (r *registry) addPush(t *task, p pushCfg) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if proto.IsTerminal(t.state) {
+		return errPushEnd
+	}
+	for i := range t.pushes {
+		if t.pushes[i].id == p.id {
+			t.pushes[i] = p
+			return nil
+		}
+	}
+	if len(t.pushes) >= maxPushPerTask {
+		return errPushMax
+	}
+	t.pushes = append(t.pushes, p)
+	return nil
+}
+
+// pushList copies the task's webhooks; id selects one ("" = all).
+func (r *registry) pushList(t *task, id string) []pushCfg {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []pushCfg
+	for _, p := range t.pushes {
+		if id == "" || p.id == id {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (r *registry) delPush(t *task, id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, p := range t.pushes {
+		if p.id == id {
+			t.pushes = append(t.pushes[:i], t.pushes[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // closeAll fails every running task (channel shutdown).

@@ -11,6 +11,7 @@ type (
 	Tool          = toolshared.Tool
 	ToolResult    = toolshared.ToolResult
 	AsyncCallback = toolshared.AsyncCallback
+	AsyncExecutor = toolshared.AsyncExecutor
 )
 
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {
@@ -58,6 +59,10 @@ func ToolSessionScope(ctx context.Context) *session.SessionScope {
 
 func ErrorResult(message string) *ToolResult {
 	return toolshared.ErrorResult(message)
+}
+
+func AsyncResult(forLLM string) *ToolResult {
+	return toolshared.AsyncResult(forLLM)
 }
 
 func SilentResult(forLLM string) *ToolResult {

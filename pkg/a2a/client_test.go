@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -139,4 +140,114 @@ func TestPlainMessageReplyIsWrappedAsTask(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateCompleted, task.Status.State)
 	assert.Equal(t, "hi", task.Text())
+}
+
+// sse serves the card, SubscribeToTask as an SSE stream of frames, and GetTask.
+func sse(t *testing.T, frames []string, gets *atomic.Int32) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+WellKnownPath, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(AgentCard{})
+	})
+	mux.HandleFunc("POST "+RPCPath, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method == "GetTask" {
+			gets.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": Task{
+				ID:        "t1",
+				Status:    TaskStatus{State: StateCompleted},
+				Artifacts: []Artifact{{Parts: []Part{TextPart("ok")}}},
+			}})
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(": keepalive\n\n"))
+		for _, f := range frames {
+			_, _ = w.Write([]byte("data: " + f + "\n\n"))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestWaitSubscribesAndFetchesOnce(t *testing.T) {
+	var gets atomic.Int32
+	srv := sse(t, []string{
+		`{"jsonrpc":"2.0","id":1,"result":{"task":{"id":"t1","status":{"state":"TASK_STATE_WORKING"}}}}`,
+		`{"jsonrpc":"2.0","id":1,"result":{"statusUpdate":{"taskId":"t1","status":{"state":"TASK_STATE_COMPLETED"}}}}`,
+	}, &gets)
+	task, err := (&Client{BaseURL: srv.URL}).Wait(context.Background(),
+		&Task{ID: "t1", Status: TaskStatus{State: StateWorking}})
+	require.NoError(t, err)
+	assert.Equal(t, "ok", task.Text())
+	assert.EqualValues(t, 1, gets.Load(), "event-driven wait must not poll")
+}
+
+func TestWaitReturnsSettledTaskWithoutNetwork(t *testing.T) {
+	task := &Task{ID: "t1", Status: TaskStatus{State: StateCompleted}}
+	got, err := (&Client{BaseURL: "http://127.0.0.1:1"}).Wait(context.Background(), task)
+	require.NoError(t, err)
+	assert.Same(t, task, got)
+}
+
+func TestStreamSurfacesRPCErrorFrame(t *testing.T) {
+	var gets atomic.Int32
+	srv := sse(t, []string{`{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"gone"}}`}, &gets)
+	err := (&Client{BaseURL: srv.URL}).Stream(context.Background(), "SubscribeToTask", nil,
+		func(*StreamResult) bool { return true })
+	var rpc *RPCError
+	require.ErrorAs(t, err, &rpc)
+	assert.Equal(t, CodeTaskNotFound, rpc.Code)
+}
+
+func TestStreamRejectsFrameLargerThanLimit(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+WellKnownPath, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(AgentCard{})
+	})
+	mux.HandleFunc("POST "+RPCPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		line := "data: " + strings.Repeat("x", 64<<10) + "\n"
+		for range 2 * maxResponseBytes / len(line) { // many small lines, never a blank one
+			if _, err := w.Write([]byte(line)); err != nil {
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	err := (&Client{BaseURL: srv.URL}).Stream(context.Background(), "SubscribeToTask", nil,
+		func(*StreamResult) bool { return true })
+	require.ErrorContains(t, err, "frame too large")
+}
+
+func TestApplyFoldsArtifactChunks(t *testing.T) {
+	chunk := func(s string, app bool) *StreamResult {
+		return &StreamResult{ArtifactUpdate: &ArtifactUpdate{
+			Artifact: Artifact{ArtifactID: "a", Parts: []Part{TextPart(s)}}, Append: app,
+		}}
+	}
+	var task Task
+	task.Apply(&StreamResult{Task: &Task{ID: "t", Status: TaskStatus{State: StateWorking}}})
+	task.Apply(chunk("Hel", false))
+	task.Apply(chunk("lo", true))
+	assert.Equal(t, "Hello", task.Text())
+	assert.Len(t, task.Artifacts[0].Parts, 1, "adjacent text deltas are joined")
+	task.Apply(chunk("X", false)) // append=false replaces
+	assert.Equal(t, "X", task.Text())
+	task.Apply(&StreamResult{StatusUpdate: &StatusUpdate{Status: TaskStatus{State: StateCompleted}}})
+	assert.Equal(t, StateCompleted, task.Status.State)
+	assert.Equal(t, "X", task.Text())
+
+	for i := range 100 { // a hostile peer cannot grow the fold without bound
+		task.Apply(&StreamResult{ArtifactUpdate: &ArtifactUpdate{
+			Artifact: Artifact{ArtifactID: string(rune('b' + i)), Parts: []Part{TextPart("z")}},
+		}})
+	}
+	assert.LessOrEqual(t, len(task.Artifacts), maxFoldArtifacts)
 }

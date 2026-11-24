@@ -31,6 +31,10 @@ type A2ASettings struct {
 	MaxConcurrent int `json:"max_concurrent,omitempty" yaml:"-"`
 	// TaskTimeoutSeconds is the deadline of a single task (default 300).
 	TaskTimeoutSeconds int `json:"task_timeout_seconds,omitempty" yaml:"-"`
+	// PushAllowPrivate lets push notification webhooks target loopback and
+	// private-network hosts. Off by default (SSRF guard, per the A2A spec);
+	// turn it on for agents that talk to each other on a LAN.
+	PushAllowPrivate bool `json:"push_allow_private,omitempty" yaml:"-"`
 }
 
 // A2AAgentConfig describes a remote A2A agent PicoClaw can call.

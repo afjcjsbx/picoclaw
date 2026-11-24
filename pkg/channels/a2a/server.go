@@ -60,7 +60,7 @@ func (c *Channel) handleCard(w http.ResponseWriter, r *http.Request) {
 		SupportedInterfaces: []proto.Interface{{
 			URL: base + proto.RPCPath, ProtocolBinding: proto.BindingJSONRPC, ProtocolVersion: proto.Version,
 		}},
-		Capabilities:       proto.Capabilities{Streaming: true},
+		Capabilities:       proto.Capabilities{Streaming: true, PushNotifications: true},
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain"},
 		Skills: []proto.Skill{{
@@ -117,7 +117,7 @@ func (c *Channel) handleRPC(w http.ResponseWriter, r *http.Request) {
 		c.handleSubscribe(w, r, who, req)
 	case "CreateTaskPushNotificationConfig", "GetTaskPushNotificationConfig",
 		"ListTaskPushNotificationConfigs", "DeleteTaskPushNotificationConfig":
-		writeErr(w, req.ID, proto.CodePushUnsupported, "push notifications not supported")
+		c.handlePush(w, who, req)
 	case "GetExtendedAgentCard":
 		writeErr(w, req.ID, proto.CodeNoExtendedCard, "extended agent card not configured")
 	default:
@@ -160,11 +160,20 @@ func (c *Channel) handleSend(w http.ResponseWriter, r *http.Request, who string,
 		return
 	}
 	var hist *int
+	var hook *pushCfg
 	if cfg := p.Configuration; cfg != nil {
 		hist = cfg.HistoryLength
 		if len(cfg.AcceptedOutputModes) > 0 && !slices.ContainsFunc(cfg.AcceptedOutputModes, acceptsText) {
 			writeErr(w, req.ID, proto.CodeContentType, "only text/plain output is available")
 			return
+		}
+		if cfg.PushConfig != nil {
+			pc, err := c.newPush(cfg.PushConfig)
+			if err != nil {
+				writeErr(w, req.ID, proto.CodeInvalidParams, "taskPushNotificationConfig: "+err.Error())
+				return
+			}
+			hook = &pc
 		}
 	}
 	ctxID := m.ContextID // empty: submit generates one
@@ -187,6 +196,9 @@ func (c *Channel) handleSend(w http.ResponseWriter, r *http.Request, who string,
 		return
 	}
 	if !existed {
+		if hook != nil {
+			_ = c.reg.addPush(t, *hook) // fresh task: cannot be terminal or full
+		}
 		c.start(t, text)
 	} else if stream {
 		c.reg.markStreaming(t)
