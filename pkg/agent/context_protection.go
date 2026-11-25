@@ -110,7 +110,7 @@ func resolveContextProtection(
 // is never split from its tool results. The tail is the union of the
 // protect_last_n message floor, a backward token-budget walk, and the
 // min_tail_user_messages guarantee; it starts at a turn boundary so tool-call
-// sequences are not torn apart.
+// sequences are not torn apart. agent must be non-nil.
 func computeHistoryProtection(
 	history []providers.Message,
 	compactableEnd int,
@@ -149,15 +149,12 @@ func computeHistoryProtection(
 
 // pruneProtectedHistory evicts tool outputs in the unprotected middle and, if
 // the protected tail is over budget, in the tail as well. The head is never
-// touched.
+// touched. agent must be non-nil.
 func pruneProtectedHistory(
 	history []providers.Message,
 	protection historyProtection,
 	agent *AgentInstance,
 ) bool {
-	if agent == nil {
-		return false
-	}
 	historicalTailStart := min(protection.tailStartBeforeSnap, protection.compactableEnd)
 	if historicalTailStart < protection.headEnd {
 		historicalTailStart = protection.headEnd
