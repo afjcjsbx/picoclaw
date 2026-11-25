@@ -469,13 +469,20 @@ Runtime observer event, broadcast only, no response required. `id` is `0` or abs
 }
 ```
 
-Common `Kind` values:
-- `agent.turn.start` / `agent.turn.end`
-- `agent.llm.request` / `agent.llm.response`
-- `agent.tool.exec_start` / `agent.tool.exec_end` / `agent.tool.exec_skipped`
-- `agent.steering.injected`
-- `agent.interrupt.received`
-- `agent.error`
+The `kind` field can be any kind declared in `pkg/events`. Every kind family is
+observable; `agent.*` is the most commonly used but hooks can also observe
+`channel.*`, `bus.*`, `gateway.*`, and `mcp.*` events. The full catalog is in
+[Runtime Events](../runtime-events.md).
+
+Representative `kind` values by family:
+
+| Family | Example kinds |
+|--------|---------------|
+| `agent.*` | `agent.turn.start`, `agent.turn.end`, `agent.llm.request`, `agent.llm.response`, `agent.llm.delta`, `agent.llm.retry`, `agent.tool.exec_start`, `agent.tool.exec_end`, `agent.tool.exec_skipped`, `agent.steering.injected`, `agent.follow_up.queued`, `agent.interrupt.received`, `agent.context.compress`, `agent.session.summarize`, `agent.subturn.spawn`, `agent.subturn.end`, `agent.subturn.result_delivered`, `agent.subturn.orphan`, `agent.error` |
+| `channel.*` | `channel.lifecycle.started`, `channel.lifecycle.stopped`, `channel.message.outbound_sent`, `channel.message.outbound_failed`, `channel.rate_limited` |
+| `bus.*` | `bus.publish.failed`, `bus.message.dropped`, `bus.close.started`, `bus.close.completed` |
+| `gateway.*` | `gateway.start`, `gateway.ready`, `gateway.shutdown`, `gateway.reload.started`, `gateway.reload.completed`, `gateway.reload.failed` |
+| `mcp.*` | `mcp.server.connected`, `mcp.server.connecting`, `mcp.server.failed`, `mcp.tool.discovered`, `mcp.tool.call.start`, `mcp.tool.call.end` |
 
 Legacy observe configuration names such as `turn_end` and `tool_exec_start` are still accepted and normalized to runtime event names. New process hook notifications use `hook.runtime_event`.
 
