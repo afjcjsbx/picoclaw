@@ -22,6 +22,7 @@ PicoClaw registers its tools dynamically at runtime. Each one can be enabled or 
 | Hardware | `i2c`, `spi`, `serial` | [Hardware tools](hardware.md) |
 | Planning | `todo` | [Todo planning tool](todo.md) |
 | Memory | `memory` | [Memory tool](memory.md) |
+| Seahorse retrieval | `short_grep`, `short_expand` | [Seahorse memory](../architecture/seahorse-memory.md); registered automatically when Seahorse is the active context manager |
 
 ## Global settings
 
