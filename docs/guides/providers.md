@@ -63,7 +63,9 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **Google Gemini**   | `gemini`          | `https://generativelanguage.googleapis.com/v1beta`  | Gemini    | [Get Key](https://aistudio.google.com/api-keys)                  |
 | **Groq**            | `groq`            | `https://api.groq.com/openai/v1`                    | OpenAI    | [Get Key](https://console.groq.com)                              |
 | **Moonshot**        | `moonshot`        | `https://api.moonshot.cn/v1`                        | OpenAI    | [Get Key](https://platform.moonshot.cn)                          |
-| **通义千问 (Qwen)** | `qwen`            | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI    | [Get Key](https://dashscope.console.aliyun.com)                  |
+| **通义千问 (Qwen)** | `qwen`            | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI    | [Get Key](https://dashscope.console.aliyun.com) _(China endpoint)_ |
+| **Qwen International** | `qwen-intl`  | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | OpenAI | [Get Key](https://dashscope.console.aliyun.com) |
+| **Qwen US**         | `qwen-us`         | `https://dashscope-us.aliyuncs.com/compatible-mode/v1`   | OpenAI | [Get Key](https://dashscope.console.aliyun.com) |
 | **NVIDIA**          | `nvidia`          | `https://integrate.api.nvidia.com/v1`               | OpenAI    | [Get Key](https://build.nvidia.com)                              |
 | **Ollama**          | `ollama`          | `http://localhost:11434/v1`                         | OpenAI    | Local (no key needed)                                            |
 | **LM Studio**       | `lmstudio`        | `http://localhost:1234/v1`                          | OpenAI    | Optional (local default: no key)                                 |
@@ -89,6 +91,8 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **Antigravity**     | `antigravity`     | Google Cloud                                        | Custom    | OAuth only                                                       |
 | **GitHub Copilot**  | `github-copilot`  | `localhost:4321`                                    | gRPC      | -                                                                |
 | **OpenCode Go**     | `opencode-go`     | `https://opencode.ai/inference/go`                  | Multi     | [Get Key](https://opencode.ai/docs/go/)                          |
+
+> **Qwen regional endpoints:** `qwen` (alias `qwen-portal`) targets the China DashScope endpoint and is the default. Outside China use `qwen-intl` (international) or `qwen-us` (US) to avoid connectivity issues. All three accept the same API key.
 
 > **AWS Bedrock note:** Bedrock support requires the `bedrock` build tag: `go build -tags bedrock`. Without it the provider returns an error at runtime. Credentials come from the AWS SDK default chain (env vars such as `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, `~/.aws/credentials` profiles, or IAM instance/task roles). No `api_key` field is used.
 
