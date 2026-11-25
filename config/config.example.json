@@ -471,6 +471,7 @@
     },
     "mcp": {
       "enabled": false,
+      "_comment": "Stdio servers require PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true in the process environment; HTTP/SSE servers do not.",
       "discovery": {
         "enabled": false,
         "ttl": 5,

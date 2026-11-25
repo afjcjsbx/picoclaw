@@ -79,6 +79,8 @@ Assistant replies show input, output, and total token counts when the provider r
 
 The **Gateway** runs as a subprocess managed through the launcher (`picoclaw gateway -E`, with `-d` when debug logging is on). The top bar lets you start, stop, and restart it, and shows its state. Auto-start only happens when a usable default model is configured; otherwise use **Start Gateway** after adding credentials in `/models` or `/credentials`.
 
+Configured MCP `stdio` servers, process hooks, and plugin subprocesses are disabled by default. Dashboard configuration writes cannot enable them. To opt in, set `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the launcher's service environment and restart the **launcher**; restarting only the Gateway is not enough. See [Local Command Execution from Configuration](configuration.md#local-command-execution-from-configuration).
+
 ## Remote Access
 
 By default the launcher listens on `127.0.0.1` only. To reach the dashboard from another machine:

@@ -264,7 +264,9 @@ picoclaw plugin test my-plugin
 ```
 
 `plugin test` loads the plugin the way the gateway will and lists the skills and tools
-it publishes. Restart the gateway afterwards.
+it publishes. Plugins with `stdio` MCP servers or process hooks also require
+`PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the command environment. Restart the
+gateway afterwards.
 
 `plugin "x" matches no single package under the plugin directories` means either that
 nothing with that manifest name was found, or that two directories share it. Both are
@@ -387,6 +389,8 @@ readable. This avoids granting general filesystem access outside the agent's
 workspace. The tool is subject to the agent's normal tool allowlist.
 
 ## MCP servers
+
+Plugin `stdio` MCP servers require the same environment-only opt-in as native MCP servers: set `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the PicoClaw process environment. Remote HTTP/SSE servers are unaffected. The dashboard cannot enable this permission. See [Local Command Execution from Configuration](configuration.md#local-command-execution-from-configuration).
 
 Put portable MCP configuration in root `mcp.json`:
 
@@ -678,6 +682,10 @@ are bounded to 6,000 bytes each; context added to the prompt is bounded to
 12,000 bytes. Each agent's MCP server allowlist still applies.
 
 ### Process hooks
+
+Process hooks require `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the PicoClaw
+process environment. This permission cannot be enabled through plugin configuration
+or the dashboard.
 
 Process hook entries can share `hooks.json` with MCP actions. Put the `hooks`
 object either inline in `plugin.json` or in `com.sipeed.picoclaw/hooks.json`;

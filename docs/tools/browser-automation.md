@@ -74,6 +74,8 @@ The package name varies by distribution (`chromium` on Raspberry Pi OS and Debia
 
 The configuration lives under `tools.mcp.servers` in `config.json`. The `enabled` switch exists both globally and per server.
 
+Playwright MCP uses `stdio`, so set `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the PicoClaw process environment before starting it. This environment-only opt-in cannot be enabled from the dashboard. See [Local Command Execution from Configuration](../guides/configuration.md#local-command-execution-from-configuration).
+
 ### Shared Chromium over CDP
 
 This is the configuration to use when Chromium is already running with a remote debugging port. It matches the common Raspberry Pi setup and adapts the paths to the default `root` service install; replace `/root/.picoclaw` with your `PICOCLAW_HOME` when PicoClaw runs as another user.

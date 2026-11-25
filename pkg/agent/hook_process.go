@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -111,6 +112,9 @@ type processHookAfterToolResponse struct {
 func NewProcessHook(ctx context.Context, name string, opts ProcessHookOptions) (*ProcessHook, error) {
 	if len(opts.Command) == 0 {
 		return nil, fmt.Errorf("process hook command is required")
+	}
+	if err := config.RequireLocalCommandExecution(); err != nil {
+		return nil, err
 	}
 
 	cmd := exec.Command(opts.Command[0], opts.Command[1:]...)

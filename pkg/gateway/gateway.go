@@ -319,6 +319,22 @@ func preCheckConfig(cfg *config.Config) error {
 	if cfg.Gateway.Port <= 0 || cfg.Gateway.Port > 65535 {
 		return fmt.Errorf("invalid gateway port: %d, port must be between 1 and 65535", cfg.Gateway.Port)
 	}
+	if cfg.Hooks.Enabled && !config.LocalCommandExecutionAllowed() {
+		var enabledHooks []string
+		for name, hook := range cfg.Hooks.Processes {
+			if hook.Enabled {
+				enabledHooks = append(enabledHooks, name)
+			}
+		}
+		if len(enabledHooks) > 0 {
+			sort.Strings(enabledHooks)
+			return fmt.Errorf(
+				"enabled process hooks %s: %w",
+				strings.Join(enabledHooks, ", "),
+				config.ErrLocalCommandExecutionDisabled,
+			)
+		}
+	}
 	return nil
 }
 

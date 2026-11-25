@@ -143,7 +143,7 @@ func TestAgentLoop_ProcessDirectWithChannel_AutoMountsProcessHook(t *testing.T) 
 		Processes: map[string]config.ProcessHookConfig{
 			"ipc-auto": {
 				Enabled: true,
-				Command: processHookHelperCommand(),
+				Command: processHookHelperCommand(t),
 				Env: map[string]string{
 					"PICOCLAW_HOOK_HELPER":    "1",
 					"PICOCLAW_HOOK_MODE":      "rewrite",
@@ -238,7 +238,7 @@ func TestAgentLoop_ProcessDirectWithChannel_InvalidConfiguredHookFails(t *testin
 		Processes: map[string]config.ProcessHookConfig{
 			"bad-hook": {
 				Enabled:   true,
-				Command:   processHookHelperCommand(),
+				Command:   processHookHelperCommand(t),
 				Intercept: []string{"not_supported"},
 			},
 		},

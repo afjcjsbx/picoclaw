@@ -23,6 +23,7 @@ import (
 )
 
 func TestLoadEnvFile(t *testing.T) {
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 	tests := []struct {
 		name      string
 		content   string
@@ -140,6 +141,7 @@ PORT =8080`,
 }
 
 func TestLoadEnvFileNotFound(t *testing.T) {
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 	_, err := loadEnvFile("/nonexistent/file.env")
 	if err == nil {
 		t.Error("Expected error for nonexistent file")
@@ -168,6 +170,7 @@ func TestInheritedMCPEnv(t *testing.T) {
 }
 
 func TestEnvFilePriority(t *testing.T) {
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 	// Create a temporary .env file
 	tmpDir := t.TempDir()
 	envFile := filepath.Join(tmpDir, ".env")

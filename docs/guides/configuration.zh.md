@@ -1,7 +1,7 @@
 ---
 lang: zh
 title: "配置指南"
-description: "配置文件路径: ~/.picoclaw/config.json 你可以使用环境变量覆盖默认路径。这对于便携安装、容器化部署或将 picoclaw 作为系统服务运行非常有用。这些变量是独立的，控制不同的路径。"
+description: "配置文件路径: ~/.picoclaw/config.json 你可以使用环境变量覆盖默认路径并设置运行时权限。这对于便携安装、容器化部署或将 picoclaw 作为系统服务运行非常有用。这些变量彼此独立，控制不同的设置。"
 ---
 # ⚙️ 配置指南
 
@@ -13,12 +13,13 @@ description: "配置文件路径: ~/.picoclaw/config.json 你可以使用环境�
 
 ### 环境变量
 
-你可以使用环境变量覆盖默认路径。这对于便携安装、容器化部署或将 picoclaw 作为系统服务运行非常有用。这些变量是独立的，控制不同的路径。
+你可以使用环境变量覆盖默认路径并设置运行时权限。这对于便携安装、容器化部署或将 picoclaw 作为系统服务运行非常有用。这些变量彼此独立，控制不同的设置。
 
-| 变量              | 描述                                                                                                                             | 默认路径                  |
+| 变量              | 描述                                                                                                                             | 默认值                   |
 |-------------------|-----------------------------------------------------------------------------------------------------------------------------------------|---------------------------|
 | `PICOCLAW_CONFIG` | 覆盖配置文件的路径。这直接告诉 picoclaw 加载哪个 `config.json`，忽略所有其他位置。 | `~/.picoclaw/config.json` |
 | `PICOCLAW_HOME`   | 覆盖 picoclaw 数据根目录。这会更改 `workspace` 和其他数据目录的默认位置。          | `~/.picoclaw`             |
+| `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION` | 显式允许配置中的原生和插件 MCP `stdio` 命令、进程 hook 和 MCP `env_file` 加载。这是仅通过环境变量开启的授权，不是 `config.json` 或 dashboard 配置项。 | 禁用 |
 
 **示例：**
 
@@ -34,7 +35,21 @@ PICOCLAW_HOME=/opt/picoclaw picoclaw agent
 
 # 同时使用两者进行完全自定义设置
 PICOCLAW_HOME=/srv/picoclaw PICOCLAW_CONFIG=/srv/picoclaw/main.json picoclaw gateway
+
+# 仅在可信主机上开启，并允许配置编辑者运行本地程序
+PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true picoclaw gateway
 ```
+
+<a id="local-command-execution-from-configuration"></a>
+
+### 从配置执行本地命令
+
+原生和插件 MCP `stdio` server 命令、进程 hook 和 MCP `env_file` 加载默认禁用。要使用这些功能，请在 PicoClaw 进程的环境中设置 `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true`（例如写入 systemd unit 或容器定义），然后启动或重启 PicoClaw。
+
+此权限刻意**不**存入 `config.json`，也无法通过 dashboard API 开启。因此，远程写入配置本身不能把 dashboard 访问权限变成宿主机命令执行权限。使用 Web UI launcher 时，修改服务环境变量后需要重启 **launcher**；只重启 Gateway 无法添加 launcher 本身没有的变量。
+
+> [!WARNING]
+> 开启后，任何能编辑相应配置的人都可以选择任意可执行文件和参数、运行进程 hook，并以 PicoClaw 服务账户的权限加载任意 `env_file` 路径。只应在配置编辑者完全可信时开启，并使用专用非特权账户和[子进程隔离](../security/isolation.zh.md)作为纵深防御。
 
 ### Gateway 日志等级
 

@@ -19,6 +19,8 @@ PicoClaw 可以把由它启动的子进程放进操作系统级沙箱中运行�
 
 已知例外：Linux USB 设备监视器会直接启动 `udevadm`，因为它只观察宿主设备，不在子进程隔离的生效范围内。
 
+隔离与“是否允许启动配置的本地命令”是两个独立控制。MCP `stdio` server 和进程 hook 仍默认禁用，直到在 PicoClaw 进程环境中设置 `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true`；详情见[从配置执行本地命令](../guides/configuration.zh.md#从配置执行本地命令)。
+
 ## 快速开始
 
 在 Linux 上先安装 bubblewrap：

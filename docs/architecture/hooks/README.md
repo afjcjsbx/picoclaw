@@ -125,13 +125,16 @@ Note: the current implementation does not support per-process-hook `timeout_ms`.
 
 ## Quick Start
 
+Process hooks execute local programs and are disabled by default. Set `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the PicoClaw service environment before enabling them. This is not a `config.json` or dashboard setting. Startup and reload reject enabled process hooks without the opt-in. With the Web UI launcher, restart the launcher after changing its environment.
+
 If your first goal is simply to prove that the hook flow works and observe real requests, the easiest path is the Python process-hook example below:
 
 1. Enable `hooks.enabled`
-2. Save the Python example from this document to a local file, for example `/tmp/review_gate.py`
-3. Set `PICOCLAW_HOOK_LOG_FILE`
-4. Restart the gateway
-5. Watch the log file with `tail -f`
+2. Set `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the service environment
+3. Save the Python example from this document to a local file, for example `/tmp/review_gate.py`
+4. Set `PICOCLAW_HOOK_LOG_FILE`
+5. Restart the gateway (or the launcher, if its environment changed)
+6. Watch the log file with `tail -f`
 
 Example:
 

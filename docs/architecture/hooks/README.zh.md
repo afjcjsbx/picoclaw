@@ -116,13 +116,16 @@ HookManager 的排序规则是：
 
 ## 快速开始
 
+Process hook 会执行本地程序，因此默认禁用。启用前需要在 PicoClaw 服务环境中设置 `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true`。它不是 `config.json` 或 dashboard 配置项；未授权时，启动和 reload 都会拒绝启用的 process hook。使用 Web UI launcher 时，修改环境变量后需要重启 launcher。
+
 如果你的目标只是先把当前 hook 流程跑通并观察到实际请求，最省事的是先用下面的 Python process hook 示例：
 
 1. 打开 `hooks.enabled`
-2. 把下面文档里的 Python 示例保存到本地文件，例如 `/tmp/review_gate.py`
-3. 给它配置 `PICOCLAW_HOOK_LOG_FILE`
-4. 重启 gateway
-5. 用 `tail -f` 观察日志文件
+2. 在服务环境中设置 `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true`
+3. 把下面文档里的 Python 示例保存到本地文件，例如 `/tmp/review_gate.py`
+4. 给它配置 `PICOCLAW_HOOK_LOG_FILE`
+5. 重启 gateway（如果修改的是 launcher 环境，则重启 launcher）
+6. 用 `tail -f` 观察日志文件
 
 例如：
 

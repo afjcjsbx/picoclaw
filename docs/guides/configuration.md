@@ -14,12 +14,13 @@ Config file: `~/.picoclaw/config.json`
 
 ### Environment Variables
 
-You can override default paths using environment variables. This is useful for portable installations, containerized deployments, or running picoclaw as a system service. These variables are independent and control different paths.
+You can override default paths and set runtime permissions using environment variables. This is useful for portable installations, containerized deployments, or running picoclaw as a system service. These variables are independent and control different settings.
 
-| Variable          | Description                                                                                                                             | Default Path              |
+| Variable          | Description                                                                                                                             | Default                   |
 |-------------------|-----------------------------------------------------------------------------------------------------------------------------------------|---------------------------|
 | `PICOCLAW_CONFIG` | Overrides the path to the configuration file. This directly tells picoclaw which `config.json` to load, ignoring all other locations. | `~/.picoclaw/config.json` |
 | `PICOCLAW_HOME`   | Overrides the root directory for picoclaw data. This changes the default location of the `workspace` and other data directories.          | `~/.picoclaw`             |
+| `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION` | Explicitly allows configured native and plugin MCP `stdio` commands, process hooks and MCP `env_file` loading. This is an environment-only opt-in, not a `config.json` or dashboard setting. | Disabled |
 
 **Examples:**
 
@@ -35,7 +36,19 @@ PICOCLAW_HOME=/opt/picoclaw picoclaw agent
 
 # Use both for a fully customized setup
 PICOCLAW_HOME=/srv/picoclaw PICOCLAW_CONFIG=/srv/picoclaw/main.json picoclaw gateway
+
+# Opt in only on a trusted host where configuration editors may run local programs
+PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true picoclaw gateway
 ```
+
+### Local Command Execution from Configuration
+
+Native and plugin MCP `stdio` server commands, process hooks and MCP `env_file` loading are disabled by default. To use them, set `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the environment of the PicoClaw process (for example, in its systemd unit or container definition), then start or restart PicoClaw.
+
+This permission is deliberately **not** stored in `config.json` and cannot be enabled through the dashboard API. A remote configuration write therefore cannot turn dashboard access into host command execution by itself. When using the Web UI launcher, restart the **launcher** after changing its service environment; restarting only the Gateway cannot add a variable the launcher does not have.
+
+> [!WARNING]
+> Opting in allows anyone who can edit the corresponding configuration to select arbitrary executables and arguments, run process hooks, and load arbitrary `env_file` paths with the PicoClaw service account's permissions. Enable it only when configuration editors are fully trusted, and use a dedicated unprivileged account and [subprocess isolation](../security/isolation.md) as defense in depth.
 
 ### Gateway Log Level
 

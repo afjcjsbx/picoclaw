@@ -147,6 +147,14 @@ Secret handling:
 - `--env KEY=value` stores the resolved value directly in `config.json`
 - use `--env-file` instead when the value is sensitive and should stay outside the main config file
 
+Adding or editing a `stdio` entry only writes configuration. Commands that start or probe it (`mcp test`, `mcp show`, and `mcp list --status`) require the environment-only opt-in:
+
+```bash
+PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true picoclaw mcp test sqlite
+```
+
+The opt-in is not a `config.json` field and cannot be enabled through the dashboard. See [Local Command Execution from Configuration](../guides/configuration.md#local-command-execution-from-configuration).
+
 Example:
 
 ```bash

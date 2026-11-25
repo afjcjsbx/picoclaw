@@ -212,6 +212,7 @@ func TestAgentHasDiscoverableMCPServers(t *testing.T) {
 }
 
 func TestEnsureMCPInitialized_LoadFailureSetsInitErr(t *testing.T) {
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 	defer al.Close()
@@ -343,6 +344,7 @@ func TestDiscoveryToolTTLOneUsableWithinDiscoveryTurn(t *testing.T) {
 }
 
 func TestAgentLoopRun_DoesNotExitOnMCPInitFailure(t *testing.T) {
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 	al, cfg, msgBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 	defer al.Close()
