@@ -22,6 +22,24 @@ servers, so `0 9 * * *` would fire at 09:00 UTC. Set `TZ` before starting the
 gateway; changing it requires a restart. There is no per-job time zone in the
 agent tool or the CLI.
 
+A per-job time zone can be set by editing `<workspace>/cron/jobs.json` directly.
+Add a `tz` field to the job's `schedule` object using an IANA location name
+(validated with `time.LoadLocation`):
+
+```json
+{
+  "schedule": {
+    "kind": "cron_expr",
+    "expr": "0 9 * * *",
+    "tz": "America/New_York"
+  }
+}
+```
+
+When `tz` is set on a job, that job's expression is evaluated in the specified
+zone regardless of the process `TZ` setting. An invalid location name is logged
+and the job is skipped on its next tick.
+
 The agent sees the current date and the active zone in the `Current Date` line
 of its prompt, for example `Thursday, October 15, 2026 (Europe/Rome, CEST,
 UTC+02:00)`. The zone name is taken from `TZ`; when `TZ` is unset the name is
