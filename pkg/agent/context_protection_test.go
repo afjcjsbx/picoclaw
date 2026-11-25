@@ -168,6 +168,45 @@ func TestLegacySummarize_KeepsProtectedHeadAndTokenTail(t *testing.T) {
 	}
 }
 
+func TestLegacySummarize_CompactsShortHistoryWhenTailAllows(t *testing.T) {
+	cfg := testConfig(t)
+	first, last := 0, 2
+	cfg.Agents.Defaults.ProtectFirstN = &first
+	cfg.Agents.Defaults.ProtectLastN = &last
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "latest question"},
+		{Role: "assistant", Content: "latest answer"},
+	}
+	const sessionKey = "session-short-tail"
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	lcm := al.contextManager.(*legacyContextManager)
+	if !lcm.summarizeSession(context.Background(), agent, sessionKey, nil, "") {
+		t.Fatal("expected a summary for a four-message history with a two-message tail")
+	}
+
+	got, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(got) != last {
+		t.Fatalf("history = %d messages, want the %d-message tail", len(got), last)
+	}
+	if got[0].Content != "latest question" || got[1].Content != "latest answer" {
+		t.Fatalf("kept history = %+v, want the newest turn", got)
+	}
+}
+
 func TestLegacyForceCompression_DoesNotCutActiveTurn(t *testing.T) {
 	al, agent, ts, turn := activeTurnFixture(t, 2)
 	// Oversized prior messages cannot be summarized, and a two-round active

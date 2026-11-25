@@ -834,10 +834,6 @@ func (m *legacyContextManager) summarizeSession(
 		summary = ""
 	}
 
-	if len(history) <= 4 {
-		return false
-	}
-
 	// The turn in progress is never cut: a steering message inside it is a user
 	// message too, and would otherwise look like a Turn boundary.
 	compactableEnd, _ := historyLimitForTurn(history, ts)
