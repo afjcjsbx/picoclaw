@@ -74,6 +74,7 @@ The launcher serves the dashboard SPA and a REST API for everything the UI does.
 | Skills | `/api/skills*` | Browse, import, and remove skills |
 | Tools | `/api/tools`, `/api/tools/{name}/state`, `/api/tools/web-search-config` | Tool availability and settings |
 | Subagents | `/api/agents/subagents`, `/api/agents/subagents/active` | Agent roster, delegation permissions, sub-turn limits, and live subagent tasks |
+| MCP | `GET /api/agents/mcp` | MCP server connection status, tools, and config; reconciled against the live gateway snapshot |
 | OAuth | `/api/oauth/providers`, `/login`, `/flows/{id}`, `/flows/{id}/poll`, `/logout`, `/oauth/callback` | Provider OAuth flows |
 | QR flows | `/api/weixin/flows*`, `/api/wecom/flows*` | WeChat/WeCom QR binding |
 | System | `/api/system/launcher-config`, `/api/system/autostart`, `/api/system/version`, `POST /api/update` | Launcher settings and self-update |
