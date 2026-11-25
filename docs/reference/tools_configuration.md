@@ -37,6 +37,7 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `i2c`, `spi`, `serial` | `tools.i2c.enabled`, `tools.spi.enabled`, `tools.serial.enabled` | `false` | Platform-specific; see [Hardware tools](../tools/hardware.md) |
 | MCP tools | `tools.mcp.enabled` | `false` | Servers under `tools.mcp.servers`; see [MCP tools](../tools/mcp.md) |
 | MCP discovery | `tools.mcp.discovery.enabled` | `false` | Registers `tool_search_tool_bm25` / `tool_search_tool_regex`; see [Tool discovery](../tools/mcp.md#tool-discovery-lazy-loading) |
+| `memory` | `agents.defaults.memory.memory_enabled` | `true` | Injects MEMORY.md into the system prompt and registers the `memory` tool; see [Memory tool](../tools/memory.md) and [Memory options](#memory) |
 
 Two related settings sit outside the pattern:
 
@@ -145,5 +146,20 @@ For example:
 
 Note: Nested map-style config (for example `tools.mcp.servers.<name>.*`) is configured in `config.json` rather than
 environment variables.
+
+## Memory
+
+The `memory` tool and its companion prompt injections are configured under `agents.defaults.memory` (not under `tools`). Limits are counted in Unicode characters (Go runes). A non-positive value falls back to its default.
+
+| Config | Env | Type | Default | Description |
+|--------|-----|------|---------|-------------|
+| `agents.defaults.memory.memory_enabled` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_ENABLED` | bool | `true` | Inject MEMORY.md into the system prompt and register the `memory` tool. USER.md is injected regardless of this setting |
+| `agents.defaults.memory.memory_char_limit` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_CHAR_LIMIT` | int | `2200` | Character cap for MEMORY.md; the `memory` tool refuses writes that would exceed it |
+| `agents.defaults.memory.user_char_limit` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_USER_CHAR_LIMIT` | int | `1375` | Character cap for USER.md, enforced the same way |
+| `agents.defaults.memory.daily_notes_enabled` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_DAILY_NOTES_ENABLED` | bool | `true` | Inject the most recent daily notes (`memory/YYYYMM/YYYYMMDD.md`) into the system prompt |
+| `agents.defaults.memory.recent_daily_notes_count` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_RECENT_DAILY_NOTES_COUNT` | int | `3` | How many days of daily notes to inject |
+| `agents.defaults.memory.daily_notes_char_limit` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_DAILY_NOTES_CHAR_LIMIT` | int | `1000` | Character cap per injected daily note; newest lines win when trimming |
+
+See [Memory tool](../tools/memory.md) for the tool's arguments and limit-exceeded behavior.
 
 For MCP tools, `tools.mcp.max_inline_text_chars` controls how much text result is kept inline in model context. The threshold is counted in Unicode characters (Go runes), not bytes. For example, `16384` means up to 16,384 characters inline, which may occupy more than 16 KB for multibyte text such as CJK. Above this threshold, PicoClaw keeps the first 40% and the last 60% of the sanitized MCP text around an `[MCP RESULT TRUNCATED - N chars omitted out of T total]` notice and saves the full raw payload as a local artifact in the agent workspace, with a short note plus a structured `[file:...]` artifact path pointing at it. If the artifact write fails, the bounded view stays inline and the full payload is handed to the spillover above, which can still save it under a different artifact directory.
