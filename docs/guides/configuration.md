@@ -245,6 +245,10 @@ Session scope controls how much memory is shared between chats, users, threads, 
 
 For step-by-step recipes and isolation patterns, see the [Session Guide](session-guide.md).
 
+### Session Write Durability
+
+`session.durable_writes` (default `true`, env `PICOCLAW_SESSION_DURABLE_WRITES`) controls whether session writes are fsynced before they are acknowledged. When `true`, each message append and metadata update is fsynced, so the session file survives a power failure without data loss. When `false`, PicoClaw still uses atomic temp-and-rename writes so session files stay consistent after a crash, but the most recent writes may be lost on power failure. Disabling durability trades some crash safety for lower write latency and reduced flash wear on constrained devices.
+
 ### Context Manager (Seahorse)
 
 By default PicoClaw uses the `legacy` context manager, which summarizes history
