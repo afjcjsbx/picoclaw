@@ -34,6 +34,9 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 | proxy            | string | No       | Proxy URL for connecting to the Telegram API (e.g. http://127.0.0.1:7890) |
 | use_markdown_v2 | bool   | No       | Enable Telegram MarkdownV2 formatting                              |
 | media_group_delay_ms | int | No       | Idle delay before processing Telegram media groups/albums. Defaults to 500 ms |
+| streaming.enabled | bool | No | `false` | Enable streaming replies that edit the bot message progressively as the agent generates text |
+| streaming.throttle_seconds | int | No | `0` | Minimum seconds between streaming edits |
+| streaming.min_growth_chars | int | No | `0` | Minimum character growth before a streaming edit is sent |
 
 ## Setup
 
