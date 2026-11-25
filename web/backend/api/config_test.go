@@ -1271,6 +1271,114 @@ func TestHandleTestCommandPatterns_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_A2AListenerSecurity(t *testing.T) {
+	cfg := config.DefaultConfig()
+	bc := cfg.Channels[config.ChannelA2A]
+	if bc == nil {
+		t.Fatal("missing default a2a channel")
+	}
+	bc.Enabled = true
+	decoded, err := bc.GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() error = %v", err)
+	}
+	settings := decoded.(*config.A2ASettings)
+	settings.Host = "0.0.0.0"
+
+	errs := validateConfig(cfg)
+	if !strings.Contains(strings.Join(errs, "; "), "tokens is required") {
+		t.Fatalf("expected non-loopback token validation error, got %#v", errs)
+	}
+
+	settings.Tokens = config.SimpleSecureStrings("token")
+	settings.Port = 70000
+	errs = validateConfig(cfg)
+	if !strings.Contains(strings.Join(errs, "; "), "port must be between") {
+		t.Fatalf("expected A2A port validation error, got %#v", errs)
+	}
+}
+
+func TestHandlePatchConfig_A2ATokensPreserveReplaceAndClear(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	bc := cfg.Channels[config.ChannelA2A]
+	if bc == nil {
+		t.Fatal("missing default a2a channel")
+	}
+	bc.Enabled = true
+	decoded, err := bc.GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() error = %v", err)
+	}
+	decoded.(*config.A2ASettings).Tokens = config.SimpleSecureStrings("old-token")
+	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("SaveConfig() error = %v", saveErr)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	patch := func(body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPatch, "/api/config", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PATCH /api/config status = %d, body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	loadTokens := func() []string {
+		t.Helper()
+		loaded, loadErr := config.LoadConfig(configPath)
+		if loadErr != nil {
+			t.Fatalf("LoadConfig() error = %v", loadErr)
+		}
+		decoded, decodeErr := loaded.Channels[config.ChannelA2A].GetDecoded()
+		if decodeErr != nil {
+			t.Fatalf("GetDecoded() error = %v", decodeErr)
+		}
+		return decoded.(*config.A2ASettings).Tokens.Values()
+	}
+
+	// Omitting tokens preserves the security-file values.
+	patch(`{"channel_list":{"a2a":{"settings":{"port":9911}}}}`)
+	if got := loadTokens(); len(got) != 1 || got[0] != "old-token" {
+		t.Fatalf("tokens after omitted patch = %#v, want [old-token]", got)
+	}
+
+	// A submitted array replaces the complete list.
+	patch(`{"channel_list":{"a2a":{"settings":{"tokens":["new-a","new-b"]}}}}`)
+	if got := loadTokens(); len(got) != 2 || got[0] != "new-a" || got[1] != "new-b" {
+		t.Fatalf("tokens after replace patch = %#v, want [new-a new-b]", got)
+	}
+	configJSON, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.json) error = %v", err)
+	}
+	if strings.Contains(string(configJSON), "new-a") || strings.Contains(string(configJSON), "new-b") {
+		t.Fatalf("config.json leaked A2A tokens: %s", configJSON)
+	}
+	securityYAML, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+	if err != nil {
+		t.Fatalf("ReadFile(.security.yml) error = %v", err)
+	}
+	if !strings.Contains(string(securityYAML), "new-a") || !strings.Contains(string(securityYAML), "new-b") {
+		t.Fatalf(".security.yml missing A2A tokens: %s", securityYAML)
+	}
+
+	// An explicit empty array clears the list.
+	patch(`{"channel_list":{"a2a":{"settings":{"tokens":[]}}}}`)
+	if got := loadTokens(); len(got) != 0 {
+		t.Fatalf("tokens after clear patch = %#v, want empty", got)
+	}
+}
+
 func TestApplyConfigSecretsFromMap_TelegramToken(t *testing.T) {
 	cfg := config.DefaultConfig()
 	bc := cfg.Channels["telegram"]
