@@ -17,6 +17,14 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
       "type": "telegram",
       "token": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
       "allow_from": ["123456789"],
+      "placeholder": {
+        "enabled": true,
+        "text": ["Thinking... 💭"]
+      },
+      "group_trigger": {
+        "mention_only": false
+      },
+      "reasoning_channel_id": "",
       "proxy": "",
       "use_markdown_v2": false,
       "media_group_delay_ms": 500
@@ -30,6 +38,9 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 | enabled          | bool   | Yes      | Whether to enable the Telegram channel                             |
 | token            | string | Yes      | Telegram Bot API Token                                             |
 | allow_from       | array  | No       | Allowlist of user IDs; empty means all users are allowed           |
+| placeholder      | object | No       | Placeholder message config shown while the agent is working        |
+| group_trigger    | object | No       | Group trigger settings (e.g. `{ "mention_only": true }`)           |
+| reasoning_channel_id | string | No   | Optional chat ID to route reasoning/thinking output to a separate chat |
 | base_url         | string | No       | Custom Telegram Bot API server URL (e.g. `https://my-bot-api.example.com/bot`). Leave empty to use the official `api.telegram.org` endpoint |
 | proxy            | string | No       | Proxy URL for connecting to the Telegram API (e.g. http://127.0.0.1:7890) |
 | use_markdown_v2 | bool   | No       | Enable Telegram MarkdownV2 formatting                              |
