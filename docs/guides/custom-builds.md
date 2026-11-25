@@ -43,6 +43,7 @@ Available channel tags:
 
 | Tag | Channel |
 | --- | --- |
+| `channel_a2a` | A2A (Agent-to-Agent) |
 | `channel_deltachat` | Delta Chat |
 | `channel_dingtalk` | DingTalk |
 | `channel_discord` | Discord |
