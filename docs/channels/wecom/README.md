@@ -87,6 +87,9 @@ If you already have a `bot_id` and `secret` from the WeCom AI Bot platform, conf
 | `send_thinking_message` | bool | `true` | Send a `Processing...` message before the streamed reply begins. |
 | `allow_from` | array | `[]` | Sender allowlist. Empty means allow all senders. |
 | `reasoning_channel_id` | string | `""` | Optional chat ID to route reasoning/thinking output to a separate conversation. |
+| `streaming.enabled` | bool | `false` | Enable streaming replies that progressively update the message in WeCom. |
+| `streaming.throttle_seconds` | int | `0` | Minimum seconds between streaming updates. |
+| `streaming.min_growth_chars` | int | `0` | Minimum character growth before a streaming update is sent. |
 
 ### Environment Variables
 
