@@ -482,10 +482,52 @@ func (m *legacyContextManager) Clear(ctx context.Context, sessionKey string) err
 	return agent.Sessions.Save(ctx, sessionKey)
 }
 
-// pruneSessionToolResults applies the pruning pass to the stored history and
-// reports the resulting message count. When ts is the turn in progress, its
-// newest keepActiveRounds rounds are kept whole as well: the newest round holds
-// results the model has not seen yet.
+// historyLimitForTurn returns the end of the history region eligible for
+// compaction: the start of the turn in progress when its persisted record still
+// matches the history tail, or len(history) when ts is nil. activeLen is the
+// number of trailing messages owned by the turn.
+func historyLimitForTurn(history []providers.Message, ts *turnState) (compactableEnd, activeLen int) {
+	if ts == nil {
+		return len(history), 0
+	}
+	activeLen = matchingTurnMessageTail(history, ts.persistedMessagesSnapshot())
+	return len(history) - activeLen, activeLen
+}
+
+// keepHeadAndTail assembles the compacted history from the protected prefix and
+// the retained tail.
+func keepHeadAndTail(history []providers.Message, headEnd, tailStart int) []providers.Message {
+	kept := make([]providers.Message, 0, headEnd+len(history)-tailStart)
+	kept = append(kept, history[:headEnd]...)
+	kept = append(kept, history[tailStart:]...)
+	return kept
+}
+
+// appendMessagesAddedSince returns kept followed by the messages appended to the
+// session after snapshot, or nil when the stored history no longer has snapshot
+// as its prefix.
+func appendMessagesAddedSince(
+	current, snapshot, kept []providers.Message,
+) []providers.Message {
+	if len(current) < len(snapshot) {
+		return nil
+	}
+	if !messageSlicesEquivalent(current[:len(snapshot)], snapshot) {
+		return nil
+	}
+	if len(current) == len(snapshot) {
+		return kept
+	}
+	extended := make([]providers.Message, 0, len(kept)+len(current)-len(snapshot))
+	extended = append(extended, kept...)
+	extended = append(extended, current[len(snapshot):]...)
+	return extended
+}
+
+// pruneSessionToolResults applies the head/tail protection to the stored
+// history and reports the resulting message count. When ts is the turn in
+// progress, its newest keepActiveRounds rounds are kept whole as well: the
+// newest round holds results the model has not seen yet.
 func (m *legacyContextManager) pruneSessionToolResults(
 	ctx context.Context,
 	agent *AgentInstance,
@@ -497,13 +539,23 @@ func (m *legacyContextManager) pruneSessionToolResults(
 		warnSessionStoreError(sessionKey, "get history", err)
 		return 0, false
 	}
-	end, activeLen := len(history)-protectedTail, 0
+
+	compactableEnd, activeLen := historyLimitForTurn(history, ts)
+	activeEnd := len(history)
 	if ts != nil {
-		persisted := ts.persistedMessagesSnapshot()
-		activeLen = matchingTurnMessageTail(history, persisted)
-		end = min(end, activeTurnPruneEnd(history, persisted))
+		// Older rounds of the active turn are prunable; its newest
+		// keepActiveRounds rounds and the turn's opening message are not.
+		activeEnd = activeTurnPruneEnd(history, ts.persistedMessagesSnapshot())
 	}
-	if !pruneToolResultsBefore(history, end, agent.Workspace) {
+
+	protection := computeHistoryProtection(history, compactableEnd, agent)
+	pruned := pruneProtectedHistory(history, protection, agent)
+	if activeEnd > compactableEnd {
+		if pruneToolResultsInRange(history, compactableEnd, activeEnd, agent.Workspace) {
+			pruned = true
+		}
+	}
+	if !pruned {
 		return 0, false
 	}
 	if activeLen > 0 {
@@ -547,8 +599,9 @@ func storedHistoryLen(agent *AgentInstance, sessionKey string, fallback int) int
 // first. It tries lossless tool-output pruning, then summarizes earlier Turns
 // and the middle of the active Turn. Only when neither can make progress does
 // it archive the full transcript and drop the oldest ~50% of Turns (a Turn is
-// a complete user→LLM→response cycle, as defined in #1316), so tool-call
-// sequences are never split and the dropped content stays recoverable.
+// a complete user→LLM→response cycle, as defined in #1316), keeping the
+// protected head and active turn where possible, so tool-call sequences are
+// never split and the dropped content stays recoverable.
 func (m *legacyContextManager) forceCompression(ctx context.Context, sessionKey string) (compressionResult, bool) {
 	agent := m.al.agentForSession(sessionKey)
 	if agent == nil || agent.Sessions == nil {
@@ -594,12 +647,8 @@ func (m *legacyContextManager) forceCompressionLocked(
 	// Resolve the turn in progress before pruning. pruneSessionToolResults both
 	// protects the turn's newest rounds and keeps its persisted-message record
 	// in sync with the session, so the rebuild and any later summarization see
-	// the same active-turn boundary as the store. Ignore a turn state carried by
-	// ctx for a different session.
-	ts := turnStateFromContext(ctx)
-	if ts == nil || ts.sessionKey != sessionKey {
-		ts = m.al.getActiveTurnState(sessionKey)
-	}
+	// the same active-turn boundary as the store.
+	ts := m.turnForSession(ctx, sessionKey)
 
 	// 1. Lossless tool-output pruning: no LLM call, no message loss.
 	if remaining, pruned := m.pruneSessionToolResults(ctx, agent, sessionKey, ts); pruned {
@@ -671,6 +720,8 @@ func (m *legacyContextManager) forceCompressionLocked(
 		return compressionResult{}, false
 	}
 
+	compactableEnd, _ := historyLimitForTurn(history, ts)
+	protection := computeHistoryProtection(history, compactableEnd, agent)
 	turns := parseTurnBoundaries(history)
 	var mid int
 	if len(turns) >= 2 {
@@ -678,7 +729,14 @@ func (m *legacyContextManager) forceCompressionLocked(
 	} else {
 		mid = findSafeBoundary(history, len(history)/2)
 	}
+	if compactableEnd > 0 && mid > compactableEnd {
+		// Never cut into the active turn when older history can be dropped
+		// instead; a steering message inside the turn is not a safe cut.
+		mid = compactableEnd
+	}
+
 	var keptHistory []providers.Message
+	keptHead := false
 	if mid <= 0 {
 		for i := len(history) - 1; i >= 0; i-- {
 			if history[i].Role == "user" {
@@ -686,6 +744,12 @@ func (m *legacyContextManager) forceCompressionLocked(
 				break
 			}
 		}
+	} else if mid > protection.headEnd {
+		// Keep the protected opening and the newest half: drop the middle,
+		// not the first instruction. The fallback below still drops the head
+		// when there is no room for a middle.
+		keptHistory = keepHeadAndTail(history, protection.headEnd, mid)
+		keptHead = protection.headEnd > 0
 	} else {
 		keptHistory = history[mid:]
 	}
@@ -710,6 +774,14 @@ func (m *legacyContextManager) forceCompressionLocked(
 			"Read it with read_file if details are needed.]",
 		droppedCount, archivedPath,
 	)
+	if keptHead {
+		compressionNote = fmt.Sprintf(
+			"[Emergency compression dropped %d messages from the middle due to context limit; "+
+				"the full transcript was archived at %s before the drop. "+
+				"Read it with read_file if details are needed.]",
+			droppedCount, archivedPath,
+		)
+	}
 	if existingSummary != "" {
 		compressionNote = existingSummary + "\n\n" + compressionNote
 	}
@@ -759,9 +831,9 @@ func (m *legacyContextManager) forceCompressionLocked(
 	return result, true
 }
 
-// summarizeSession summarizes all but the most recent messages, synchronously. focus, when
-// non-empty, tells the summarizer which details to preserve. It reports whether
-// a summary was applied.
+// summarizeSession summarizes the middle between the protected head and tail,
+// synchronously. focus, when non-empty, tells the summarizer which details to
+// preserve. It reports whether a summary was applied.
 func (m *legacyContextManager) summarizeSession(
 	parent context.Context,
 	agent *AgentInstance,
@@ -783,22 +855,19 @@ func (m *legacyContextManager) summarizeSession(
 		summary = ""
 	}
 
-	if len(history) <= 4 {
-		return false
-	}
-
 	// The turn in progress is never cut: a steering message inside it is a user
 	// message too, and would otherwise look like a Turn boundary.
-	limit := len(history)
-	if ts != nil {
-		limit -= matchingTurnMessageTail(history, ts.persistedMessagesSnapshot())
-	}
-	safeCut := findSafeBoundary(history, min(len(history)-4, limit))
-	if safeCut <= 0 || safeCut > limit {
+	compactableEnd, _ := historyLimitForTurn(history, ts)
+	protection := computeHistoryProtection(history, compactableEnd, agent)
+	if !protection.ok {
 		return false
 	}
-	keepCount := len(history) - safeCut
-	toSummarize := history[:safeCut]
+	safeCut := protection.snappedTailStart
+	if safeCut <= protection.headEnd || safeCut > compactableEnd {
+		return false
+	}
+	toSummarize := history[protection.headEnd:safeCut]
+	keptHistory := keepHeadAndTail(history, protection.headEnd, safeCut)
 
 	maxMessageTokens := agent.ContextWindow / 2
 	validMessages := make([]providers.Message, 0)
@@ -862,11 +931,27 @@ func (m *legacyContextManager) summarizeSession(
 	}
 
 	if finalSummary != "" {
+		// Do not overwrite messages appended to the session while the summary
+		// was generated: the summary only covers the snapshot.
+		current, err := agent.Sessions.GetHistory(ctx, sessionKey)
+		if err != nil {
+			warnSessionStoreError(sessionKey, "get history after summary", err)
+			return false
+		}
+		keptHistory = appendMessagesAddedSince(current, history, keptHistory)
+		if keptHistory == nil {
+			logger.WarnCF("agent", "Skipping summarization: session changed while summarizing", map[string]any{
+				"session_key": sessionKey,
+			})
+			return false
+		}
+		keepCount := len(keptHistory)
+
 		warnSessionStoreError(sessionKey, "set summary", agent.Sessions.SetSummary(ctx, sessionKey, finalSummary))
 		warnSessionStoreError(
 			sessionKey,
-			"truncate history",
-			agent.Sessions.TruncateHistory(ctx, sessionKey, keepCount),
+			"set history",
+			agent.Sessions.SetHistory(ctx, sessionKey, keptHistory),
 		)
 		warnSessionStoreError(sessionKey, "save", agent.Sessions.Save(ctx, sessionKey))
 		m.al.emitEvent(

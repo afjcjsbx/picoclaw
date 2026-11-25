@@ -59,6 +59,10 @@ type AgentInstance struct {
 	// means summarization runs on the agent's own model.
 	CompactionCandidates []providers.FallbackCandidate
 
+	// Protection configures the legacy context manager's head/tail policy. It
+	// is resolved from agents.defaults at construction time.
+	Protection ContextProtection
+
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
 	// whether to route to LightCandidates or stay with Candidates.
@@ -290,6 +294,8 @@ func NewAgentInstance(
 		summarizeTokenPercent = 75
 	}
 
+	protection := resolveContextProtection(defaults, contextWindow, maxTokens)
+
 	// Resolve fallback candidates
 	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
 	usesInjectedPrimary := provider != nil &&
@@ -402,6 +408,7 @@ func NewAgentInstance(
 		ThinkingLevelConfigured: thinkingLevelConfigured,
 		ContextWindow:           contextWindow,
 		SummarizeTokenPercent:   summarizeTokenPercent,
+		Protection:              protection,
 		LoopDetection:           defaults.LoopDetection.Normalized(),
 		Provider:                provider,
 		Sessions:                sessions,

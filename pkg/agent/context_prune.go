@@ -25,7 +25,6 @@ const (
 	// duplicateToolResultShort is the fallback when the path-bearing duplicate
 	// stub would not be shorter than the output it replaces.
 	duplicateToolResultShort = "[Duplicate tool output - same content as a newer result]"
-	protectedTail            = 4
 	minToolResultChars       = 200
 )
 
@@ -56,14 +55,20 @@ func resultLen(content string) int {
 // still recover the original text from the archive. It reports whether anything
 // changed.
 func pruneToolResultsBefore(history []providers.Message, end int, workspace string) bool {
-	if len(history) == 0 {
+	return pruneToolResultsInRange(history, 0, end, workspace)
+}
+
+// pruneToolResultsInRange is pruneToolResultsBefore for history[start:end].
+// Dedupe targets are limited to the range being archived, so a copy still in
+// the protected tail is never used as a recovery target.
+func pruneToolResultsInRange(
+	history []providers.Message,
+	start, end int,
+	workspace string,
+) bool {
+	start, end = clampHistoryRange(history, start, end)
+	if start >= end {
 		return false
-	}
-	if end > len(history) {
-		end = len(history)
-	}
-	if end < 0 {
-		end = 0
 	}
 
 	// Only an archived copy is a durable dedupe target. A copy still in the
@@ -72,7 +77,7 @@ func pruneToolResultsBefore(history []providers.Message, end int, workspace stri
 	dedupeTargets := make(map[[sha256.Size]byte]dedupeTarget)
 
 	pruned := false
-	for i := end - 1; i >= 0; i-- {
+	for i := end - 1; i >= start; i-- {
 		msg := &history[i]
 		if !isPruneCandidate(*msg) {
 			continue
@@ -99,7 +104,48 @@ func pruneToolResultsBefore(history []providers.Message, end int, workspace stri
 		pruned = true
 	}
 
-	if truncateToolCallArguments(history, end, workspace) {
+	if truncateToolCallArgumentsInRange(history, start, end, workspace) {
+		pruned = true
+	}
+	return pruned
+}
+
+// pruneToolResultsToBudget evicts the oldest bulky tool outputs in
+// history[start:end] until history[start:measureEnd] fits budget. measureEnd can
+// extend past end so the unprunable active-turn messages counted in the tail
+// are still accounted for. It stops as soon as the measured range fits, so
+// newer tail results survive when an older one is enough.
+func pruneToolResultsToBudget(
+	history []providers.Message,
+	start, end, measureEnd int,
+	workspace string,
+	provider providers.LLMProvider,
+	budget int,
+) bool {
+	if budget <= 0 {
+		return false
+	}
+	start, end = clampHistoryRange(history, start, end)
+	start, measureEnd = clampHistoryRange(history, start, measureEnd)
+	if start >= end {
+		return false
+	}
+
+	tokens := estimateRangeTokens(history, start, measureEnd, provider)
+	if tokens <= budget {
+		return false
+	}
+
+	pruned := false
+	for i := start; i < end && tokens > budget; i++ {
+		if !isPruneCandidate(history[i]) {
+			continue
+		}
+		call := toolCallInfoForResult(history, i)
+		before := estimateMessageTokensForProvider(provider, history[i])
+		history[i].Content, _ = archiveToolResult(workspace, call.name, call.args, history[i].Content)
+		after := estimateMessageTokensForProvider(provider, history[i])
+		tokens -= before - after
 		pruned = true
 	}
 	return pruned

@@ -26,25 +26,30 @@ const (
 	archivedArgsKey = "_picoclaw_archived"
 )
 
-// truncateToolCallArguments archives and compacts oversized historical tool-call
-// arguments outside the protected region. The replacement stays valid JSON and
-// points at the archive, so providers can still parse the call and the model can
+// truncateToolCallArgumentsInRange archives oversized arguments on assistant
+// messages in history[start:end]. The replacement stays valid JSON and points
+// at the archive, so providers can still parse the call and the model can
 // recover the exact arguments with read_file.
-func truncateToolCallArguments(history []providers.Message, end int, workspace string) bool {
-	if workspace == "" || end <= 0 {
+func truncateToolCallArgumentsInRange(
+	history []providers.Message,
+	start, end int,
+	workspace string,
+) bool {
+	if workspace == "" {
 		return false
 	}
-	if end > len(history) {
-		end = len(history)
+	start, end = clampHistoryRange(history, start, end)
+	if start >= end {
+		return false
 	}
 	// Never rewrite the assistant row that owns a tool round whose result sits
 	// at the prune boundary: the model may still need to read that round.
-	for end > 0 && end < len(history) && history[end].Role == "tool" {
+	for end > start && end < len(history) && history[end].Role == "tool" {
 		end--
 	}
 
 	changed := false
-	for i := 0; i < end; i++ {
+	for i := start; i < end; i++ {
 		msg := &history[i]
 		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
 			continue
