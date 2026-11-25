@@ -58,7 +58,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **NEAR AI Cloud**   | `nearai`          | `https://cloud-api.near.ai/v1`                      | OpenAI    | [Get Key](https://near.ai)                                       |
 | **Anthropic**       | `anthropic`       | `https://api.anthropic.com/v1`                      | Anthropic | [Get Key](https://console.anthropic.com)                         |
 | **智谱 AI (GLM)**   | `zhipu`           | `https://open.bigmodel.cn/api/paas/v4`              | OpenAI    | [Get Key](https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys) |
-| **Z.AI Coding Plan** | `openai`         | `https://api.z.ai/api/coding/paas/v4`               | OpenAI    | [Get Key](https://z.ai/manage-apikey/apikey-list)                |
+| **Z.AI Coding Plan** | `zai`            | `https://api.z.ai/api/coding/paas/v4`               | OpenAI    | [Get Key](https://z.ai/manage-apikey/apikey-list)                |
 | **DeepSeek**        | `deepseek`        | `https://api.deepseek.com/v1`                       | OpenAI    | [Get Key](https://platform.deepseek.com)                         |
 | **Google Gemini**   | `gemini`          | `https://generativelanguage.googleapis.com/v1beta`  | Gemini    | [Get Key](https://aistudio.google.com/api-keys)                  |
 | **Groq**            | `groq`            | `https://api.groq.com/openai/v1`                    | OpenAI    | [Get Key](https://console.groq.com)                              |
@@ -341,16 +341,16 @@ Notes that matter:
 ```
 
 **Z.AI Coding Plan (GLM)**
-> Z.AI and 智谱 AI are two brands of the same provider. For the Z.AI Coding Plan use the `openai` model key and the api base as follows, rather than the zhipu config
+> Z.AI and 智谱 AI are two brands of the same provider. Use the canonical `zai` provider:
 ```json
 {
   "model_name": "glm-4.7",
-  "provider": "openai",
+  "provider": "zai",
   "model": "glm-4.7",
-  "api_keys": ["your-z.ai-key"],
-  "api_base": "https://api.z.ai/api/coding/paas/v4"
+  "api_keys": ["your-z.ai-key"]
 }
 ```
+> Legacy form (still works): `"provider": "openai"` with `"api_base": "https://api.z.ai/api/coding/paas/v4"`.
 
 **DeepSeek**
 
@@ -493,15 +493,14 @@ With explicit `provider`, PicoClaw sends `model` unchanged. That means `"provide
 
 **Z.AI Coding Plan**
 
-If the standard Zhipu endpoint (`https://open.bigmodel.cn/api/paas/v4`) returns 429 (code 1113: insufficient balance), try using the Z.AI Coding Plan endpoint instead:
+If the standard Zhipu endpoint (`https://open.bigmodel.cn/api/paas/v4`) returns 429 (code 1113: insufficient balance), try using the canonical `zai` provider instead:
 
 ```json
 {
   "model_name": "glm-4.7",
-  "provider": "openai",
+  "provider": "zai",
   "model": "glm-4.7",
-  "api_keys": ["your-zhipu-api-key"],
-  "api_base": "https://api.z.ai/api/coding/paas/v4"
+  "api_keys": ["your-z.ai-key"]
 }
 ```
 
