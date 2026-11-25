@@ -131,6 +131,43 @@ The tools appear only when `a2a_agents` has at least one valid entry.
 | `a2a_history` | Remote message history of a `task_id` |
 | `a2a_orchestrate` | Up to 8 independent tasks, 4 in flight at a time |
 
+### a2a_poll
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `agent` | string | yes | Name of a configured remote agent |
+| `task_id` | string | yes | Task id from `a2a_call`, `a2a_stream`, or `a2a_list` |
+
+Returns the task's current state and the answer accumulated so far, then returns immediately without waiting for completion. If the task is still running, the response includes `(still running)`.
+
+### a2a_cancel
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `agent` | string | yes | Name of a configured remote agent |
+| `task_id` | string | yes | Task id to cancel |
+
+Sends `CancelTask` to the remote agent. Fails if the task has already finished.
+
+### a2a_stream
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `agent` | string | yes | Name of a configured remote agent |
+| `message` | string | one of `message` / `task_id` | Start a new streaming task with this text |
+| `context_id` | string | no | Continue an earlier conversation (only valid with `message`) |
+| `task_id` | string | one of `message` / `task_id` | Attach to an already-running task and wait for it to finish |
+
+Exactly one of `message` (start a task) or `task_id` (attach to a task) must be provided. When used with `message`, `context_id` resumes the conversation identified by that id. Needs a peer that advertises `streaming=true` in `a2a_discover`; if the stream drops, the tool retries with `GetTask` polling and completes the wait without returning an error.
+
+### a2a_history
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `agent` | string | yes | Name of a configured remote agent |
+| `task_id` | string | yes | Task id to fetch history for |
+| `limit` | integer | no | Most recent messages to return (default `10`, max `50`) |
+
 **Async tasks.** `a2a_call async=true` submits with `returnImmediately` and starts one watcher per pending task (max 8): it subscribes with `SubscribeToTask` (the socket is idle until the remote has news) and falls back to `GetTask` polling (1 s → 5 s) for peers that cannot stream. When the task settles, the result is delivered to the conversation that started it, like a finished `spawn`. If the peer deadline (`timeout`, default 120 s) passes first the watcher reports that the task may still be running and does **not** cancel it: use `a2a_poll` / `a2a_cancel`. Blocking `a2a_call` benefits too: when a peer answers `SendMessage` before the task is done, it now waits over SSE and fetches the result once, instead of running a poll loop.
 
 PicoClaw does not register push webhooks when it is the *client*: that would need an inbound, publicly reachable endpoint, while the SSE watcher only dials out and works behind NAT.
