@@ -23,7 +23,7 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `image_generate` | `tools.image_generate.enabled` | `false` | Needs an image model under `tools.image_generate.model_name`; see [Image generation](../tools/image-generation.md) |
 | `web_search` | `tools.web.enabled` | `true` | Search providers and settings under `tools.web`; see [Web tools](../tools/web.md) |
 | `web_fetch` | `tools.web_fetch.enabled` | `true` | Fetch settings under `tools.web`; see [Web tools](../tools/web.md) |
-| `exec` | `tools.exec.enabled` | `true` | See [Exec tool](../tools/exec.md) |
+| `exec` | `tools.exec.enabled` | `true` | See [Exec tool](../tools/exec.md); `env_set` (object, JSON-only) and `env_allowlist` (string[], env `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST`) extend the child-process environment — see [Environment sanitization](../tools/exec.md#environment-sanitization) |
 | `cron` | `tools.cron.enabled` | `true` | See [Cron tool](../tools/cron.md) |
 | `todo` | `tools.todo.enabled` | `false` | See [Todo planning tool](../tools/todo.md) |
 | `message` | `tools.message.enabled` | `true` | Media attachments gated by `tools.message.media_enabled` (`false`); see [Messaging tools](../tools/messaging.md) |
