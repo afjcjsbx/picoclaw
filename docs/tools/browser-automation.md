@@ -39,7 +39,6 @@ For a Raspberry Pi, a small VPS, or any board where avoiding a second browser in
 
 ## Alternatives
 
-- **Bundled `agent-browser` skill.** The workspace ships [`skills/agent-browser`](https://github.com/afjcjsbx/picoclaw/blob/main/workspace/skills/agent-browser/SKILL.md), which wraps the `agent-browser` CLI. It is available in the heavy container image, not the standard install, and requires the CLI plus Chromium. It is convenient when you already use that image.
 - **Remote browser MCP.** Services such as Browserbase run Chromium elsewhere and expose it over HTTP MCP. This is useful on very small boards, but page data and sessions leave your machine and the service is usually paid.
 
 Playwright MCP is the most portable local option: it works with system Chromium, does not require the heavy image, and can attach to a browser you already run.

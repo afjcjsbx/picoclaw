@@ -1675,7 +1675,6 @@ func TestShellTool_URLsNotBlocked(t *testing.T) {
 	// The URL path components (e.g., "//github.com") should be recognized as URLs,
 	// not as file system paths.
 	commands := []string{
-		"agent-browser open https://github.com",
 		"curl https://api.example.com/data",
 		"wget http://example.com/file",
 		"browser open https://github.com/user/repo",
