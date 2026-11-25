@@ -1,10 +1,13 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -20,6 +23,8 @@ type AuthCredential struct {
 	AuthMethod   string    `json:"auth_method"`
 	Email        string    `json:"email,omitempty"`
 	ProjectID    string    `json:"project_id,omitempty"`
+	ClientID     string    `json:"client_id,omitempty"`
+	ClientSecret string    `json:"client_secret,omitempty"`
 }
 
 type AuthStore struct {
@@ -29,7 +34,13 @@ type AuthStore struct {
 const (
 	providerGoogleAntigravity = "google-antigravity"
 	providerAntigravityAlias  = "antigravity"
+	providerGmail             = "gmail"
 )
+
+// storeMu serializes read-modify-write operations on auth.json. Without it,
+// two token sources refreshing concurrently can overwrite each other's
+// credentials even when each individual write is atomic.
+var storeMu sync.Mutex
 
 func (c *AuthCredential) IsExpired() bool {
 	if c.ExpiresAt.IsZero() {
@@ -67,6 +78,13 @@ func cloneCredential(cred *AuthCredential) *AuthCredential {
 	return &cp
 }
 
+func sameCredential(a, b *AuthCredential) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 func mergeCredentials(primary, secondary *AuthCredential) *AuthCredential {
 	if primary == nil {
 		return cloneCredential(secondary)
@@ -99,6 +117,12 @@ func mergeCredentials(primary, secondary *AuthCredential) *AuthCredential {
 	}
 	if merged.ProjectID == "" {
 		merged.ProjectID = secondary.ProjectID
+	}
+	if merged.ClientID == "" {
+		merged.ClientID = secondary.ClientID
+	}
+	if merged.ClientSecret == "" {
+		merged.ClientSecret = secondary.ClientSecret
 	}
 
 	return &merged
@@ -169,6 +193,12 @@ func normalizeStore(store *AuthStore) {
 }
 
 func LoadStore() (*AuthStore, error) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	return loadStore()
+}
+
+func loadStore() (*AuthStore, error) {
 	path := authFilePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -187,6 +217,14 @@ func LoadStore() (*AuthStore, error) {
 }
 
 func SaveStore(store *AuthStore) error {
+	return withAuthStoreFileLock(context.Background(), func() error {
+		storeMu.Lock()
+		defer storeMu.Unlock()
+		return saveStore(store)
+	})
+}
+
+func saveStore(store *AuthStore) error {
 	path := authFilePath()
 	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
@@ -209,38 +247,112 @@ func GetCredential(provider string) (*AuthCredential, error) {
 	return cred, nil
 }
 
-func SetCredential(provider string, cred *AuthCredential) error {
-	store, err := LoadStore()
-	if err != nil {
-		return err
+// UpdateCredential runs update while holding the cross-process auth.json lock.
+// Token refresh callbacks use this to serialize refresh-token rotation with
+// logins, logouts, and other gateway processes. The callback may read the auth
+// store, but must not call any auth-store mutator.
+func UpdateCredential(
+	ctx context.Context,
+	provider string,
+	update func(*AuthCredential) (*AuthCredential, error),
+) (*AuthCredential, error) {
+	if update == nil {
+		return nil, fmt.Errorf("credential update callback is nil")
 	}
-
-	canonical := canonicalProvider(provider)
-	normalized := cloneCredential(cred)
-	if normalized != nil {
-		normalized.Provider = canonicalProvider(normalized.Provider)
-		if normalized.Provider == "" {
-			normalized.Provider = canonical
+	var result *AuthCredential
+	err := withAuthStoreFileLock(ctx, func() error {
+		storeMu.Lock()
+		store, err := loadStore()
+		if err != nil {
+			storeMu.Unlock()
+			return err
 		}
-	}
+		canonical := canonicalProvider(provider)
+		current := cloneCredential(store.Credentials[canonical])
+		storeMu.Unlock()
 
-	store.Credentials[canonical] = normalized
-	return SaveStore(store)
+		// Do not hold storeMu during the callback: a token refresh performs
+		// network I/O, and unrelated credential reads should remain available.
+		// Compliant writers cannot enter because they acquire the file lock
+		// before storeMu.
+		updated, err := update(current)
+		if err != nil {
+			return err
+		}
+		if sameCredential(updated, store.Credentials[canonical]) {
+			result = cloneCredential(updated)
+			return nil
+		}
+
+		storeMu.Lock()
+		defer storeMu.Unlock()
+		normalized := cloneCredential(updated)
+		if normalized != nil {
+			normalized.Provider = canonicalProvider(normalized.Provider)
+			if normalized.Provider == "" {
+				normalized.Provider = canonical
+			}
+		}
+		store.Credentials[canonical] = normalized
+		if err := saveStore(store); err != nil {
+			return err
+		}
+		result = cloneCredential(normalized)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func SetCredential(provider string, cred *AuthCredential) error {
+	return withAuthStoreFileLock(context.Background(), func() error {
+		storeMu.Lock()
+		defer storeMu.Unlock()
+
+		store, err := loadStore()
+		if err != nil {
+			return err
+		}
+
+		canonical := canonicalProvider(provider)
+		normalized := cloneCredential(cred)
+		if normalized != nil {
+			normalized.Provider = canonicalProvider(normalized.Provider)
+			if normalized.Provider == "" {
+				normalized.Provider = canonical
+			}
+		}
+
+		store.Credentials[canonical] = normalized
+		return saveStore(store)
+	})
 }
 
 func DeleteCredential(provider string) error {
-	store, err := LoadStore()
-	if err != nil {
-		return err
-	}
-	delete(store.Credentials, canonicalProvider(provider))
-	return SaveStore(store)
+	return withAuthStoreFileLock(context.Background(), func() error {
+		storeMu.Lock()
+		defer storeMu.Unlock()
+
+		store, err := loadStore()
+		if err != nil {
+			return err
+		}
+		delete(store.Credentials, canonicalProvider(provider))
+		return saveStore(store)
+	})
 }
 
 func DeleteAllCredentials() error {
-	path := authFilePath()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
+	return withAuthStoreFileLock(context.Background(), func() error {
+		storeMu.Lock()
+		defer storeMu.Unlock()
+
+		path := authFilePath()
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	})
 }

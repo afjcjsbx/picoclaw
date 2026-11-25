@@ -74,6 +74,14 @@ func TestNewMailChannel_Validation(t *testing.T) {
 		{"missing imap host", func(s *config.MailSettings, _ *config.Channel) { s.IMAPHost = "" }, "imap_host"},
 		{"missing smtp host", func(s *config.MailSettings, _ *config.Channel) { s.SMTPHost = "" }, "smtp_host"},
 		{
+			"static and managed OAuth are mutually exclusive",
+			func(s *config.MailSettings, _ *config.Channel) {
+				s.OAuthToken = *config.NewSecureString("static")
+				s.OAuthProvider = "gmail:bot@example.com"
+			},
+			"mutually exclusive",
+		},
+		{
 			"username is not an address",
 			func(s *config.MailSettings, _ *config.Channel) { s.Username = "bot" },
 			"from_address",

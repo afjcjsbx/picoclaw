@@ -61,7 +61,8 @@ type MailChannel struct {
 	// tokenSource, when set, supplies XOAUTH2 tokens (default: the static
 	// oauth_token setting). It is consulted on every IMAP and SMTP login so
 	// refreshed tokens are picked up.
-	tokenSource TokenSource
+	tokenSource     TokenSource
+	oauthConfigured bool
 
 	// tlsOverride lets tests trust a self-signed certificate; nil means the
 	// system roots.
@@ -96,6 +97,9 @@ func NewMailChannel(
 	}
 	if cfg.SMTPHost == "" {
 		return nil, fmt.Errorf("mail smtp_host is required")
+	}
+	if cfg.OAuthToken.String() != "" && cfg.OAuthProvider != "" {
+		return nil, fmt.Errorf("mail oauth_token and oauth_provider are mutually exclusive")
 	}
 	if _, err := mail.ParseAddress(fromAddress(cfg)); err != nil {
 		return nil, fmt.Errorf("mail from_address (or an address as username) is required: %w", err)
@@ -135,12 +139,31 @@ func NewMailChannel(
 	if c.maxAttach <= 0 {
 		c.maxAttach = defaultMaxAttachmentBytes
 	}
-	c.tokenSource = func(context.Context) (string, error) { return cfg.OAuthToken.String(), nil }
+	switch {
+	case cfg.OAuthProvider != "":
+		source, err := newManagedTokenSource(cfg.OAuthProvider)
+		if err != nil {
+			return nil, err
+		}
+		c.tokenSource = source.Token
+		c.oauthConfigured = true
+	case cfg.OAuthToken.String() != "":
+		c.tokenSource = func(context.Context) (string, error) { return cfg.OAuthToken.String(), nil }
+		c.oauthConfigured = true
+	default:
+		c.tokenSource = func(context.Context) (string, error) { return "", nil }
+	}
 	return c, nil
 }
 
 // SetTokenSource replaces the XOAUTH2 token provider. Call before Start.
-func (c *MailChannel) SetTokenSource(ts TokenSource) { c.tokenSource = ts }
+func (c *MailChannel) SetTokenSource(ts TokenSource) {
+	if ts == nil {
+		return
+	}
+	c.tokenSource = ts
+	c.oauthConfigured = true
+}
 
 // Start begins reading the mailbox in the background. Connection problems are
 // retried with exponential backoff rather than failing Start.

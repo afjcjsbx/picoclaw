@@ -24,6 +24,7 @@ require (
 	github.com/ergochat/irc-go v0.7.0
 	github.com/ergochat/readline v0.1.3
 	github.com/github/copilot-sdk/go v1.0.34
+	github.com/gofrs/flock v0.13.2
 	github.com/gomarkdown/markdown v0.0.0-20261022144421-6c848fa1b723
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0

@@ -161,7 +161,7 @@ func TestStripExtendedDrivePrefix(t *testing.T) {
 }
 
 func TestFileSafetySymlinkedCredentialTargets(t *testing.T) {
-	for _, name := range []string{"auth.json", "auth/mcp", "plugin-data", "channels/weixin/context-tokens", "codex/auth.json"} {
+	for _, name := range []string{"auth.json", "auth.lock", "auth/mcp", "plugin-data", "channels/weixin/context-tokens", "codex/auth.json"} {
 		t.Run(name, func(t *testing.T) {
 			workspace := t.TempDir()
 			home := t.TempDir()
@@ -178,7 +178,7 @@ func TestFileSafetySymlinkedCredentialTargets(t *testing.T) {
 			}
 			link := filepath.Join(home, filepath.FromSlash(name))
 			target := root
-			if name == "auth.json" || name == "codex/auth.json" {
+			if name == "auth.json" || name == "auth.lock" || name == "codex/auth.json" {
 				target = path
 			}
 			if name == "codex/auth.json" {
@@ -242,7 +242,7 @@ func TestFileSafetyCaseInsensitivePaths(t *testing.T) {
 	}
 	t.Setenv("PICOCLAW_HOME", home)
 	t.Setenv("CODEX_HOME", home)
-	for _, name := range []string{"auth.json", "auth/mcp/token.txt", "plugin-data/demo/token.txt", "channels/weixin/context-tokens/account.json", "sessions/chat.jsonl"} {
+	for _, name := range []string{"auth.json", "auth.lock", "auth/mcp/token.txt", "plugin-data/demo/token.txt", "channels/weixin/context-tokens/account.json", "sessions/chat.jsonl"} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(home, filepath.FromSlash(name))
 			alias := filepath.Join(homeAlias, filepath.FromSlash(strings.ToUpper(name)))
@@ -284,7 +284,7 @@ func TestFileSafetyCaseInsensitivePaths(t *testing.T) {
 			}
 		})
 	}
-	for _, name := range []string{"AUTH.JSON", "AUTH/MCP/new/token.txt", "SESSIONS/new/chat.jsonl"} {
+	for _, name := range []string{"AUTH.JSON", "AUTH.LOCK", "AUTH/MCP/new/token.txt", "SESSIONS/new/chat.jsonl"} {
 		freshHome := t.TempDir()
 		t.Setenv("PICOCLAW_HOME", freshHome)
 		result := NewWriteFileTool(freshHome, false).Execute(context.Background(), map[string]any{

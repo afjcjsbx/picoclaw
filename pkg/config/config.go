@@ -1113,6 +1113,7 @@ type MailSettings struct {
 	SMTPUsername       string       `json:"smtp_username,omitempty"        yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_SMTP_USERNAME"`
 	SMTPPassword       SecureString `json:"smtp_password,omitzero"         yaml:"smtp_password,omitempty" env:"PICOCLAW_CHANNELS_MAIL_SMTP_PASSWORD"`
 	OAuthToken         SecureString `json:"oauth_token,omitzero"           yaml:"oauth_token,omitempty"   env:"PICOCLAW_CHANNELS_MAIL_OAUTH_TOKEN"`
+	OAuthProvider      string       `json:"oauth_provider,omitempty"       yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_OAUTH_PROVIDER"`
 	FromAddress        string       `json:"from_address,omitempty"         yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_FROM_ADDRESS"`
 	DefaultSubject     string       `json:"default_subject,omitempty"      yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_DEFAULT_SUBJECT"`
 	PollIntervalSecs   int          `json:"poll_interval_secs,omitempty"   yaml:"-"                       env:"PICOCLAW_CHANNELS_MAIL_POLL_INTERVAL_SECS"`
