@@ -54,7 +54,7 @@ Sessions last about 31 days but are invalidated when the launcher restarts, so a
 | Page | What you can do |
 | --- | --- |
 | `/` | Chat with the agent, browse session history, pick the default model |
-| `/models` | Add, edit, delete, and set the default model (API-key, OAuth, and local/CLI models) |
+| `/models` | Add, edit, delete, and set the default model (API-key, OAuth, and local/CLI models); the edit form also sets per-model sampling parameters (temperature, max tokens, context window) |
 | `/credentials` | Manage provider credentials (OpenAI, Anthropic, Google Antigravity) |
 | `/channels` | Configure any supported channel from a shared catalog; QR-based binding for WeChat and WeCom |
 | `/agent/hub`, `/agent/skills`, `/agent/tools` | Browse and import skills; view and toggle agent tools |
