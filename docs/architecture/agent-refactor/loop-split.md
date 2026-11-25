@@ -3,7 +3,7 @@ description: "The pkg/agent/loop.go file (originally 4384 lines) has been split 
 ---
 # AgentLoop File Split
 
-> **Note:** This document describes the file split that was completed in a previous phase. The `loop_*` naming has since been renamed to `agent_*` and `turn_*`. See [agent-rename-plan.md](./agent-rename-plan.md) for the current file structure.
+> **Status: fully implemented.** The original `loop.go` has been split into the 12 files listed below, and all `loop_*` names have since been renamed to `agent_*` and `turn_*` (see [agent-rename-plan.md](./agent-rename-plan.md)). The current `pkg/agent/` directory contains `agent.go`, `agent_message.go`, `turn_coord.go`, `pipeline_*.go`, and so on — no `loop.go` or `loop_*.go` files remain.
 
 ## Overview
 
