@@ -70,6 +70,7 @@ The launcher serves the dashboard SPA and a REST API for everything the UI does.
 | Models | `/api/models*` (CRUD, `/default-chain`, `/catalog`, `/{index}/test`, `/test-inline`) | Model list management |
 | Channels | `/api/channels/catalog`, `/api/channels/{name}/config` | Channel configuration catalog |
 | Sessions | `/api/sessions`, `/api/sessions/{id}`, `/api/sessions/{id}/fork`, `GET /api/sessions/search` | Chat history; `/search` returns ranked message snippets matching a text query |
+| Files | `GET /api/files/preview` | Return a text preview of a workspace file; `?path=` required; truncated at 384 KB |
 | Skills | `/api/skills*` | Browse, import, and remove skills |
 | Tools | `/api/tools`, `/api/tools/{name}/state`, `/api/tools/web-search-config` | Tool availability and settings |
 | Subagents | `/api/agents/subagents`, `/api/agents/subagents/active` | Agent roster, delegation permissions, sub-turn limits, and live subagent tasks |
