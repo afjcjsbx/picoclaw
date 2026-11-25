@@ -134,7 +134,7 @@ func computeHistoryProtection(
 	tailStartBeforeSnap := computeTailStart(history, len(history), headEnd, cfg, agent.Provider)
 	snappedTailStart := min(tailStartBeforeSnap, compactableEnd)
 	if compactableEnd > 0 {
-		snappedTailStart = findSafeBoundary(history[:compactableEnd], snappedTailStart)
+		snappedTailStart = snapTailStart(history, snappedTailStart, compactableEnd)
 	}
 
 	return historyProtection{
@@ -145,6 +145,21 @@ func computeHistoryProtection(
 		tailTokenBudget:     cfg.TailTokenBudget,
 		ok:                  snappedTailStart > headEnd && snappedTailStart > 0,
 	}
+}
+
+// snapTailStart finds the Turn boundary for the tail. The active-turn boundary
+// at compactableEnd is a valid cut when it starts a Turn, even though it sits
+// after the tail target; that lets an older Turn be summarized before a short
+// active turn. Otherwise the tail is snapped within the compactable history.
+func snapTailStart(history []providers.Message, target, compactableEnd int) int {
+	if compactableEnd > 0 && isSafeBoundary(history, compactableEnd) {
+		snapped := findSafeBoundary(history, target)
+		if snapped > compactableEnd {
+			snapped = compactableEnd
+		}
+		return snapped
+	}
+	return findSafeBoundary(history[:compactableEnd], target)
 }
 
 // pruneProtectedHistory evicts tool outputs in the unprotected middle and, if

@@ -102,6 +102,28 @@ func TestComputeHistoryProtection_ActiveTurnDoesNotOverProtectHistory(t *testing
 	}
 }
 
+func TestComputeHistoryProtection_SnapsAtActiveTurnBoundary(t *testing.T) {
+	history := []providers.Message{
+		{Role: "user", Content: "old question"},
+		{Role: "assistant", Content: "old answer"},
+		{Role: "user", Content: "active question"},
+		{Role: "assistant", Content: "active answer"},
+	}
+	agent := &AgentInstance{Protection: ContextProtection{
+		ProtectFirstN:   1,
+		ProtectLastN:    4,
+		TailTokenBudget: 1_000,
+	}}
+
+	got := computeHistoryProtection(history, 2, agent)
+	if !got.ok {
+		t.Fatal("expected the older turn to be compressible")
+	}
+	if got.snappedTailStart != 2 {
+		t.Fatalf("tail start = %d, want the active-turn boundary 2", got.snappedTailStart)
+	}
+}
+
 func TestAlignHeadEnd_KeepsToolResultsWithTheirCall(t *testing.T) {
 	history := []providers.Message{
 		{Role: "user", Content: "start"},
