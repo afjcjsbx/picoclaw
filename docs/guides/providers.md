@@ -79,7 +79,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **ModelScope (魔搭)**| `modelscope`     | `https://api-inference.modelscope.cn/v1`            | OpenAI    | [Get Token](https://modelscope.cn/my/tokens)                     |
 | **Xiaomi MiMo**     | `mimo`            | `https://api.xiaomimimo.com/v1`                     | OpenAI    | [Get Key](https://platform.xiaomimimo.com)                       |
 | **AWS Bedrock**     | `bedrock`         | _(endpoint from region or env)_                     | Bedrock Converse | AWS SDK credentials (no `api_key` needed) |
-| **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com)                              |
+| **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com) or keyless (Managed Identity / Entra ID) |
 | **Antigravity**     | `antigravity`     | Google Cloud                                        | Custom    | OAuth only                                                       |
 | **GitHub Copilot**  | `github-copilot`  | `localhost:4321`                                    | gRPC      | -                                                                |
 | **OpenCode Go**     | `opencode-go`     | `https://opencode.ai/inference/go`                  | Multi     | [Get Key](https://opencode.ai/docs/go/)                          |
@@ -490,6 +490,19 @@ With explicit `provider`, PicoClaw sends `openai/gpt-oss-20b` unchanged to the L
 ```
 
 With explicit `provider`, PicoClaw sends `model` unchanged. That means `"provider": "litellm", "model": "lite-gpt4"` sends `lite-gpt4`, while `"provider": "litellm", "model": "openai/gpt-4o"` sends `openai/gpt-4o`. The legacy compatibility forms `litellm/lite-gpt4` and `litellm/openai/gpt-4o` still resolve the same way when `provider` is omitted.
+
+**Azure OpenAI (keyless)**
+
+When `api_keys` is omitted, PicoClaw uses Azure's `DefaultAzureCredential` (Managed Identity, Workload Identity, Entra ID CLI login, etc.) — no API key needed:
+
+```json
+{
+  "model_name": "azure-gpt-5",
+  "provider": "azure",
+  "model": "gpt-5-deployment",
+  "api_base": "https://your-resource.openai.azure.com"
+}
+```
 
 **Z.AI Coding Plan**
 
