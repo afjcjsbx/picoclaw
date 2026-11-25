@@ -224,7 +224,7 @@ picoclaw skills install --registry clawhub github
 
 ## Cron
 
-Manages scheduled tasks that deliver agent-generated messages to a channel. Job behavior, delivery modes, and storage are documented in [Scheduled Tasks and Cron Jobs](cron.md).
+Manages scheduled tasks that deliver agent-generated messages to a channel. Alias: `c`. Job behavior, delivery modes, and storage are documented in [Scheduled Tasks and Cron Jobs](cron.md).
 
 | Subcommand | Purpose |
 | --- | --- |
