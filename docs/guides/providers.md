@@ -648,10 +648,18 @@ For detailed migration guide, see [migration/model-list-migration.md](../migrati
 
 PicoClaw routes providers by protocol family:
 
-- OpenAI-compatible protocol: OpenRouter, OpenAI-compatible gateways, Groq, Zhipu, and vLLM-style endpoints.
-- Gemini native protocol: Google Gemini via the native `models/*:generateContent` and `models/*:streamGenerateContent` endpoints.
-- Anthropic protocol: Claude-native API behavior.
-- Codex/OAuth path: OpenAI OAuth/token authentication route.
+- **OpenAI-compatible HTTP** (`openai`, `openrouter`, `groq`, `zhipu`, `deepseek`, `nvidia`, `cerebras`, `volcengine`, `moonshot`, `venice`, `nearai`, `ollama`, `lmstudio`, `vllm`, `gpt4free`, `litellm`, `qwen-portal`/`qwen`, `qwen-intl`, `qwen-us`, `mistral`, `avian`, `novita`, `siliconflow`, `shengsuanyun`, `vivgrid`, `byteplus`, `longcat`, `modelscope`, `mimo`, `zai`, `alibaba-coding` and other OpenAI-compatible endpoints).
+- **OpenAI OAuth/token** (`openai` with `auth_method: oauth|token`): Codex-style authentication via the PicoClaw auth store.
+- **Azure OpenAI** (`azure`): deployment-based URLs with API key or keyless Managed Identity / Entra ID.
+- **AWS Bedrock** (`bedrock`): Bedrock Runtime Converse API; credentials from the AWS SDK default chain. Requires `-tags bedrock` build flag.
+- **Google Gemini native** (`gemini`): native `models/*:generateContent` and `models/*:streamGenerateContent` endpoints.
+- **MiniMax** (`minimax`): OpenAI-compatible with automatic `reasoning_split` injection.
+- **Anthropic HTTP** (`anthropic`): OpenAI-compatible chat completions endpoint at `api.anthropic.com`, with optional OAuth/token auth (`auth_method: oauth|token`).
+- **Anthropic Messages native** (`anthropic-messages`, `alibaba-coding-anthropic`): Anthropic's native `/v1/messages` wire format.
+- **OpenCode Go** (`opencode-go`): multi-protocol proxy; selects OpenAI Responses, Anthropic Messages, or Gemini automatically from the model ID prefix.
+- **Antigravity / Google Code Assist** (`antigravity`): OAuth-only managed provider.
+- **CLI providers** (`claude-cli`, `codex-cli`): spawn the respective CLI binary in a workspace directory; no API key or network connection required.
+- **GitHub Copilot** (`github-copilot`): gRPC connection to a local Copilot bridge on `localhost:4321`.
 
 This keeps the runtime lightweight while making new OpenAI-compatible backends mostly a config operation (`api_base` + `api_keys`).
 
