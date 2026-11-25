@@ -10,6 +10,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDefaultConfigIncludesA2AChannelDefaults(t *testing.T) {
+	bc := DefaultConfig().Channels[ChannelA2A]
+	require.NotNil(t, bc)
+	assert.False(t, bc.Enabled)
+	assert.Equal(t, ChannelA2A, bc.Type)
+
+	decoded, err := bc.GetDecoded()
+	require.NoError(t, err)
+	settings, ok := decoded.(*A2ASettings)
+	require.True(t, ok, "decoded as %T", decoded)
+	assert.Equal(t, "127.0.0.1", settings.Host)
+	assert.Equal(t, 9900, settings.Port)
+	assert.Equal(t, "PicoClaw", settings.Name)
+	assert.Equal(t, 1<<20, settings.MaxBodyBytes)
+	assert.Equal(t, 60, settings.RateLimitPerMinute)
+	assert.Equal(t, 256, settings.MaxTasks)
+	assert.Equal(t, 4, settings.MaxConcurrent)
+	assert.Equal(t, 300, settings.TaskTimeoutSeconds)
+	assert.False(t, settings.PushAllowPrivate)
+	assert.False(t, settings.Streaming.Enabled)
+}
+
 // The token of a remote agent lives in security.yml; everything else in config.json.
 // Loading must merge them, and saving must keep the token out of config.json.
 func TestA2AAgentsTokenFromSecurityRoundTrip(t *testing.T) {

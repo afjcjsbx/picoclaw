@@ -645,6 +645,21 @@ func defaultChannels() ChannelsConfig {
 				"streaming":       map[string]any{"enabled": true},
 			},
 		},
+		"a2a": map[string]any{
+			"settings": map[string]any{
+				"host":                  "127.0.0.1",
+				"port":                  9900,
+				"name":                  "PicoClaw",
+				"description":           "",
+				"max_body_bytes":        1 << 20,
+				"rate_limit_per_minute": 60,
+				"max_tasks":             256,
+				"max_concurrent":        4,
+				"task_timeout_seconds":  300,
+				"push_allow_private":    false,
+				"streaming":             map[string]any{"enabled": false},
+			},
+		},
 		"irc": map[string]any{
 			"settings": map[string]any{
 				"server":   "",

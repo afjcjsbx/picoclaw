@@ -83,6 +83,105 @@ func TestHandleGetChannelConfig_ReturnsSecretPresenceWithoutLeakingSecrets(t *te
 	}
 }
 
+func TestHandleListChannelCatalog_IncludesA2A(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/channels/catalog", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/channels/catalog status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp struct {
+		Channels []channelCatalogItem `json:"channels"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if _, ok := findChannelCatalogItem("a2a"); !ok {
+		t.Fatal("channel catalog is missing a2a")
+	}
+	found := false
+	for _, channel := range resp.Channels {
+		if channel.Name == "a2a" && channel.ConfigKey == "a2a" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("catalog response is missing a2a: %#v", resp.Channels)
+	}
+}
+
+func TestHandleGetA2AConfig_RedactsTokenArrayAndReturnsDefaults(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	bc := cfg.Channels[config.ChannelA2A]
+	if bc == nil {
+		t.Fatal("missing default a2a channel")
+	}
+	bc.Enabled = true
+	decoded, err := bc.GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() error = %v", err)
+	}
+	a2aCfg := decoded.(*config.A2ASettings)
+	a2aCfg.Host = "0.0.0.0"
+	a2aCfg.Port = 9911
+	a2aCfg.Tokens = config.SimpleSecureStrings("a2a-secret-token")
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/channels/a2a/config", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/channels/a2a/config status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "a2a-secret-token") {
+		t.Fatalf("response leaked A2A token: %s", rec.Body.String())
+	}
+	var resp channelConfigResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(resp.ConfiguredSecrets) != 1 || resp.ConfiguredSecrets[0] != "tokens" {
+		t.Fatalf("configured_secrets = %#v, want [tokens]", resp.ConfiguredSecrets)
+	}
+	settings, ok := resp.Config.(map[string]any)
+	if !ok {
+		t.Fatalf("config = %#v, want object", resp.Config)
+	}
+	if _, exists := settings["tokens"]; exists {
+		t.Fatalf("config should omit tokens, got %#v", settings)
+	}
+	if got := settings["host"]; got != "0.0.0.0" {
+		t.Fatalf("config.host = %#v, want 0.0.0.0", got)
+	}
+	if got := settings["port"]; got != float64(9911) {
+		t.Fatalf("config.port = %#v, want 9911", got)
+	}
+	if got := settings["max_concurrent"]; got != float64(4) {
+		t.Fatalf("config.max_concurrent = %#v, want default 4", got)
+	}
+}
+
 func TestHandleGetChannelConfig_ReturnsNotFoundForUnknownChannel(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
