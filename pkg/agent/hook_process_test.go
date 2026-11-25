@@ -199,6 +199,7 @@ func TestAgentLoop_MountProcessHook_IsolationSupportsRelativeDirAndCommand(t *te
 	if runtime.GOOS != "linux" {
 		t.Skip("linux-only isolation path handling")
 	}
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 
 	provider := &llmHookTestProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)
