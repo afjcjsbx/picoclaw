@@ -131,6 +131,15 @@ The tools appear only when `a2a_agents` has at least one valid entry.
 | `a2a_history` | Remote message history of a `task_id` |
 | `a2a_orchestrate` | Up to 8 independent tasks, 4 in flight at a time |
 
+### a2a_call
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `agent` | string | yes | Name of a configured remote agent |
+| `message` | string | yes | The task or question, self-contained |
+| `context_id` | string | no | Continue an earlier conversation |
+| `async` | bool | no | Return a `task_id` immediately instead of waiting. At most 8 concurrent async watchers are allowed; when the cap is reached the call fails with an error — wait for a pending task to settle, or use blocking `a2a_call` without `async` |
+
 ### a2a_poll
 
 | Argument | Type | Required | Description |
