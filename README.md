@@ -362,8 +362,8 @@ Talk to your PicoClaw through 19+ messaging platforms:
 | **OneBot** | Medium (WebSocket URL) | OneBot v11 | [Guide](docs/channels/onebot/README.md) |
 | **MQTT** | Easy (broker + agent_id) | MQTT pub/sub | [Guide](docs/channels/mqtt/README.md) |
 | **MaixCam** | Easy (enable) | TCP socket | [Guide](docs/channels/maixcam/README.md) |
-| **Pico** | Easy (enable) | Native protocol | Built-in |
-| **Pico Client** | Easy (WebSocket URL) | WebSocket | Built-in |
+| **Pico** | Easy (enable) | Native protocol | [Guide](docs/channels/pico/README.md) |
+| **Pico Client** | Easy (WebSocket URL) | WebSocket | [Guide](docs/channels/pico/README.md) |
 | **A2A** | Medium (port config) | A2A 1.0 JSON-RPC | [Guide](docs/channels/a2a/README.md) |
 
 > All webhook-based channels share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Feishu uses WebSocket/SDK mode and does not use the shared HTTP server.

@@ -29,7 +29,7 @@ Talk to your picoclaw through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk,
 | **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](../channels/onebot/)                                                                            |
 | **MQTT**             | ⭐ Easy            | Any MQTT client via broker pub/sub                    | [Docs](../channels/mqtt/)                                                                              |
 | **MaixCam**          | ⭐ Easy            | Hardware integration channel for Sipeed AI cameras    | [Docs](../channels/maixcam/)                                                                           |
-| **Pico**             | ⭐ Easy            | Native PicoClaw protocol channel                      |                                                                                                                  |
+| **Pico**             | ⭐ Easy            | Native PicoClaw protocol channel                      | [Docs](../channels/pico/)                                                                                        |
 
 ## Outbound-only channels
 
