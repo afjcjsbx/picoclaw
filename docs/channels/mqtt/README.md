@@ -140,7 +140,7 @@ PicoClaw automatically reconnects to the broker if the connection is lost, with 
 
 ## ⚠️ Notes
 
-- **TLS**: SSL/TLS is supported (`ssl://` broker URL). Certificate verification is skipped by default.
+- **TLS**: SSL/TLS is supported (`ssl://` broker URL). Certificate verification is performed by default; set `tls_insecure_skip_verify: true` only for brokers with self-signed certificates on trusted networks.
 - **Streaming**: Streaming responses send multiple messages to the response topic; concatenate them in order.
 - **client_id vs session ID**: The `client_id` in the topic path is set by your client application and identifies the conversation session. It is separate from the broker-level client ID used by PicoClaw's paho connection.
 - **Multiple instances**: If you run multiple PicoClaw instances against the same broker with the same `agent_id`, set distinct `client_id` values to avoid broker-level conflicts.
