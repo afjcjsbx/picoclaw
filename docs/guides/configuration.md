@@ -1382,3 +1382,4 @@ Command cron jobs can execute shell commands. By default, remote channels cannot
 | [Steering](../architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](../architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
 | [Context Management](../architecture/agent-refactor/context.md) | Context boundary detection, proactive budget check, compression |
+| [Tools Configuration](../reference/tools_configuration.md) | Tool-result artifact settings: `max_inline_result_chars` (default `16384`), `artifact_max_files` (default `128`), `artifact_max_age_hours` (default `24`) |
