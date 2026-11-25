@@ -471,8 +471,8 @@ Runtime observer event, broadcast only, no response required. `id` is `0` or abs
 
 The `kind` field can be any kind declared in `pkg/events`. Every kind family is
 observable; `agent.*` is the most commonly used but hooks can also observe
-`channel.*`, `bus.*`, `gateway.*`, and `mcp.*` events. The full catalog is in
-[Runtime Events](../runtime-events.md).
+`channel.*`, `bus.*`, `gateway.*`, and `mcp.*` events. The full catalog with
+payloads and severity levels is in [Runtime Events](../runtime-events.md).
 
 Representative `kind` values by family:
 

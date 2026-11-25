@@ -721,7 +721,9 @@ The host does not currently accept new RPCs initiated by the process hook. In pr
 - `observe`
   Runtime event kinds to subscribe to. Each entry is a kind string such as
   `agent.turn.end` or a legacy alias. The values `"*"` and `"all"` (and the
-  empty string `""`) subscribe to every runtime event kind.
+  empty string `""`) subscribe to every runtime event kind. All families
+  (`channel.*`, `bus.*`, `gateway.*`, `mcp.*`, and `agent.*`) are observable;
+  see [Runtime Events](../runtime-events.md) for the full catalog.
 - `intercept`
 
 ## Troubleshooting
