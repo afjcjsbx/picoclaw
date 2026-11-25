@@ -469,6 +469,30 @@ Runtime observer event, broadcast only, no response required. `id` is `0` or abs
 }
 ```
 
+A second example shows a non-agent event (`mcp.server.connected`). MCP events
+carry no agent scope; source is `mcp` with the server name:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "hook.runtime_event",
+  "params": {
+    "kind": "mcp.server.connected",
+    "source": {
+      "component": "mcp",
+      "name": "my-mcp-server"
+    },
+    "scope": {},
+    "payload": {
+      "server": "my-mcp-server",
+      "type": "stdio",
+      "command": "/usr/local/bin/my-mcp-server",
+      "tool_count": 5
+    }
+  }
+}
+```
+
 The `kind` field can be any kind declared in `pkg/events`. Every kind family is
 observable; `agent.*` is the most commonly used but hooks can also observe
 `channel.*`, `bus.*`, `gateway.*`, and `mcp.*` events. The full catalog with
