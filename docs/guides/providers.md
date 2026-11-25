@@ -82,6 +82,8 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **Mistral AI**      | `mistral`         | `https://api.mistral.ai/v1`                         | OpenAI    | [Get Key](https://console.mistral.ai)                            |
 | **Avian**           | `avian`           | `https://api.avian.io/v1`                           | OpenAI    | [Get Key](https://avian.io)                                      |
 | **Novita AI**       | `novita`          | `https://api.novita.ai/openai`                      | OpenAI    | [Get Key](https://novita.ai)                                     |
+| **Alibaba Coding Plan** | `alibaba-coding` | `https://coding-intl.dashscope.aliyuncs.com/v1` | OpenAI    | [Get Key](https://alibabacloud.com)                              |
+| **Alibaba Coding Plan (Anthropic)** | `alibaba-coding-anthropic` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | Anthropic Messages | [Get Key](https://alibabacloud.com) |
 | **AWS Bedrock**     | `bedrock`         | _(endpoint from region or env)_                     | Bedrock Converse | AWS SDK credentials (no `api_key` needed) |
 | **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com) or keyless (Managed Identity / Entra ID) |
 | **Antigravity**     | `antigravity`     | Google Cloud                                        | Custom    | OAuth only                                                       |
