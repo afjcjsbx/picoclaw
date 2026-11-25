@@ -488,7 +488,35 @@ Setting `observe` to `["*"]` or `["all"]` (or the empty string `[""]`) subscribe
 every runtime event kind. This is equivalent to listing every kind individually and
 is useful during development to capture all activity.
 
-Legacy observe configuration names such as `turn_end` and `tool_exec_start` are still accepted and normalized to runtime event names. New process hook notifications use `hook.runtime_event`.
+The following legacy short aliases are accepted in `observe` and normalized to
+their canonical runtime event kind:
+
+| Alias | Canonical kind(s) |
+|-------|-------------------|
+| `turn_start` | `agent.turn.start` |
+| `turn_end` | `agent.turn.end` |
+| `turn_completed` | `agent.turn.end` |
+| `llm_request` | `agent.llm.request` |
+| `llm_delta` | `agent.llm.delta` |
+| `llm_response` | `agent.llm.response` |
+| `llm_retry` | `agent.llm.retry` |
+| `context_compress` | `agent.context.compress` |
+| `session_summarize` | `agent.session.summarize` |
+| `post_compaction` | `agent.context.compress` and `agent.session.summarize` |
+| `tool_exec_start` | `agent.tool.exec_start` |
+| `tool_exec_end` | `agent.tool.exec_end` |
+| `tool_exec_skipped` | `agent.tool.exec_skipped` |
+| `steering_injected` | `agent.steering.injected` |
+| `follow_up_queued` | `agent.follow_up.queued` |
+| `interrupt_received` | `agent.interrupt.received` |
+| `subturn_spawn` | `agent.subturn.spawn` |
+| `subturn_end` | `agent.subturn.end` |
+| `subturn_result_delivered` | `agent.subturn.result_delivered` |
+| `subturn_orphan` | `agent.subturn.orphan` |
+| `error` | `agent.error` |
+
+Canonical kind strings (e.g. `agent.turn.end`) are also accepted directly. New
+process hook notifications use `hook.runtime_event`.
 
 ---
 

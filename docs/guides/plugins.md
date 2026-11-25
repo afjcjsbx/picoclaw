@@ -480,7 +480,11 @@ Observe accepts PicoClaw runtime event names such as `agent.turn.end`; the
 `turn_completed` alias runs only for successfully completed turns. The
 `post_compaction` alias runs after successful history summarization or context
 compression, covering both `agent.session.summarize` and
-`agent.context.compress` events.
+`agent.context.compress` events. Additional short aliases include
+`subturn_spawn`, `subturn_end`, `subturn_result_delivered`, `subturn_orphan`,
+`follow_up_queued`, `llm_retry`, `context_compress`, and `session_summarize`.
+See [hook-json-protocol.md](../architecture/hooks/hook-json-protocol.md) for
+the full alias table.
 
 Arguments support the event's available `${user_message}` and
 `${assistant_message}` values, `${tool_name}`, `${tool_arguments}`,
