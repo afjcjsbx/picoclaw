@@ -145,6 +145,12 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   "message",
 	},
 	{
+		Name:        "ask_user",
+		Description: "Ask the user clarifying questions and wait for the answers.",
+		Category:    "communication",
+		ConfigKey:   "ask_user",
+	},
+	{
 		Name:        "reaction",
 		Description: "React to a message on channels that support reactions.",
 		Category:    "communication",
@@ -464,6 +470,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.WebFetch.Enabled = enabled
 	case "message":
 		cfg.Tools.Message.Enabled = enabled
+	case "ask_user":
+		cfg.Tools.AskUser.Enabled = enabled
 	case "reaction":
 		cfg.Tools.Reaction.Enabled = enabled
 	case "send_file":

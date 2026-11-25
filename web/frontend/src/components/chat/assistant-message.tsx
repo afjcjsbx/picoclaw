@@ -151,6 +151,7 @@ const TOOL_DISPLAYS: Record<string, ToolDisplay> = {
     icon: IconMessageCircle,
     fields: ["channel"],
   },
+  ask_user: { label: "Ask user", icon: IconMessageCircle },
   reaction: {
     label: "Add reaction",
     icon: IconMessageCircle,
@@ -199,6 +200,8 @@ function getToolDisplay(
 
   const action =
     typeof args.action === "string" ? args.action.toLowerCase() : ""
+  const askUserDetail =
+    toolName === "ask_user" ? summarizeAskUserQuestions(args.questions) : ""
   const label =
     toolName === "cron"
       ? action === "add"
@@ -228,7 +231,7 @@ function getToolDisplay(
     ? FILE_TOOLS.has(toolName)
       ? rawValue.trim()
       : rawValue.replace(/\s+/g, " ").trim()
-    : undefined
+    : askUserDetail || undefined
   const webUrl = toolName === "web_fetch" ? safeWebUrl(args.url) : undefined
 
   return {
@@ -244,6 +247,18 @@ function getToolDisplay(
       ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(webUrl.hostname)}&sz=32`
       : undefined,
   }
+}
+
+function summarizeAskUserQuestions(value: unknown): string {
+  if (!Array.isArray(value)) return ""
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return ""
+      const question = (item as { question?: unknown }).question
+      return typeof question === "string" ? question.trim() : ""
+    })
+    .filter(Boolean)
+    .join(" · ")
 }
 
 function safeWebUrl(value: unknown): URL | undefined {
