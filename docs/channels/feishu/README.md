@@ -19,7 +19,13 @@ Feishu (international name: Lark) is an enterprise collaboration platform by Byt
       "app_secret": "xxx",
       "encrypt_key": "",
       "verification_token": "",
-      "allow_from": []
+      "allow_from": [],
+      "placeholder": { "enabled": true, "text": ["Thinking..."] },
+      "group_trigger": { "mention_only": false },
+      "reasoning_channel_id": "",
+      "settings": {
+        "is_lark": false
+      }
     }
   }
 }
@@ -34,6 +40,10 @@ Feishu (international name: Lark) is an enterprise collaboration platform by Byt
 | verification_token    | string | No       | Token used for Webhook event verification                          |
 | allow_from            | array  | No       | Allowlist of user IDs; empty means all users are allowed           |
 | random_reaction_emoji | array  | No       | List of random reaction emojis; empty uses the default "Pin"       |
+| placeholder           | object | No       | Placeholder message shown while the agent is working               |
+| group_trigger         | object | No       | Group trigger settings (e.g. `{ "mention_only": true }`)           |
+| reasoning_channel_id  | string | No       | Optional chat ID to route reasoning/thinking output to a separate chat |
+| is_lark               | bool   | No       | Set to `true` to use the Lark international domain (`open.larksuite.com`). Default `false` uses the Feishu domain (`open.feishu.cn`). Env: `PICOCLAW_CHANNELS_FEISHU_IS_LARK` |
 
 ## Setup
 
