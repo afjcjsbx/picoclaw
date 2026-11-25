@@ -229,18 +229,25 @@ func computeTailStart(
 	return start
 }
 
-// estimateRangeTokens sums the provider-aware token estimate for history[start:end].
-func estimateRangeTokens(
-	history []providers.Message,
-	start, end int,
-	provider providers.LLMProvider,
-) int {
+// clampHistoryRange bounds [start, end) to history. Callers must check for an
+// empty range because start may be greater than or equal to end after clamping.
+func clampHistoryRange(history []providers.Message, start, end int) (int, int) {
 	if start < 0 {
 		start = 0
 	}
 	if end > len(history) {
 		end = len(history)
 	}
+	return start, end
+}
+
+// estimateRangeTokens sums the provider-aware token estimate for history[start:end].
+func estimateRangeTokens(
+	history []providers.Message,
+	start, end int,
+	provider providers.LLMProvider,
+) int {
+	start, end = clampHistoryRange(history, start, end)
 	total := 0
 	for i := start; i < end; i++ {
 		total += estimateMessageTokensForProvider(provider, history[i])
@@ -250,12 +257,7 @@ func estimateRangeTokens(
 
 // countUserMessages counts user-role messages in history[start:end].
 func countUserMessages(history []providers.Message, start, end int) int {
-	if start < 0 {
-		start = 0
-	}
-	if end > len(history) {
-		end = len(history)
-	}
+	start, end = clampHistoryRange(history, start, end)
 	count := 0
 	for i := start; i < end; i++ {
 		if history[i].Role == "user" {

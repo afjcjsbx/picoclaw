@@ -494,6 +494,15 @@ func historyLimitForTurn(history []providers.Message, ts *turnState) (limit, act
 	return len(history) - activeLen, activeLen
 }
 
+// keepHeadAndTail assembles the compacted history from the protected prefix and
+// the retained tail.
+func keepHeadAndTail(history []providers.Message, headEnd, tailStart int) []providers.Message {
+	kept := make([]providers.Message, 0, headEnd+len(history)-tailStart)
+	kept = append(kept, history[:headEnd]...)
+	kept = append(kept, history[tailStart:]...)
+	return kept
+}
+
 // pruneSessionToolResults applies the head/tail protection to the stored
 // history and reports the resulting message count. When ts is the turn in
 // progress, its newest keepActiveRounds rounds are kept whole as well: the
@@ -718,9 +727,7 @@ func (m *legacyContextManager) forceCompressionLocked(
 		// Keep the protected opening and the newest half: drop the middle,
 		// not the first instruction. The fallback below still drops the head
 		// when there is no room for a middle.
-		keptHistory = make([]providers.Message, 0, protection.headEnd+len(history)-mid)
-		keptHistory = append(keptHistory, history[:protection.headEnd]...)
-		keptHistory = append(keptHistory, history[mid:]...)
+		keptHistory = keepHeadAndTail(history, protection.headEnd, mid)
 		keptHead = protection.headEnd > 0
 	} else {
 		keptHistory = history[mid:]
@@ -843,9 +850,7 @@ func (m *legacyContextManager) summarizeSession(
 		return false
 	}
 	toSummarize := history[protection.headEnd:safeCut]
-	keptHistory := make([]providers.Message, 0, protection.headEnd+len(history)-safeCut)
-	keptHistory = append(keptHistory, history[:protection.headEnd]...)
-	keptHistory = append(keptHistory, history[safeCut:]...)
+	keptHistory := keepHeadAndTail(history, protection.headEnd, safeCut)
 	keepCount := len(keptHistory)
 
 	maxMessageTokens := agent.ContextWindow / 2

@@ -66,12 +66,7 @@ func pruneToolResultsInRange(
 	start, end int,
 	workspace string,
 ) bool {
-	if start < 0 {
-		start = 0
-	}
-	if end > len(history) {
-		end = len(history)
-	}
+	start, end = clampHistoryRange(history, start, end)
 	if start >= end {
 		return false
 	}
@@ -128,12 +123,7 @@ func pruneToolResultsToBudget(
 	if budget <= 0 {
 		return false
 	}
-	if start < 0 {
-		start = 0
-	}
-	if end > len(history) {
-		end = len(history)
-	}
+	start, end = clampHistoryRange(history, start, end)
 	if start >= end {
 		return false
 	}

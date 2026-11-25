@@ -35,15 +35,10 @@ func truncateToolCallArgumentsInRange(
 	start, end int,
 	workspace string,
 ) bool {
-	if workspace == "" || start < 0 {
+	if workspace == "" {
 		return false
 	}
-	if start > len(history) {
-		start = len(history)
-	}
-	if end > len(history) {
-		end = len(history)
-	}
+	start, end = clampHistoryRange(history, start, end)
 	if start >= end {
 		return false
 	}
