@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -204,6 +205,75 @@ func TestLegacySummarize_CompactsShortHistoryWhenTailAllows(t *testing.T) {
 	}
 	if got[0].Content != "latest question" || got[1].Content != "latest answer" {
 		t.Fatalf("kept history = %+v, want the newest turn", got)
+	}
+}
+
+type appendOnChatProvider struct {
+	simpleMockProvider
+	hook func()
+}
+
+func (p *appendOnChatProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	hook := p.hook
+	p.hook = nil
+	if hook != nil {
+		hook()
+	}
+	return p.simpleMockProvider.Chat(ctx, messages, tools, model, opts)
+}
+
+func TestLegacySummarize_PreservesMessagesAppendedDuringSummary(t *testing.T) {
+	cfg := testConfig(t)
+	provider := &appendOnChatProvider{simpleMockProvider: simpleMockProvider{response: "test"}}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "q3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	const sessionKey = "session-append-during-summary"
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+	provider.hook = func() {
+		if err := agent.Sessions.AddMessage(
+			context.Background(), sessionKey, "user", "APPENDED-DURING-SUMMARY",
+		); err != nil {
+			t.Errorf("AddMessage: %v", err)
+		}
+	}
+
+	lcm := al.contextManager.(*legacyContextManager)
+	if !lcm.summarizeSession(context.Background(), agent, sessionKey, nil, "") {
+		t.Fatal("expected a summary")
+	}
+
+	got, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("history = %d messages, want the four-message tail plus the appended message", len(got))
+	}
+	if got[len(got)-1].Content != "APPENDED-DURING-SUMMARY" {
+		t.Fatalf("last message = %q, want the message appended during summarization", got[len(got)-1].Content)
+	}
+	if summary, _ := agent.Sessions.GetSummary(context.Background(), sessionKey); summary != "test" {
+		t.Fatalf("summary = %q, want the mock summary", summary)
 	}
 }
 

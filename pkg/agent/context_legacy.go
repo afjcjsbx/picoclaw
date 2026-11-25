@@ -503,6 +503,27 @@ func keepHeadAndTail(history []providers.Message, headEnd, tailStart int) []prov
 	return kept
 }
 
+// appendMessagesAddedSince returns kept followed by the messages appended to the
+// session after snapshot, or nil when the stored history no longer has snapshot
+// as its prefix.
+func appendMessagesAddedSince(
+	current, snapshot, kept []providers.Message,
+) []providers.Message {
+	if len(current) < len(snapshot) {
+		return nil
+	}
+	if !messageSlicesEquivalent(current[:len(snapshot)], snapshot) {
+		return nil
+	}
+	if len(current) == len(snapshot) {
+		return kept
+	}
+	extended := make([]providers.Message, 0, len(kept)+len(current)-len(snapshot))
+	extended = append(extended, kept...)
+	extended = append(extended, current[len(snapshot):]...)
+	return extended
+}
+
 // pruneSessionToolResults applies the head/tail protection to the stored
 // history and reports the resulting message count. When ts is the turn in
 // progress, its newest keepActiveRounds rounds are kept whole as well: the
@@ -847,7 +868,6 @@ func (m *legacyContextManager) summarizeSession(
 	}
 	toSummarize := history[protection.headEnd:safeCut]
 	keptHistory := keepHeadAndTail(history, protection.headEnd, safeCut)
-	keepCount := len(keptHistory)
 
 	maxMessageTokens := agent.ContextWindow / 2
 	validMessages := make([]providers.Message, 0)
@@ -911,6 +931,22 @@ func (m *legacyContextManager) summarizeSession(
 	}
 
 	if finalSummary != "" {
+		// Do not overwrite messages appended to the session while the summary
+		// was generated: the summary only covers the snapshot.
+		current, err := agent.Sessions.GetHistory(ctx, sessionKey)
+		if err != nil {
+			warnSessionStoreError(sessionKey, "get history after summary", err)
+			return false
+		}
+		keptHistory = appendMessagesAddedSince(current, history, keptHistory)
+		if keptHistory == nil {
+			logger.WarnCF("agent", "Skipping summarization: session changed while summarizing", map[string]any{
+				"session_key": sessionKey,
+			})
+			return false
+		}
+		keepCount := len(keptHistory)
+
 		warnSessionStoreError(sessionKey, "set summary", agent.Sessions.SetSummary(ctx, sessionKey, finalSummary))
 		warnSessionStoreError(
 			sessionKey,
