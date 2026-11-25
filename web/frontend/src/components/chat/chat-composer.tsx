@@ -13,6 +13,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -91,6 +92,7 @@ interface ChatComposerProps {
   isDragActive: boolean
   contextUsage?: ContextUsage
   slashCommands?: SlashCommand[]
+  promptHistory?: string[]
   focusSignal?: number
   onFocusHandled?: () => void
 }
@@ -127,6 +129,7 @@ export function ChatComposer({
   isDragActive,
   contextUsage,
   slashCommands = [],
+  promptHistory = [],
   focusSignal = 0,
   onFocusHandled,
 }: ChatComposerProps) {
@@ -135,6 +138,10 @@ export function ChatComposer({
   const composingRef = useRef(false)
   const surfaceRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const moveCaretToEndRef = useRef(false)
+  const [promptHistoryIndex, setPromptHistoryIndex] = useState<number | null>(
+    null,
+  )
   const [paletteDismissed, setPaletteDismissed] = useState(false)
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const [recentCommands, setRecentCommands] = useState<string[]>(() =>
@@ -218,6 +225,19 @@ export function ChatComposer({
     }
   }, [showPalette])
 
+  useLayoutEffect(() => {
+    if (!moveCaretToEndRef.current) return
+    moveCaretToEndRef.current = false
+    const textarea = textareaRef.current
+    if (!textarea) return
+    const end = textarea.value.length
+    textarea.setSelectionRange(end, end)
+  }, [input])
+
+  useEffect(() => {
+    if (input === "") setPromptHistoryIndex(null)
+  }, [input])
+
   useEffect(() => {
     if (!focusSignal) return
     const textarea = textareaRef.current
@@ -250,6 +270,7 @@ export function ChatComposer({
   }, [canInput, focusSignal, onFocusHandled])
 
   const handleInputChange = (value: string) => {
+    setPromptHistoryIndex(null)
     setPaletteDismissed(false)
     setSelectedCommandIndex(0)
     onInputChange(value)
@@ -259,6 +280,7 @@ export function ChatComposer({
     const nextRecents = nextSlashRecents(recentCommands, item.command)
     setRecentCommands(nextRecents)
     storeSlashRecents(nextRecents)
+    setPromptHistoryIndex(null)
     setPaletteDismissed(true)
     setSelectedCommandIndex(0)
     onInputChange(slashCommandInsertion(item))
@@ -318,6 +340,18 @@ export function ChatComposer({
     }
   }
 
+  const recallPrompt = (index: number | null) => {
+    const value = index === null ? "" : promptHistory[index]
+    if (value === undefined) return
+
+    setPromptHistoryIndex(index)
+    setPaletteDismissed(false)
+    setSelectedCommandIndex(0)
+    moveCaretToEndRef.current = true
+    onInputChange(value)
+    textareaRef.current?.focus()
+  }
+
   const handleKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     const nativeEvent = e.nativeEvent as Event & {
       isComposing?: boolean
@@ -364,8 +398,37 @@ export function ChatComposer({
         return
       }
     }
+
+    const hasModifier = e.shiftKey || e.altKey || e.ctrlKey || e.metaKey
+    const currentHistoryIndex =
+      promptHistoryIndex !== null && promptHistoryIndex < promptHistory.length
+        ? promptHistoryIndex
+        : null
+
+    if (
+      !hasModifier &&
+      (input === "" || currentHistoryIndex !== null) &&
+      e.key === "ArrowUp"
+    ) {
+      if (promptHistory.length === 0) return
+      e.preventDefault()
+      recallPrompt(
+        currentHistoryIndex === null
+          ? 0
+          : Math.min(currentHistoryIndex + 1, promptHistory.length - 1),
+      )
+      return
+    }
+
+    if (!hasModifier && e.key === "ArrowDown" && currentHistoryIndex !== null) {
+      e.preventDefault()
+      recallPrompt(currentHistoryIndex === 0 ? null : currentHistoryIndex - 1)
+      return
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
+      setPromptHistoryIndex(null)
       onSend()
     }
   }
