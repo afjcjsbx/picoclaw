@@ -775,8 +775,6 @@ func (al *AgentLoop) runAgentLoop(
 // formatToolsForLog formats tool definitions for logging
 
 // summarizeSession summarizes the conversation history for a session.
-// findNearestUserMessage finds the nearest user message to the given index.
-// It searches backward first, then forward if no user message is found.
 // retryLLMCall calls the LLM with retry logic.
 // summarizeBatch summarizes a batch of messages.
 // estimateTokens estimates the number of tokens in a message list.

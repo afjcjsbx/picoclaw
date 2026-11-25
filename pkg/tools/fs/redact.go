@@ -92,6 +92,14 @@ const (
 	opaqueMinLength      = 32
 )
 
+// RedactSecrets masks credential-looking values in text that is about to be
+// rendered to the model. It is the exported entry point for callers outside
+// the filesystem tools (for example the context summarizer), which build
+// model-facing text from history rather than from a file read.
+func RedactSecrets(text string) string {
+	return redactSecrets(text)
+}
+
 // redactSecrets masks credential-looking values in content rendered to the
 // model (search results and file reads), so that secrets found in files do not
 // reach the model even when they are not part of the configured sensitive
