@@ -59,13 +59,9 @@ type AgentInstance struct {
 	// means summarization runs on the agent's own model.
 	CompactionCandidates []providers.FallbackCandidate
 
-	// ProtectFirstN, ProtectLastN, MinTailUserMessages and TailTokenBudget
-	// configure the legacy context manager's head/tail protection. They are
-	// resolved from agents.defaults at construction time.
-	ProtectFirstN       int
-	ProtectLastN        int
-	MinTailUserMessages int
-	TailTokenBudget     int
+	// Protection configures the legacy context manager's head/tail policy. It
+	// is resolved from agents.defaults at construction time.
+	Protection ContextProtection
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -298,22 +294,7 @@ func NewAgentInstance(
 		summarizeTokenPercent = 75
 	}
 
-	protectFirstN := defaultProtectFirstN
-	if defaults.ProtectFirstN != nil {
-		protectFirstN = max(0, *defaults.ProtectFirstN)
-	}
-	protectLastN := defaultProtectLastN
-	if defaults.ProtectLastN != nil {
-		protectLastN = max(0, *defaults.ProtectLastN)
-	}
-	minTailUserMessages := defaultMinTailUserMessages
-	if defaults.MinTailUserMessages != nil {
-		minTailUserMessages = max(0, *defaults.MinTailUserMessages)
-	}
-	tailTokenBudget := autoTailTokenBudget(contextWindow, maxTokens)
-	if defaults.TailTokenBudget != nil {
-		tailTokenBudget = max(0, *defaults.TailTokenBudget)
-	}
+	protection := resolveContextProtection(defaults, contextWindow, maxTokens)
 
 	// Resolve fallback candidates
 	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
@@ -427,10 +408,7 @@ func NewAgentInstance(
 		ThinkingLevelConfigured: thinkingLevelConfigured,
 		ContextWindow:           contextWindow,
 		SummarizeTokenPercent:   summarizeTokenPercent,
-		ProtectFirstN:           protectFirstN,
-		ProtectLastN:            protectLastN,
-		MinTailUserMessages:     minTailUserMessages,
-		TailTokenBudget:         tailTokenBudget,
+		Protection:              protection,
 		LoopDetection:           defaults.LoopDetection.Normalized(),
 		Provider:                provider,
 		Sessions:                sessions,

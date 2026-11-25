@@ -5,7 +5,10 @@
 
 package agent
 
-import "github.com/sipeed/picoclaw/pkg/providers"
+import (
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers"
+)
 
 const (
 	// defaultProtectFirstN is the number of leading conversation messages kept
@@ -25,12 +28,13 @@ const (
 	maxAutoTailBudget     = 32_000
 )
 
-// contextProtection is the resolved head/tail policy for one agent.
-type contextProtection struct {
-	protectFirstN       int
-	protectLastN        int
-	minTailUserMessages int
-	tailTokenBudget     int
+// ContextProtection is the resolved legacy context head/tail policy for one
+// agent.
+type ContextProtection struct {
+	ProtectFirstN       int
+	ProtectLastN        int
+	MinTailUserMessages int
+	TailTokenBudget     int
 }
 
 // historyProtection describes where the protected head and tail start in a
@@ -69,22 +73,32 @@ func autoTailTokenBudget(contextWindow, maxTokens int) int {
 	return budget
 }
 
-// resolveContextProtection reads the policy fields resolved into the agent at
-// construction time.
-func resolveContextProtection(agent *AgentInstance) contextProtection {
-	if agent == nil {
-		return contextProtection{
-			protectFirstN:       defaultProtectFirstN,
-			protectLastN:        defaultProtectLastN,
-			minTailUserMessages: defaultMinTailUserMessages,
-		}
+// resolveContextProtection merges agents.defaults with the agent's resolved
+// context window. Nil fields use the documented defaults; explicit zeros are
+// preserved and disable the corresponding protection.
+func resolveContextProtection(
+	defaults *config.AgentDefaults,
+	contextWindow, maxTokens int,
+) ContextProtection {
+	protection := ContextProtection{
+		ProtectFirstN:       defaultProtectFirstN,
+		ProtectLastN:        defaultProtectLastN,
+		MinTailUserMessages: defaultMinTailUserMessages,
+		TailTokenBudget:     autoTailTokenBudget(contextWindow, maxTokens),
 	}
-	return contextProtection{
-		protectFirstN:       max(0, agent.ProtectFirstN),
-		protectLastN:        max(0, agent.ProtectLastN),
-		minTailUserMessages: max(0, agent.MinTailUserMessages),
-		tailTokenBudget:     max(0, agent.TailTokenBudget),
+	if defaults.ProtectFirstN != nil {
+		protection.ProtectFirstN = max(0, *defaults.ProtectFirstN)
 	}
+	if defaults.ProtectLastN != nil {
+		protection.ProtectLastN = max(0, *defaults.ProtectLastN)
+	}
+	if defaults.MinTailUserMessages != nil {
+		protection.MinTailUserMessages = max(0, *defaults.MinTailUserMessages)
+	}
+	if defaults.TailTokenBudget != nil {
+		protection.TailTokenBudget = max(0, *defaults.TailTokenBudget)
+	}
+	return protection
 }
 
 // computeHistoryProtection resolves the protected head and tail for history
@@ -107,15 +121,15 @@ func computeHistoryProtection(
 	if limit > len(history) {
 		limit = len(history)
 	}
-	cfg := resolveContextProtection(agent)
-	headEnd := alignHeadEnd(history, min(cfg.protectFirstN, limit), limit)
+	cfg := agent.Protection
+	headEnd := alignHeadEnd(history, min(cfg.ProtectFirstN, limit), limit)
 
 	// Resolve the tail against the full history. The active turn (history[limit:])
 	// is protected by limit itself, so a tail that starts inside it does not
 	// additionally protect older messages. Capping the cut at limit preserves
 	// that distinction while the token budget can still reach into earlier
 	// turns when the active turn is small.
-	tailStartFull := computeTailStart(history, len(history), headEnd, cfg, agentProvider(agent))
+	tailStartFull := computeTailStart(history, len(history), headEnd, cfg, agent.Provider)
 	tailStart := min(tailStartFull, limit)
 	if limit > 0 {
 		tailStart = findSafeBoundary(history[:limit], tailStart)
@@ -126,7 +140,7 @@ func computeHistoryProtection(
 		tailStart:       tailStart,
 		tailStartFull:   tailStartFull,
 		limit:           limit,
-		tailTokenBudget: cfg.tailTokenBudget,
+		tailTokenBudget: cfg.TailTokenBudget,
 		ok:              tailStart > headEnd && tailStart > 0,
 	}
 }
@@ -193,7 +207,7 @@ func alignHeadEnd(history []providers.Message, end, limit int) int {
 func computeTailStart(
 	history []providers.Message,
 	limit, headEnd int,
-	cfg contextProtection,
+	cfg ContextProtection,
 	provider providers.LLMProvider,
 ) int {
 	if limit <= headEnd {
@@ -201,24 +215,24 @@ func computeTailStart(
 	}
 
 	start := limit
-	if cfg.protectLastN > 0 {
-		start = limit - cfg.protectLastN
+	if cfg.ProtectLastN > 0 {
+		start = limit - cfg.ProtectLastN
 	}
 	if start < headEnd {
 		start = headEnd
 	}
 
 	tokens := estimateRangeTokens(history, start, limit, provider)
-	if cfg.tailTokenBudget > 0 {
-		for start > headEnd && tokens < cfg.tailTokenBudget {
+	if cfg.TailTokenBudget > 0 {
+		for start > headEnd && tokens < cfg.TailTokenBudget {
 			start--
 			tokens += estimateMessageTokensForProvider(provider, history[start])
 		}
 	}
 
-	if cfg.minTailUserMessages > 0 {
+	if cfg.MinTailUserMessages > 0 {
 		users := countUserMessages(history, start, limit)
-		for users < cfg.minTailUserMessages && start > headEnd {
+		for users < cfg.MinTailUserMessages && start > headEnd {
 			start--
 			if history[start].Role == "user" {
 				users++

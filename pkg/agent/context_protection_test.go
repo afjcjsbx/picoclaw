@@ -42,11 +42,10 @@ func TestComputeTailStart_TokenBudgetExtendsBeyondMessageFloor(t *testing.T) {
 		}
 		history[i] = providers.Message{Role: role, Content: strings.Repeat("x", 500)}
 	}
-	cfg := contextProtection{
-		protectFirstN:       1,
-		protectLastN:        2,
-		minTailUserMessages: 0,
-		tailTokenBudget:     1_000,
+	cfg := ContextProtection{
+		ProtectFirstN:   1,
+		ProtectLastN:    2,
+		TailTokenBudget: 1_000,
 	}
 
 	got := computeTailStart(history, len(history), 0, cfg, nil)
@@ -64,9 +63,9 @@ func TestComputeTailStart_MinTailUserMessages(t *testing.T) {
 		}
 		history[i] = providers.Message{Role: role, Content: "x"}
 	}
-	cfg := contextProtection{
-		protectLastN:        1,
-		minTailUserMessages: 2,
+	cfg := ContextProtection{
+		ProtectLastN:        1,
+		MinTailUserMessages: 2,
 	}
 
 	got := computeTailStart(history, len(history), 0, cfg, nil)
@@ -85,9 +84,10 @@ func TestComputeHistoryProtection_ActiveTurnDoesNotOverProtectHistory(t *testing
 		history[i] = providers.Message{Role: role, Content: "x"}
 	}
 	agent := &AgentInstance{
-		ProtectFirstN:       1,
-		ProtectLastN:        4,
-		MinTailUserMessages: 0,
+		Protection: ContextProtection{
+			ProtectFirstN: 1,
+			ProtectLastN:  4,
+		},
 	}
 	got := computeHistoryProtection(history, 6, agent)
 	if !got.ok {
@@ -337,10 +337,11 @@ func TestPruneProtectedHistory_KeepsHeadAndPrunesMiddle(t *testing.T) {
 	workspace := t.TempDir()
 	bulky := strings.Repeat("bulky output ", 100)
 	agent := &AgentInstance{
-		Workspace:       workspace,
-		ProtectFirstN:   3,
-		ProtectLastN:    2,
-		TailTokenBudget: 0,
+		Workspace: workspace,
+		Protection: ContextProtection{
+			ProtectFirstN: 3,
+			ProtectLastN:  2,
+		},
 	}
 	history := []providers.Message{
 		{Role: "user", Content: "opening instruction"},
@@ -384,15 +385,15 @@ func TestNewAgentInstance_ContextProtectionDefaultsAndOverrides(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
-	if agent.ProtectFirstN != defaultProtectFirstN ||
-		agent.ProtectLastN != defaultProtectLastN ||
-		agent.MinTailUserMessages != defaultMinTailUserMessages {
+	if agent.Protection.ProtectFirstN != defaultProtectFirstN ||
+		agent.Protection.ProtectLastN != defaultProtectLastN ||
+		agent.Protection.MinTailUserMessages != defaultMinTailUserMessages {
 		t.Fatalf("defaults = %d/%d/%d, want %d/%d/%d",
-			agent.ProtectFirstN, agent.ProtectLastN, agent.MinTailUserMessages,
+			agent.Protection.ProtectFirstN, agent.Protection.ProtectLastN, agent.Protection.MinTailUserMessages,
 			defaultProtectFirstN, defaultProtectLastN, defaultMinTailUserMessages)
 	}
-	if agent.TailTokenBudget != 9_000 {
-		t.Fatalf("tail budget = %d, want 9000", agent.TailTokenBudget)
+	if agent.Protection.TailTokenBudget != 9_000 {
+		t.Fatalf("tail budget = %d, want 9000", agent.Protection.TailTokenBudget)
 	}
 
 	overrideCfg := testConfig(t)
@@ -407,10 +408,11 @@ func TestNewAgentInstance_ContextProtectionDefaultsAndOverrides(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
-	if agent.ProtectFirstN != 0 || agent.ProtectLastN != 0 ||
-		agent.MinTailUserMessages != 0 || agent.TailTokenBudget != 0 {
+	if agent.Protection.ProtectFirstN != 0 || agent.Protection.ProtectLastN != 0 ||
+		agent.Protection.MinTailUserMessages != 0 || agent.Protection.TailTokenBudget != 0 {
 		t.Fatalf("overrides not applied: %d/%d/%d/%d",
-			agent.ProtectFirstN, agent.ProtectLastN, agent.MinTailUserMessages, agent.TailTokenBudget)
+			agent.Protection.ProtectFirstN, agent.Protection.ProtectLastN,
+			agent.Protection.MinTailUserMessages, agent.Protection.TailTokenBudget)
 	}
 }
 
