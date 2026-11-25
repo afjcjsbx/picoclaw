@@ -1249,6 +1249,10 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 > **`max_parallel_turns`**: Controls concurrent processing of messages from different sessions. `5` is the default; `0` or `1` = sequential; `>1` = parallel. Messages from the same session are always serialized. See [Steering docs](../architecture/steering.md) for details.
 >
 > **`auxiliary`** (`agents.defaults.auxiliary`): sends background LLM work to a dedicated `model_list` entry instead of the agent's own model. Each slot is a `model_name`; leave it empty to keep the agent's model. `compaction` is used when old history is summarized (so a cheap model can do it); `vision` handles turns with images and takes precedence over `image_model`, which keeps working on its own. The entry's own settings apply to the work routed to it: `api_base`, `request_timeout`, `extra_body`, `custom_headers`, `rpm`, `thinking_level` and `max_tokens`. A slot naming a model that is not in `model_list`, or the agent's own primary model, is ignored with a warning and the agent's model is used. Example: `"auxiliary": {"compaction": "gpt-4o-mini", "vision": "gemini-flash"}`.
+>
+> **`llm_retry_on_empty_content`** (`agents.defaults`, default `true`): when the model returns a successful response with no text content and no tool calls, PicoClaw retries the request using the same budget as transient provider errors (see `max_llm_retries`). Responses that include tool calls are never retried on this condition; an empty text body is intentional when the model is requesting tools.
+>
+> **`llm_retry_on_finish_reasons`** (`agents.defaults`, default `["length"]`): list of `finish_reason` values that cause an otherwise-successful response to be retried. The built-in entry `"length"` also covers `"truncated"`, which some provider paths use for the same condition. Set to `[]` to disable finish-reason retries. Both fields share the same retry budget and backoff as transient provider errors.
 
 </details>
 
