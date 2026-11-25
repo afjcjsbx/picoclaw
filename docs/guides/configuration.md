@@ -368,6 +368,15 @@ In the example above, the VIP rule must appear before the broader group rule.
 Because routing is strictly ordered, more specific rules should be placed
 earlier and broader fallback rules later.
 
+The model-routing config also supports two mid-turn escalation guards inside `agents.defaults.routing`:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `escalation_prompt_tokens` | `32768` | Switch to the primary model for the rest of the turn when a light-model response reports more prompt tokens than this. `0` uses the default. |
+| `escalation_tool_iterations` | `3` | Switch to the primary model for the rest of the turn after this many consecutive light-model responses that requested tools. `0` uses the default. |
+
+Escalation happens at most once per turn.
+
 For more complete routing and model-tier examples, see the [Routing Guide](routing-guide.md).
 
 ### Agent Tool Allowlist
