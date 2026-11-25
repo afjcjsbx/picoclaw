@@ -485,6 +485,13 @@ func TestSend_XOAuth2(t *testing.T) {
 	); err == nil {
 		t.Fatal("send succeeded without a token")
 	}
+	c.SetTokenSource(func(context.Context) (string, error) { return "", nil })
+	if _, err := c.Send(
+		context.Background(),
+		bus.OutboundMessage{ChatID: "alice@example.org", Content: "x"},
+	); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("empty token: err = %v", err)
+	}
 	f.none(t, 200*time.Millisecond)
 }
 

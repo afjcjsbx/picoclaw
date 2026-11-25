@@ -107,10 +107,13 @@ func (c *MailChannel) dialIMAP(notify chan<- struct{}) (*imapclient.Client, erro
 }
 
 func (c *MailChannel) loginIMAP(ctx context.Context, cl *imapclient.Client) error {
-	if c.cfg.OAuthToken.String() != "" {
+	if c.oauthConfigured {
 		token, err := c.tokenSource(ctx)
 		if err != nil {
 			return fmt.Errorf("oauth token: %w", err)
+		}
+		if token == "" {
+			return fmt.Errorf("oauth token is empty")
 		}
 		return cl.Authenticate(newXOAuth2(c.cfg.Username, token))
 	}

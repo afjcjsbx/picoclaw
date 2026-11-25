@@ -1,10 +1,14 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,6 +97,194 @@ func TestStoreRoundtrip(t *testing.T) {
 	}
 	if loaded.Provider != cred.Provider {
 		t.Errorf("Provider = %q, want %q", loaded.Provider, cred.Provider)
+	}
+}
+
+func TestStoreCredentialClientFields(t *testing.T) {
+	setTestAuthHome(t)
+	cred := &AuthCredential{
+		AccessToken:  "access",
+		RefreshToken: "refresh",
+		Provider:     providerGmail,
+		AuthMethod:   "oauth",
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+	}
+	if err := SetCredential("gmail:user@gmail.com", cred); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := GetCredential("gmail:user@gmail.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil || loaded.ClientID != cred.ClientID || loaded.ClientSecret != cred.ClientSecret {
+		t.Fatalf("loaded credential = %+v", loaded)
+	}
+}
+
+func TestUpdateCredentialPersistsUnderLock(t *testing.T) {
+	setTestAuthHome(t)
+	original := &AuthCredential{
+		AccessToken:  "old-access",
+		RefreshToken: "refresh",
+		Provider:     providerGmail,
+		AuthMethod:   "oauth",
+	}
+	if err := SetCredential("gmail:user@gmail.com", original); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := UpdateCredential(context.Background(), "gmail:user@gmail.com",
+		func(current *AuthCredential) (*AuthCredential, error) {
+			if current.AccessToken != "old-access" {
+				t.Errorf("current token = %q", current.AccessToken)
+			}
+			current.AccessToken = "new-access"
+			return current, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AccessToken != "new-access" {
+		t.Fatalf("updated token = %q", updated.AccessToken)
+	}
+	stored, err := GetCredential("gmail:user@gmail.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.AccessToken != "new-access" {
+		t.Fatalf("stored token = %q", stored.AccessToken)
+	}
+}
+
+func TestUpdateCredentialAllowsReadsDuringCallback(t *testing.T) {
+	setTestAuthHome(t)
+	if err := SetCredential("gmail:user@gmail.com", &AuthCredential{
+		AccessToken: "token",
+		Provider:    providerGmail,
+		AuthMethod:  "oauth",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseCallback) }) }
+	defer release()
+	updateDone := make(chan error, 1)
+	go func() {
+		_, err := UpdateCredential(context.Background(), "gmail:user@gmail.com",
+			func(current *AuthCredential) (*AuthCredential, error) {
+				if _, err := GetCredential("gmail:user@gmail.com"); err != nil {
+					return nil, err
+				}
+				close(callbackStarted)
+				<-releaseCallback
+				return current, nil
+			})
+		updateDone <- err
+	}()
+	<-callbackStarted
+
+	readDone := make(chan error, 1)
+	go func() {
+		cred, err := GetCredential("gmail:user@gmail.com")
+		if err == nil && (cred == nil || cred.AccessToken != "token") {
+			err = fmt.Errorf("unexpected credential: %+v", cred)
+		}
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("credential read blocked behind token refresh callback")
+	}
+
+	release()
+	if err := <-updateDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateCredentialHonorsCancellationWhileWaiting(t *testing.T) {
+	setTestAuthHome(t)
+	lockHeld := make(chan struct{})
+	releaseLock := make(chan struct{})
+	var releaseLockOnce sync.Once
+	release := func() { releaseLockOnce.Do(func() { close(releaseLock) }) }
+	defer release()
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- withAuthStoreFileLock(context.Background(), func() error {
+			close(lockHeld)
+			<-releaseLock
+			return nil
+		})
+	}()
+	<-lockHeld
+
+	lockContended := make(chan struct{})
+	originalHook := authStoreLockRetryHook
+	var contendOnce sync.Once
+	authStoreLockRetryHook = func() { contendOnce.Do(func() { close(lockContended) }) }
+	t.Cleanup(func() { authStoreLockRetryHook = originalHook })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	updateDone := make(chan error, 1)
+	go func() {
+		_, err := UpdateCredential(ctx, "gmail:user@gmail.com",
+			func(current *AuthCredential) (*AuthCredential, error) { return current, nil })
+		updateDone <- err
+	}()
+	<-lockContended
+	cancel()
+	select {
+	case err := <-updateDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UpdateCredential did not honor cancellation while waiting")
+	}
+
+	release()
+	if err := <-lockDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentSetCredentialPreservesEntries(t *testing.T) {
+	setTestAuthHome(t)
+	const workers = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			provider := fmt.Sprintf("provider-%d", i)
+			errs <- SetCredential(provider, &AuthCredential{
+				AccessToken: provider,
+				Provider:    provider,
+				AuthMethod:  "oauth",
+			})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := LoadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Credentials) != workers {
+		t.Fatalf("stored %d credentials, want %d", len(store.Credentials), workers)
 	}
 }
 

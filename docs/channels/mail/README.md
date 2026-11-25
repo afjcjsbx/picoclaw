@@ -79,7 +79,8 @@ picoclaw gateway
 | `username` | – | IMAP login; also the sender address when it is an address |
 | `password` | – | IMAP password. **Secret: never in `config.json`** |
 | `smtp_username`, `smtp_password` | `username`, `password` | Separate SMTP credentials. `smtp_password` is a **secret** |
-| `oauth_token` | – | OAuth2 access token. When set, XOAUTH2 replaces the passwords. **Secret** |
+| `oauth_token` | – | Static OAuth2 access token. When set, XOAUTH2 replaces the passwords. **Secret** |
+| `oauth_provider` | – | Credential key from `picoclaw auth login --provider gmail`, e.g. `gmail:bot@example.com`. Enables automatic token refresh; mutually exclusive with `oauth_token` |
 | `from_address` | `username` | Sender address, e.g. `Support <support@example.com>` |
 | `default_subject` | `PicoClaw` | Subject for mails that do not answer another mail |
 | `poll_interval_secs` | `60` | Polling period when the server has no IDLE |
@@ -88,7 +89,7 @@ picoclaw gateway
 | `plain_text_only` | `false` | Send `text/plain` only, no HTML part |
 | `max_attachment_bytes` | `10485760` | Cap, in total, for attachments in either direction |
 
-`password`, `smtp_password` and `oauth_token` are secrets: supply them through `.security.yml` (`channel_list.mail.settings.*`) or the `PICOCLAW_CHANNELS_MAIL_PASSWORD`, `..._SMTP_PASSWORD` and `..._OAUTH_TOKEN` environment variables. See the [security configuration guide](../../security/security_configuration).
+`password`, `smtp_password` and `oauth_token` are secrets: supply them through `.security.yml` (`channel_list.mail.settings.*`) or the `PICOCLAW_CHANNELS_MAIL_PASSWORD`, `..._SMTP_PASSWORD` and `..._OAUTH_TOKEN` environment variables. `oauth_provider` is only a credential-store key and is not a secret. See the [security configuration guide](../../security/security_configuration).
 
 ---
 
@@ -147,10 +148,59 @@ Replies are `multipart/alternative` with the agent's Markdown as plain text and 
 
 ## 🔑 OAuth2 (XOAUTH2)
 
-Set `oauth_token` and the channel authenticates with XOAUTH2 on both IMAP and SMTP. The token is static in the config; to rotate it, embed the channel and call `SetTokenSource` with a function that returns a fresh token, which is consulted on every IMAP login and SMTP send.
+### Gmail with automatic token refresh
 
-Gmail no longer accepts the account password: use an **app password** (requires 2-step verification) or OAuth2.
+Gmail no longer accepts the normal account password for IMAP/SMTP. Besides an app password, you can use OAuth2 with automatic refresh:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project and enable **Gmail API**.
+2. Configure the OAuth consent screen and create an OAuth client of type **Desktop app**.
+3. Log in with that client's credentials:
+
+   ```bash
+   export PICOCLAW_GMAIL_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+   export PICOCLAW_GMAIL_CLIENT_SECRET="your-client-secret"
+   picoclaw auth login --provider gmail --no-browser
+   ```
+
+   Open the printed URL, authorize access, and paste the final redirect URL (or authorization code) back into the terminal. `--no-browser` is useful on a headless server; omit it to open the local browser automatically.
+
+   The command stores the access token, refresh token, and OAuth client credentials in `~/.picoclaw/auth.json` with mode `0600`, then prints a key such as `gmail:bot@example.com`.
+
+   Prefer the environment variables over `--client-secret`: values passed in argv can appear in shell history and process listings.
+
+4. Set that key in `config.json`; no password or token belongs in the channel settings:
+
+   ```json
+   {
+     "channel_list": {
+       "mail": {
+         "enabled": true,
+         "type": "mail",
+         "allow_from": ["alice@example.org"],
+         "settings": {
+           "imap_host": "imap.gmail.com",
+           "imap_port": 993,
+           "smtp_host": "smtp.gmail.com",
+           "smtp_port": 587,
+           "username": "bot@example.com",
+           "oauth_provider": "gmail:bot@example.com",
+           "observer_mode": true
+         }
+       }
+     }
+   }
+   ```
+
+The channel reloads the credential before each IMAP login and SMTP send, refreshes the access token five minutes before expiry, and persists any rotated refresh token. Refreshes and auth-store writes are serialized across PicoClaw processes. If the refresh token is revoked or expires, the logs ask you to run `picoclaw auth login --provider gmail` again.
+
+The requested scope is `https://mail.google.com/`, plus `userinfo.email` to identify the account. Google may require OAuth app verification for this restricted scope. If the OAuth client remains in **Testing**, Google expires refresh tokens after seven days.
+
+To revoke access, remove the credential with `picoclaw auth logout --provider gmail:bot@example.com` and revoke the app's access in your Google Account.
+
+### Static token or custom token source
+
+Set `oauth_token` to use a static access token with XOAUTH2 on both IMAP and SMTP. It does not refresh automatically and is mutually exclusive with `oauth_provider`. When embedding the channel, `SetTokenSource` can supply tokens programmatically; it is consulted on every IMAP login and SMTP send.
 
 ## Not included
 
-Gmail push notifications (Pub/Sub), OAuth2 token refresh and acquisition, and the web UI form.
+Gmail push notifications (Pub/Sub) and the web UI form.

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,6 +31,7 @@ type OAuthProviderConfig struct {
 	Scopes       string
 	Originator   string
 	Port         int
+	Provider     string // Credential-store provider label; inferred when empty.
 }
 
 type LoginBrowserOptions struct {
@@ -47,7 +49,12 @@ var (
 	// oauthHTTPClient bounds all OAuth token requests; the default client
 	// has no timeout and can hang device-code polling and token refresh
 	// indefinitely.
-	oauthHTTPClient = &http.Client{Timeout: 30 * time.Second}
+	oauthHTTPClient = &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 )
 
 func OpenAIOAuthConfig() OAuthProviderConfig {
@@ -57,6 +64,7 @@ func OpenAIOAuthConfig() OAuthProviderConfig {
 		Scopes:     "openid profile email offline_access",
 		Originator: "codex_cli_rs",
 		Port:       1455,
+		Provider:   "openai",
 	}
 }
 
@@ -75,6 +83,7 @@ func GoogleAntigravityOAuthConfig() OAuthProviderConfig {
 		ClientSecret: clientSecret,
 		Scopes:       "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs",
 		Port:         51121,
+		Provider:     providerGoogleAntigravity,
 	}
 }
 
@@ -484,12 +493,27 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 }
 
 func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
+	return RefreshAccessTokenContext(context.Background(), cred, cfg)
+}
+
+// RefreshAccessTokenContext refreshes an OAuth credential while honoring the
+// caller's cancellation and deadline. Client credentials can come from cfg or
+// from the stored credential, which lets background channels refresh tokens
+// without keeping the OAuth client secret in their channel configuration.
+func RefreshAccessTokenContext(
+	ctx context.Context,
+	cred *AuthCredential,
+	cfg OAuthProviderConfig,
+) (*AuthCredential, error) {
+	if cred == nil {
+		return nil, fmt.Errorf("no OAuth credential available")
+	}
 	key := strings.Join(
 		[]string{cfg.Issuer, cfg.TokenURL, cfg.ClientID, cred.Provider, cred.RefreshToken},
 		"\x00",
 	)
 	value, err, _ := oauthRefreshGroup.Do(key, func() (any, error) {
-		return refreshAccessToken(cred, cfg)
+		return refreshAccessTokenContext(ctx, cred, cfg)
 	})
 	if err != nil {
 		return nil, err
@@ -502,64 +526,83 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 	return &clone, nil
 }
 
-func refreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
+func refreshAccessTokenContext(
+	ctx context.Context,
+	cred *AuthCredential,
+	cfg OAuthProviderConfig,
+) (*AuthCredential, error) {
 	if cred.RefreshToken == "" {
 		return nil, fmt.Errorf("no refresh token available")
 	}
 
+	clientID := cfg.ClientID
+	if clientID == "" {
+		clientID = cred.ClientID
+	}
+	if clientID == "" {
+		return nil, fmt.Errorf("OAuth client_id is required to refresh the token")
+	}
+	clientSecret := cfg.ClientSecret
+	if clientSecret == "" {
+		clientSecret = cred.ClientSecret
+	}
+
 	data := url.Values{
-		"client_id":     {cfg.ClientID},
+		"client_id":     {clientID},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {cred.RefreshToken},
 	}
-	if cfg.ClientSecret != "" {
-		data.Set("client_secret", cfg.ClientSecret)
+	if clientSecret != "" {
+		data.Set("client_secret", clientSecret)
 	}
 
-	tokenURL := cfg.Issuer + "/oauth/token"
-	if cfg.TokenURL != "" {
-		tokenURL = cfg.TokenURL
+	tokenURL := cfg.TokenURL
+	if tokenURL == "" {
+		tokenURL = cfg.Issuer + "/oauth/token"
 	}
-
-	var resp *http.Response
+	var req *http.Request
 	var err error
 	if strings.Contains(strings.ToLower(cfg.Issuer), "auth.openai.com") {
 		body, marshalErr := json.Marshal(map[string]string{
-			"client_id":     cfg.ClientID,
+			"client_id":     clientID,
 			"grant_type":    "refresh_token",
 			"refresh_token": cred.RefreshToken,
 		})
 		if marshalErr != nil {
 			return nil, fmt.Errorf("encoding token refresh request: %w", marshalErr)
 		}
-		req, requestErr := http.NewRequest(
-			http.MethodPost,
-			tokenURL,
-			strings.NewReader(string(body)),
-		)
-		if requestErr != nil {
-			return nil, fmt.Errorf("creating token refresh request: %w", requestErr)
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(string(body)))
+		if err != nil {
+			return nil, fmt.Errorf("creating token refresh request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
-		resp, err = oauthHTTPClient.Do(req)
 	} else {
-		resp, err = oauthHTTPClient.PostForm(tokenURL, data)
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
+		if err != nil {
+			return nil, fmt.Errorf("creating token refresh request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("reading token refresh response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed: %s", string(body))
+		return nil, oauthResponseError(resp.StatusCode, body)
 	}
 
-	refreshed, err := parseTokenResponse(body, cred.Provider)
+	provider := cred.Provider
+	if provider == "" {
+		provider = cfg.Provider
+	}
+	refreshed, err := parseTokenResponse(body, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -569,13 +612,52 @@ func refreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 	if refreshed.AccountID == "" {
 		refreshed.AccountID = cred.AccountID
 	}
-	if cred.Email != "" && refreshed.Email == "" {
+	if refreshed.Email == "" {
 		refreshed.Email = cred.Email
 	}
-	if cred.ProjectID != "" && refreshed.ProjectID == "" {
+	if refreshed.ProjectID == "" {
 		refreshed.ProjectID = cred.ProjectID
 	}
+	if refreshed.ClientID == "" {
+		refreshed.ClientID = clientID
+	}
+	if refreshed.ClientSecret == "" {
+		refreshed.ClientSecret = clientSecret
+	}
 	return refreshed, nil
+}
+
+// OAuthTokenError is a sanitized error returned by an OAuth token endpoint.
+// Provider response bodies are deliberately excluded because they can echo
+// credentials or other sensitive data.
+type OAuthTokenError struct {
+	StatusCode int
+	Code       string
+}
+
+func (e *OAuthTokenError) Error() string {
+	return fmt.Sprintf("OAuth token request failed (HTTP %d, %s)", e.StatusCode, e.Code)
+}
+
+// IsOAuthTokenError reports whether err contains an OAuth endpoint error with
+// the given code, such as invalid_grant.
+func IsOAuthTokenError(err error, code string) bool {
+	var tokenErr *OAuthTokenError
+	return errors.As(err, &tokenErr) && tokenErr.Code == code
+}
+
+// oauthResponseError extracts the standard OAuth error code without putting
+// the raw response body into logs.
+func oauthResponseError(status int, body []byte) error {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &payload)
+	code := strings.TrimSpace(payload.Error)
+	if code == "" {
+		code = http.StatusText(status)
+	}
+	return &OAuthTokenError{StatusCode: status, Code: code}
 }
 
 func BuildAuthorizeURL(cfg OAuthProviderConfig, pkce PKCECodes, state, redirectURI string) string {
@@ -630,32 +712,49 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 		data.Set("client_secret", cfg.ClientSecret)
 	}
 
-	tokenURL := cfg.Issuer + "/oauth/token"
-	if cfg.TokenURL != "" {
-		tokenURL = cfg.TokenURL
+	// Determine provider name from config, retaining the historical inference
+	// for callers that do not set an explicit label.
+	provider := cfg.Provider
+	if provider == "" {
+		provider = "openai"
+		if cfg.TokenURL != "" && strings.Contains(cfg.TokenURL, "googleapis.com") {
+			provider = providerGoogleAntigravity
+		}
 	}
 
-	// Determine provider name from config
-	provider := "openai"
-	if cfg.TokenURL != "" && strings.Contains(cfg.TokenURL, "googleapis.com") {
-		provider = "google-antigravity"
+	tokenURL := cfg.TokenURL
+	if tokenURL == "" {
+		tokenURL = cfg.Issuer + "/oauth/token"
 	}
-
-	resp, err := oauthHTTPClient.PostForm(tokenURL, data)
+	req, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("creating token exchange request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("reading token exchange response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed: %s", string(body))
+		return nil, oauthResponseError(resp.StatusCode, body)
 	}
 
-	return parseTokenResponse(body, provider)
+	cred, err := parseTokenResponse(body, provider)
+	if err != nil {
+		return nil, err
+	}
+	if provider == providerGmail {
+		cred.ClientID = cfg.ClientID
+		cred.ClientSecret = cfg.ClientSecret
+	}
+	return cred, nil
 }
 
 func parseTokenResponse(body []byte, provider string) (*AuthCredential, error) {

@@ -351,15 +351,18 @@ func (c *MailChannel) smtpSend(ctx context.Context, from, to string, raw []byte)
 	return cl.Quit()
 }
 
-// smtpAuth picks XOAUTH2 when an OAuth token is configured, else PLAIN. It
-// returns nil for an unauthenticated relay. net/smtp refuses to send either
-// credential over an unencrypted non-local connection.
+// smtpAuth picks XOAUTH2 when OAuth is configured, else PLAIN. It returns nil
+// for an unauthenticated relay. net/smtp refuses to send either credential over
+// an unencrypted non-local connection.
 func (c *MailChannel) smtpAuth(ctx context.Context) (smtp.Auth, error) {
 	user := cmp.Or(c.cfg.SMTPUsername, c.cfg.Username)
-	if c.cfg.OAuthToken.String() != "" {
+	if c.oauthConfigured {
 		token, err := c.tokenSource(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("oauth token: %w", err)
+		}
+		if token == "" {
+			return nil, fmt.Errorf("oauth token is empty")
 		}
 		return &smtpXOAuth2{user: user, token: token}, nil
 	}

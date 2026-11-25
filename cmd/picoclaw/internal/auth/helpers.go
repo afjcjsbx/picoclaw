@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	supportedProvidersMsg = "supported providers: openai, anthropic, google-antigravity, antigravity"
+	supportedProvidersMsg = "supported providers: openai, anthropic, google-antigravity, antigravity, gmail"
 	defaultAnthropicModel = "claude-sonnet-4.6"
 )
 
-func authLoginCmd(provider string, useDeviceCode bool, useOauth bool, noBrowser bool) error {
+func authLoginCmd(provider string, useDeviceCode, useOauth, noBrowser bool, clientID, clientSecret string) error {
 	switch provider {
 	case "openai":
 		return authLoginOpenAI(useDeviceCode, noBrowser)
@@ -30,6 +30,8 @@ func authLoginCmd(provider string, useDeviceCode bool, useOauth bool, noBrowser 
 		return authLoginAnthropic(useOauth)
 	case "google-antigravity", "antigravity":
 		return authLoginGoogleAntigravity(noBrowser)
+	case "gmail":
+		return authLoginGmail(clientID, clientSecret, noBrowser)
 	default:
 		return fmt.Errorf("unsupported provider: %s (%s)", provider, supportedProvidersMsg)
 	}
@@ -159,6 +161,53 @@ func authLoginGoogleAntigravity(noBrowser bool) error {
 	fmt.Println("Default model set to: gemini-flash")
 	fmt.Println("Try it: picoclaw agent -m \"Hello world\"")
 
+	return nil
+}
+
+func authLoginGmail(clientID, clientSecret string, noBrowser bool) error {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID = strings.TrimSpace(os.Getenv("PICOCLAW_GMAIL_CLIENT_ID"))
+	}
+	clientSecret = strings.TrimSpace(clientSecret)
+	if clientSecret == "" {
+		clientSecret = strings.TrimSpace(os.Getenv("PICOCLAW_GMAIL_CLIENT_SECRET"))
+	}
+	if clientID == "" || clientSecret == "" {
+		return fmt.Errorf(
+			"Gmail OAuth requires a Desktop client ID and secret; set " +
+				"PICOCLAW_GMAIL_CLIENT_ID/PICOCLAW_GMAIL_CLIENT_SECRET (preferred) " +
+				"or pass --client-id/--client-secret",
+		)
+	}
+
+	cfg := auth.GoogleMailOAuthConfig(clientID, clientSecret)
+	cred, err := auth.LoginBrowserWithOptions(cfg, auth.LoginBrowserOptions{NoBrowser: noBrowser})
+	if err != nil {
+		return fmt.Errorf("Gmail login failed: %w", err)
+	}
+	if cred.RefreshToken == "" {
+		return fmt.Errorf("Gmail login did not return a refresh token; authorize offline access and try again")
+	}
+
+	email, err := fetchGoogleUserEmail(cred.AccessToken)
+	if err != nil {
+		return fmt.Errorf("could not determine the authorized Gmail account: %w", err)
+	}
+	key, err := auth.GmailCredentialKey(email)
+	if err != nil {
+		return err
+	}
+	cred.Provider = "gmail"
+	cred.Email = email
+	if err := auth.SetCredential(key, cred); err != nil {
+		return fmt.Errorf("failed to save Gmail credentials: %w", err)
+	}
+
+	fmt.Println("Gmail login successful!")
+	fmt.Printf("Account: %s\n", email)
+	fmt.Printf("Credential key: %s\n", key)
+	fmt.Println("Set channel_list.mail.settings.oauth_provider to this key.")
 	return nil
 }
 

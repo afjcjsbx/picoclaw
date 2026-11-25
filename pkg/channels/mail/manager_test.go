@@ -131,7 +131,8 @@ func TestSecretsLoadFromSecurityFileAndEnvironment(t *testing.T) {
 				"imap_host": "imap.example.com", "smtp_host": "smtp.example.com",
 				"username": "bot@example.com", "observer_mode": true, "poll_interval_secs": 7,
 				"idle_timeout_secs": 100, "max_attachment_bytes": 2048, "plain_text_only": true,
-				"imap_folder": "Bot", "smtp_username": "relay", "from_address": "Bot <bot@example.com>"
+				"imap_folder": "Bot", "smtp_username": "relay", "from_address": "Bot <bot@example.com>",
+				"oauth_provider": "gmail:bot@example.com"
 			}}}
 	}`, config.CurrentVersion))
 	write(".security.yml", `channel_list:
@@ -175,18 +176,23 @@ func TestSecretsLoadFromSecurityFileAndEnvironment(t *testing.T) {
 	}
 	if s.IMAPHost != "imap.example.com" || s.SMTPHost != "smtp.example.com" || s.Username != "bot@example.com" ||
 		!s.ObserverMode || !s.PlainTextOnly || s.PollIntervalSecs != 7 || s.IdleTimeoutSecs != 100 ||
-		s.MaxAttachmentBytes != 2048 || s.IMAPFolder != "Bot" || s.SMTPUsername != "relay" || s.FromAddress != "Bot <bot@example.com>" {
+		s.MaxAttachmentBytes != 2048 || s.IMAPFolder != "Bot" || s.SMTPUsername != "relay" ||
+		s.FromAddress != "Bot <bot@example.com>" || s.OAuthProvider != "gmail:bot@example.com" {
 		t.Errorf("settings not decoded as written: %+v", s)
 	}
 
 	t.Setenv("PICOCLAW_CHANNELS_MAIL_PASSWORD", "env-secret")
 	t.Setenv("PICOCLAW_CHANNELS_MAIL_IMAP_HOST", "imap.env.example.com")
+	t.Setenv("PICOCLAW_CHANNELS_MAIL_OAUTH_PROVIDER", "gmail:env@example.com")
 	s = load()
 	if s.Password.String() != "env-secret" {
 		t.Errorf("env did not override the password: %q", s.Password.String())
 	}
 	if s.IMAPHost != "imap.env.example.com" {
 		t.Errorf("env did not override imap_host: %q", s.IMAPHost)
+	}
+	if s.OAuthProvider != "gmail:env@example.com" {
+		t.Errorf("env did not override oauth_provider: %q", s.OAuthProvider)
 	}
 }
 
@@ -228,6 +234,7 @@ func TestPasswordIsNeverWrittenToConfigJSON(t *testing.T) {
 	s.Password = *config.NewSecureString("super-secret-password")
 	s.SMTPPassword = *config.NewSecureString("super-secret-smtp")
 	s.OAuthToken = *config.NewSecureString("super-secret-token")
+	s.OAuthProvider = "gmail:bot@example.com"
 
 	b, err := json.Marshal(s)
 	if err != nil {
@@ -237,5 +244,8 @@ func TestPasswordIsNeverWrittenToConfigJSON(t *testing.T) {
 		if strings.Contains(string(b), secret) {
 			t.Errorf("config JSON leaks %q: %s", secret, b)
 		}
+	}
+	if !strings.Contains(string(b), `"oauth_provider":"gmail:bot@example.com"`) {
+		t.Errorf("non-secret OAuth credential key missing from config JSON: %s", b)
 	}
 }

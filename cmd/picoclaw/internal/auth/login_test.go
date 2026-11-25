@@ -8,6 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAuthLoginGmailRequiresClientCredentials(t *testing.T) {
+	t.Setenv("PICOCLAW_GMAIL_CLIENT_ID", "")
+	t.Setenv("PICOCLAW_GMAIL_CLIENT_SECRET", "")
+	err := authLoginCmd("gmail", false, false, true, "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "PICOCLAW_GMAIL_CLIENT_ID")
+}
+
 func TestNewLoginSubCommand(t *testing.T) {
 	cmd := newLoginCommand()
 
@@ -19,6 +27,8 @@ func TestNewLoginSubCommand(t *testing.T) {
 
 	assert.NotNil(t, cmd.Flags().Lookup("device-code"))
 	assert.NotNil(t, cmd.Flags().Lookup("no-browser"))
+	assert.NotNil(t, cmd.Flags().Lookup("client-id"))
+	assert.NotNil(t, cmd.Flags().Lookup("client-secret"))
 
 	providerFlag := cmd.Flags().Lookup("provider")
 	require.NotNil(t, providerFlag)

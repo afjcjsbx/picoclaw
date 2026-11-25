@@ -257,8 +257,10 @@ channel_list:
     settings:
       password: "value"
       smtp_password: "value"   # only if SMTP uses different credentials
-      oauth_token: "value"     # only for XOAUTH2
+      oauth_token: "value"     # only for static XOAUTH2
 ```
+
+For Gmail OAuth with automatic refresh, `picoclaw auth login --provider gmail` stores the access token, refresh token, and OAuth client credentials in `~/.picoclaw/auth.json` (mode `0600`). The mail channel only references the non-secret account key through `channel_list.mail.settings.oauth_provider`; do not copy tokens or client secrets into `config.json`.
 
 ### Web Tools
 
