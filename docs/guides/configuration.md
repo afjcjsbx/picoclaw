@@ -278,6 +278,21 @@ For activation and fallback rules, storage schema, compaction algorithms,
 retrieval semantics, pruning, security properties, and implementation gaps, see
 [Seahorse Memory](../architecture/seahorse-memory.md).
 
+### Session Pruning
+
+`session.prune` configures automatic deletion of old chat sessions. Pruning only runs when the Seahorse context manager is active; with the legacy manager the block is accepted but does nothing. Pruning is opt-in (`enabled: false` by default) because it permanently deletes session data. Sessions are deleted oldest-first by last activity; the single most recently active session is never deleted, whatever the thresholds are.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch. Nothing is deleted until this is `true`. |
+| `max_age_days` | `0` (disabled) | Delete sessions whose last activity is older than this many days. |
+| `max_sessions` | `0` (disabled) | Keep at most this many of the most recently active sessions. |
+| `max_db_size_mb` | `0` (disabled) | When the Seahorse SQLite database exceeds this size in MiB, prune the oldest sessions until it fits and then vacuum. |
+| `check_interval_minutes` | `0` (effective `60`) | How often the background prune pass runs. Zero uses the default of 60 minutes. |
+| `vacuum` | `true` when omitted | Run `VACUUM` after a prune pass that deleted sessions. The database-size guard always vacuums. |
+
+Environment overrides use the prefix `PICOCLAW_SESSION_PRUNE_`. For the full settings table with environment keys, see [Seahorse Memory](../architecture/seahorse-memory.md).
+
 ### Routing
 
 Routing is configured through `agents.dispatch.rules`.
