@@ -21,6 +21,7 @@ PicoClaw registers its tools dynamically at runtime. Each one can be enabled or 
 | Browser automation (MCP) | `mcp_playwright_browser_*` (navigate, snapshot, click, type, screenshot, …) | [Browser automation](browser-automation.md) |
 | Hardware | `i2c`, `spi`, `serial` | [Hardware tools](hardware.md) |
 | Planning | `todo` | [Todo planning tool](todo.md) |
+| Memory | `memory` | [Memory tool](memory.md) |
 
 ## Global settings
 
