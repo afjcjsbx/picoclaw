@@ -23,6 +23,7 @@ Every command accepts the global `--no-color` flag, which disables ANSI colors i
 | [`auth`](#auth) | OAuth login, credentials, and QR channel setup |
 | [`skills`](#skills) | Install and manage skills |
 | [`cron`](#cron) | Manage scheduled tasks |
+| [`plugin`](#plugin) | Manage agent plugins |
 | [`mcp`](#mcp) | Manage MCP servers |
 | [`migrate`](#migrate) | Migrate from OpenClaw |
 
@@ -185,11 +186,20 @@ Manages credentials and channel QR flows. Providers and `model_list` setup are c
 | `--no-browser` | Do not auto-open a browser during OAuth login |
 | `--setup-token` | Use the setup-token flow for Anthropic (from `claude setup-token`) |
 
+`auth weixin` flags:
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--timeout` | `300` | Login timeout in seconds |
+| `--proxy` | *(none)* | HTTP proxy URL (e.g. `http://localhost:7890`) |
+| `--base-url` | `https://ilinkai.weixin.qq.com/` | iLink API base URL |
+
 ```bash
 picoclaw auth login --provider anthropic
 picoclaw auth login --provider openai --device-code
 picoclaw auth wecom
 picoclaw auth weixin --timeout 300
+picoclaw auth weixin --proxy http://localhost:7890
 ```
 
 ## Skills
@@ -214,7 +224,7 @@ picoclaw skills install --registry clawhub github
 
 ## Cron
 
-Manages scheduled tasks that deliver agent-generated messages to a channel. Job behavior, delivery modes, and storage are documented in [Scheduled Tasks and Cron Jobs](cron.md).
+Manages scheduled tasks that deliver agent-generated messages to a channel. Alias: `c`. Job behavior, delivery modes, and storage are documented in [Scheduled Tasks and Cron Jobs](cron.md).
 
 | Subcommand | Purpose |
 | --- | --- |
@@ -239,6 +249,22 @@ picoclaw cron add --name "Morning brief" --message "Summarize my calendar" --cro
 picoclaw cron list
 picoclaw cron disable 1
 ```
+
+## Plugin
+
+Manages agent plugin entries in `config.json`. Full reference: [Plugin CLI](plugins-cli.md).
+
+| Subcommand | Purpose |
+| --- | --- |
+| `plugin list` | List installed plugins |
+| `plugin show <name>` | Show plugin details |
+| `plugin add <name> <path-or-url>` | Add or update a plugin |
+| `plugin remove <name>` | Remove a plugin (alias: `rm`) |
+| `plugin enable <name>` / `plugin disable <name>` | Enable or disable a plugin |
+| `plugin edit` | Open the plugin config in `$EDITOR` |
+| `plugin init` | Scaffold a new plugin package |
+| `plugin validate <path>` | Validate a plugin package |
+| `plugin test <name>` | Test a plugin |
 
 ## MCP
 

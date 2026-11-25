@@ -32,7 +32,10 @@ Discord is a free voice, video, and text chat application designed for communiti
       "group_trigger": {
         "mention_only": false
       },
-      "reasoning_channel_id": ""
+      "reasoning_channel_id": "",
+      "settings": {
+        "proxy": ""
+      }
     }
   }
 }
@@ -46,6 +49,7 @@ Discord is a free voice, video, and text chat application designed for communiti
 | placeholder          | object | No       | Placeholder message config shown while the agent is working                 |
 | group_trigger        | object | No       | Group trigger settings (example: { "mention_only": false })                 |
 | reasoning_channel_id | string | No       | Optional target channel ID for reasoning/thinking output                    |
+| proxy                | string | No       | HTTP/SOCKS5 proxy URL for the Discord connection (e.g. `http://127.0.0.1:7890`). Env: `PICOCLAW_CHANNELS_DISCORD_PROXY` |
 
 ## Visible Execution Feedback
 

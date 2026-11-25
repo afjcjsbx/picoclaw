@@ -114,6 +114,7 @@ channel_list:
 | `client_id` | `settings` | No | auto-generated | Paho client ID sent to the broker. Auto-generated as `picoclaw-mqtt-{agent_id}-{8-char hex}` if not set; stays fixed for the process lifetime so reconnects reuse the same ID |
 | `keep_alive` | `settings` | No | `60` | MQTT keepalive interval in seconds |
 | `qos` | `settings` | No | `0` | QoS level for publish and subscribe: `0`, `1`, or `2` |
+| `tls_insecure_skip_verify` | `settings` | No | `false` | Skip TLS certificate verification. Only enable for brokers with self-signed certificates on trusted networks |
 
 ### Environment Variables
 
@@ -129,6 +130,7 @@ All fields can be set via environment variables:
 | `PICOCLAW_CHANNELS_MQTT_CLIENT_ID` | `client_id` |
 | `PICOCLAW_CHANNELS_MQTT_KEEP_ALIVE` | `keep_alive` |
 | `PICOCLAW_CHANNELS_MQTT_QOS` | `qos` |
+| `PICOCLAW_CHANNELS_MQTT_TLS_INSECURE_SKIP_VERIFY` | `tls_insecure_skip_verify` |
 
 ---
 
@@ -140,7 +142,7 @@ PicoClaw automatically reconnects to the broker if the connection is lost, with 
 
 ## ⚠️ Notes
 
-- **TLS**: SSL/TLS is supported (`ssl://` broker URL). Certificate verification is skipped by default.
+- **TLS**: SSL/TLS is supported (`ssl://` broker URL). Certificate verification is performed by default; set `tls_insecure_skip_verify: true` only for brokers with self-signed certificates on trusted networks.
 - **Streaming**: Streaming responses send multiple messages to the response topic; concatenate them in order.
 - **client_id vs session ID**: The `client_id` in the topic path is set by your client application and identifies the conversation session. It is separate from the broker-level client ID used by PicoClaw's paho connection.
 - **Multiple instances**: If you run multiple PicoClaw instances against the same broker with the same `agent_id`, set distinct `client_id` values to avoid broker-level conflicts.

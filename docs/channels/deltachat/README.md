@@ -85,7 +85,7 @@ enough to update the bot profile.
 | `show_invite_link` | No | When `true`, prints the bot account's own invite link and QR code on startup so peers can add it. Omitted or `false` suppresses the startup printout |
 | `allow_crosspost` | No | Default `false`. When `true`, senders allowed by `allow_from` may use `message` tool targets outside the current chat, or resolve recipients by email/contact/chat name |
 
-Standard channel fields such as `allow_from`, `group_trigger`, and
+Standard channel fields such as `allow_from`, `group_trigger`, `placeholder`, and
 `reasoning_channel_id` also apply.
 
 ## First Run

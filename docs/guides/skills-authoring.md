@@ -54,6 +54,16 @@ description: What it does and when to use it — this is the trigger.
 
 The `description` is the most important line you will write: it is the only text the agent sees **before** deciding to use the skill, so state both what the skill does and when to use it (include trigger words a user would say). Unknown fields such as `license` or `metadata` are tolerated but ignored by the loader.
 
+For plugin-distributed skills, the following additional frontmatter fields are
+recognized and validated (a non-string value rejects the skill):
+
+| Field | Type | Semantics |
+| --- | --- | --- |
+| `allowed-tools` | string | Reserved for downstream consumers. PicoClaw validates it is a string but does not enforce any tool restriction from it at runtime; the host currently ignores its value. |
+| `license` | string | SPDX license identifier or free-form license name. Informational only. |
+| `compatibility` | string | Compatibility hint, 1–500 characters. Informational only. |
+| `metadata` | map of strings | Arbitrary string key/value metadata. Informational only. |
+
 If frontmatter is missing, the loader falls back to the directory name and the first body paragraph; a leading H1 can override the name when it matches the naming rules. Relying on fallbacks is not recommended — always add explicit frontmatter.
 
 ### Body conventions

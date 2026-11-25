@@ -23,7 +23,7 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `image_generate` | `tools.image_generate.enabled` | `false` | Needs an image model under `tools.image_generate.model_name`; see [Image generation](../tools/image-generation.md) |
 | `web_search` | `tools.web.enabled` | `true` | Search providers and settings under `tools.web`; see [Web tools](../tools/web.md) |
 | `web_fetch` | `tools.web_fetch.enabled` | `true` | Fetch settings under `tools.web`; see [Web tools](../tools/web.md) |
-| `exec` | `tools.exec.enabled` | `true` | See [Exec tool](../tools/exec.md) |
+| `exec` | `tools.exec.enabled` | `true` | See [Exec tool](../tools/exec.md); `env_set` (object, JSON-only) and `env_allowlist` (string[], env `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST`) extend the child-process environment — see [Environment sanitization](../tools/exec.md#environment-sanitization) |
 | `cron` | `tools.cron.enabled` | `true` | See [Cron tool](../tools/cron.md) |
 | `todo` | `tools.todo.enabled` | `false` | See [Todo planning tool](../tools/todo.md) |
 | `message` | `tools.message.enabled` | `true` | Media attachments gated by `tools.message.media_enabled` (`false`); see [Messaging tools](../tools/messaging.md) |
@@ -37,6 +37,7 @@ Every built-in tool is enabled or disabled individually through `tools.<key>.ena
 | `i2c`, `spi`, `serial` | `tools.i2c.enabled`, `tools.spi.enabled`, `tools.serial.enabled` | `false` | Platform-specific; see [Hardware tools](../tools/hardware.md) |
 | MCP tools | `tools.mcp.enabled` | `false` | Servers under `tools.mcp.servers`; see [MCP tools](../tools/mcp.md) |
 | MCP discovery | `tools.mcp.discovery.enabled` | `false` | Registers `tool_search_tool_bm25` / `tool_search_tool_regex`; see [Tool discovery](../tools/mcp.md#tool-discovery-lazy-loading) |
+| `memory` | `agents.defaults.memory.memory_enabled` | `true` | Injects MEMORY.md into the system prompt and registers the `memory` tool; see [Memory tool](../tools/memory.md) and [Memory options](#memory) |
 
 Two related settings sit outside the pattern:
 
@@ -109,6 +110,8 @@ Tool results larger than `max_inline_result_chars` (counted in Unicode character
 | `artifact_max_files` | int | `128` | Maximum number of files kept in each artifact directory (`.artifacts/tool`, `.artifacts/mcp`, and exec spill directories) after age-based pruning. Set to `0` or a negative value to disable the count bound. |
 | `artifact_max_age_hours` | int | `24` | Maximum age of an artifact file, in hours, before it is pruned. Set to `0` or a negative value to disable age-based pruning. |
 
+A second artifact directory, `<workspace>/.artifacts/evicted/`, is used by the **context compaction** layer, not by the runtime spillover above. When the context window fills up, old tool outputs that fall outside the protected conversation tail are archived there as `tool_result_*.txt` files (or reused from an existing spill artifact if one already exists), and each evicted result is replaced in the prompt by a compact stub like `[Old tool output archived at /path/to/file; exec "cmd" exit=0 1.2 KB; read_file it, or re-run the tool]`. Oversized tool-call arguments outside the protected region are similarly archived as `tool_args_*.json`. Identical results are deduplicated — a later evicted copy points at the first archive. These files are **not** age-pruned by the `artifact_max_age_hours` / `artifact_max_files` settings; they persist until the workspace is cleared or the files are removed manually. See [Context Compression](../architecture/agent-refactor/context.md) for the full compaction policy.
+
 Truncation is separate from spillover. Some tools bound their own raw output before it reaches this layer: `exec` keeps the first 40% and the last 60% of foreground output beyond `tools.exec.max_output_chars` (default `50000`) around an `[OUTPUT TRUNCATED - N chars omitted out of T total]` notice, line-mode `read_file` clamps `max_lines` requests to `tools.read_file.max_lines` while cutting lines longer than `tools.read_file.max_line_length` with a ` ... [truncated]` marker, and MCP text results keep the first 40% and the last 60% of the sanitized text beyond `tools.mcp.max_inline_text_chars` around an `[MCP RESULT TRUNCATED - N chars omitted out of T total]` notice while persisting the full raw payload to their own `.artifacts/mcp` artifact.
 
 When a tool cut its own output (`exec`, `web_fetch`, or an MCP text result whose own artifact write failed), the spillover saves the **pre-truncation text** rather than the truncated view, and the inline preview shows the real head and tail of the full output — so the omitted middle stays readable from the artifact. Results under `max_inline_result_chars` are normally not spilled. `web_fetch` defaults `maxChars` to that same budget and may only lower it per call; when a smaller value cuts the preview, the full page is persisted **even when it fits the inline budget**, up to a server-side cap of `2,000,000` characters, and a front-loaded warning points the model at the artifact. If the page exceeds that cap, the artifact keeps a head+tail window plus an `[ARTIFACT TRUNCATED - N chars omitted out of T total]` notice, and the warning points to a structured endpoint or a narrower source.
@@ -145,5 +148,24 @@ For example:
 
 Note: Nested map-style config (for example `tools.mcp.servers.<name>.*`) is configured in `config.json` rather than
 environment variables.
+
+## Concurrency
+
+`agents.defaults.max_parallel_tool_calls` (env `PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TOOL_CALLS`, default `4`) controls how many tool calls from a single LLM response may run at the same time. `0` or `1` runs all calls sequentially. See [Parallel tool calls](../architecture/parallel-tool-calls.md) for which tools are parallel-eligible and how conflicts are resolved.
+
+## Memory
+
+The `memory` tool and its companion prompt injections are configured under `agents.defaults.memory` (not under `tools`). Limits are counted in Unicode characters (Go runes). A non-positive value falls back to its default.
+
+| Config | Env | Type | Default | Description |
+|--------|-----|------|---------|-------------|
+| `agents.defaults.memory.memory_enabled` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_ENABLED` | bool | `true` | Inject MEMORY.md into the system prompt and register the `memory` tool. USER.md is injected regardless of this setting |
+| `agents.defaults.memory.memory_char_limit` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_CHAR_LIMIT` | int | `2200` | Character cap for MEMORY.md; the `memory` tool refuses writes that would exceed it |
+| `agents.defaults.memory.user_char_limit` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_USER_CHAR_LIMIT` | int | `1375` | Character cap for USER.md, enforced the same way |
+| `agents.defaults.memory.daily_notes_enabled` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_DAILY_NOTES_ENABLED` | bool | `true` | Inject the most recent daily notes (`memory/YYYYMM/YYYYMMDD.md`) into the system prompt |
+| `agents.defaults.memory.recent_daily_notes_count` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_RECENT_DAILY_NOTES_COUNT` | int | `3` | How many days of daily notes to inject |
+| `agents.defaults.memory.daily_notes_char_limit` | `PICOCLAW_AGENTS_DEFAULTS_MEMORY_DAILY_NOTES_CHAR_LIMIT` | int | `1000` | Character cap per injected daily note; newest lines win when trimming |
+
+See [Memory tool](../tools/memory.md) for the tool's arguments and limit-exceeded behavior.
 
 For MCP tools, `tools.mcp.max_inline_text_chars` controls how much text result is kept inline in model context. The threshold is counted in Unicode characters (Go runes), not bytes. For example, `16384` means up to 16,384 characters inline, which may occupy more than 16 KB for multibyte text such as CJK. Above this threshold, PicoClaw keeps the first 40% and the last 60% of the sanitized MCP text around an `[MCP RESULT TRUNCATED - N chars omitted out of T total]` notice and saves the full raw payload as a local artifact in the agent workspace, with a short note plus a structured `[file:...]` artifact path pointing at it. If the artifact write fails, the bounded view stays inline and the full payload is handed to the spillover above, which can still save it under a different artifact directory.

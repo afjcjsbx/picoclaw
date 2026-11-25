@@ -361,6 +361,13 @@ a stable hash suffix to fit provider limits and avoid ambiguous normalization.
 Use the emitted tool definitions to obtain exact names for a tool allowlist.
 Plugin tools never overwrite built-ins or existing tools.
 
+Plugin MCP servers always run tool calls sequentially. The
+`supports_parallel_tool_calls` field available for native MCP servers (see
+[MCP tools](../tools/mcp.md)) is not accepted in a plugin `mcp.json` or in
+`mcp_overrides`; specifying it there produces a validation error. If a server
+in a plugin must handle parallel calls, expose it as a native
+`tools.mcp.servers` entry instead.
+
 ## Skills and bundled resources
 
 Each immediate child of `skills/` containing a regular `SKILL.md` is a candidate.
@@ -480,7 +487,11 @@ Observe accepts PicoClaw runtime event names such as `agent.turn.end`; the
 `turn_completed` alias runs only for successfully completed turns. The
 `post_compaction` alias runs after successful history summarization or context
 compression, covering both `agent.session.summarize` and
-`agent.context.compress` events.
+`agent.context.compress` events. Additional short aliases include
+`subturn_spawn`, `subturn_end`, `subturn_result_delivered`, `subturn_orphan`,
+`follow_up_queued`, `llm_retry`, `context_compress`, and `session_summarize`.
+See [hook-json-protocol.md](../architecture/hooks/hook-json-protocol.md) for
+the full alias table.
 
 Arguments support the event's available `${user_message}` and
 `${assistant_message}` values, `${tool_name}`, `${tool_arguments}`,

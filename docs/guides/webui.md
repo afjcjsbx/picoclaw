@@ -26,8 +26,8 @@ On Windows and Linux desktop builds, a system tray icon appears while the launch
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-port` | `18800` | Listen port (1–65535) |
-| `-host` | `""` | Bind host; when set, overrides `-public` |
-| `-public` | `false` | Bind all interfaces instead of localhost |
+| `-host` | `""` | Bind host; when set, overrides `-public`. Env var `PICOCLAW_LAUNCHER_HOST` is used when `-host` is not supplied; the flag takes priority over the env var, which takes priority over `launcher-config.json`. |
+| `-public` | `false` | Bind all interfaces instead of localhost; ignored when `-host` or `PICOCLAW_LAUNCHER_HOST` is set |
 | `-no-browser` | `false` | Do not auto-open the browser |
 | `-lang` | auto | UI language (`en` or `zh`) |
 | `-console` | `false` | Console mode: no tray, logs to the terminal |
@@ -54,12 +54,15 @@ Sessions last about 31 days but are invalidated when the launcher restarts, so a
 | Page | What you can do |
 | --- | --- |
 | `/` | Chat with the agent, browse session history, pick the default model |
-| `/models` | Add, edit, delete, and set the default model (API-key, OAuth, and local/CLI models) |
+| `/models` | Add, edit, delete, and set the default model (API-key, OAuth, and local/CLI models); the edit form also sets per-model sampling parameters (temperature, max tokens, context window) |
 | `/credentials` | Manage provider credentials (OpenAI, Anthropic, Google Antigravity) |
 | `/channels` | Configure any supported channel from a shared catalog; QR-based binding for WeChat and WeCom |
 | `/agent/hub`, `/agent/skills`, `/agent/tools` | Browse and import skills; view and toggle agent tools |
 | `/agent/subagents` | Review the agent roster, configure spawn/delegate permissions and subagent model overrides, tune global sub-turn limits, and watch active subagent tasks live |
-| `/config` | Edit agent defaults, self-evolution, exec/cron controls, heartbeat, device monitoring, and launcher networking/autostart |
+| `/agent/cron` | View scheduled jobs with their last-run status and stats; trigger a job immediately, enable/disable, or remove it |
+| `/agent/mcp` | View MCP server connection status and tool lists; add, edit, enable/disable, and remove MCP servers |
+| `/config` | Edit agent defaults, self-evolution, exec/cron controls, heartbeat, device monitoring, launcher networking/autostart, and auxiliary model assignments (compaction, vision) |
+| `/config/raw` | Edit `config.json` as raw JSON in a text area; useful for settings the form UI does not expose |
 | `/logs` | Follow the in-memory Gateway log buffer and clear it |
 
 ### Voice messages
@@ -72,7 +75,7 @@ While the agent is generating a response, the send button becomes a stop button.
 
 ### Token usage
 
-Assistant replies show input, output, and total token counts when the provider reports usage. Hover the usage badge for the full breakdown. Usage is aggregated across all model calls in a turn, including tool-call iterations. When pricing is available, the badge also shows a per-turn cost: a leading `~` marks an estimate derived from public list prices, while a cost reported by the backend is shown as-is. Usage is stored with session history, so the badge remains visible after reloading the page or reopening the conversation.
+Assistant replies show input, output, and total token counts when the provider reports usage. Hover the usage badge for the full breakdown. Usage is aggregated across all model calls in a turn, including tool-call iterations. When pricing is available, the badge also shows a per-turn cost: a leading `~` marks an estimate derived from public list prices, while a cost reported by the backend is shown as-is. The badge also shows output tokens per second, derived from the total LLM call time (`duration_ms`) recorded by the backend for the turn. Usage is stored with session history, so the badge remains visible after reloading the page or reopening the conversation.
 
 The **Gateway** runs as a subprocess managed through the launcher (`picoclaw gateway -E`, with `-d` when debug logging is on). The top bar lets you start, stop, and restart it, and shows its state. Auto-start only happens when a usable default model is configured; otherwise use **Start Gateway** after adding credentials in `/models` or `/credentials`.
 

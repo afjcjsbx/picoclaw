@@ -3,6 +3,8 @@ description: "Unify pkg/agent/ package file naming to resolve the loop_* prefix 
 ---
 # Agent File Rename Plan
 
+> **Status: fully implemented.** All `loop_*` files have been renamed to `agent_*` and `turn_*`, `turn.go` and `turn_exec.go` have been merged into `turn_state.go`, and the pipeline files (`pipeline.go`, `pipeline_setup.go`, `pipeline_llm.go`, `pipeline_execute.go`, `pipeline_finalize.go`) exist. The current `pkg/agent/` directory matches the final file structure listed below. Nothing in this plan is pending.
+
 ## Goal
 
 Unify `pkg/agent/` package file naming to resolve the `loop_*` prefix naming confusion and unclear responsibility boundaries.

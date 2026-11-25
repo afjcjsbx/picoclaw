@@ -132,6 +132,8 @@ The `evolution` block controls PicoClaw's self-evolution runtime. When enabled, 
 | `cold_path_trigger` | `after_turn` | Runs draft generation `after_turn`, on a `scheduled` cadence, or disables automatic cold-path runs when set to `manual`. There is no user-facing manual trigger yet. Applies only in `draft` and `apply` modes. |
 | `cold_path_times` | `[]` | Scheduled run times used when `cold_path_trigger` is `scheduled`, written as `HH:MM` strings. |
 
+> **Deprecated aliases**: `min_case_count` (replaced by `min_task_count`) and `min_success_rate` (replaced by `min_success_ratio`) are still accepted in `config.json` for backward compatibility but are deprecated. If both the new and the old name are set, the new name takes precedence. Use the new names for all new configuration.
+
 Use `observe` first if you want to inspect learning records without generating skill changes. Use `draft` when you want PicoClaw to prepare reviewable improvements. Use `apply` only when you are comfortable letting accepted drafts update workspace skills.
 
 ### Request Context Policy
@@ -245,6 +247,10 @@ Session scope controls how much memory is shared between chats, users, threads, 
 
 For step-by-step recipes and isolation patterns, see the [Session Guide](session-guide.md).
 
+### Session Write Durability
+
+`session.durable_writes` (default `true`, env `PICOCLAW_SESSION_DURABLE_WRITES`) controls whether session writes are fsynced before they are acknowledged. When `true`, each message append and metadata update is fsynced, so the session file survives a power failure without data loss. When `false`, PicoClaw still uses atomic temp-and-rename writes so session files stay consistent after a crash, but the most recent writes may be lost on power failure. Disabling durability trades some crash safety for lower write latency and reduced flash wear on constrained devices.
+
 ### Context Manager (Seahorse)
 
 By default PicoClaw uses the `legacy` context manager, which summarizes history
@@ -273,6 +279,21 @@ manager the pruning configuration is accepted but does nothing.
 For activation and fallback rules, storage schema, compaction algorithms,
 retrieval semantics, pruning, security properties, and implementation gaps, see
 [Seahorse Memory](../architecture/seahorse-memory.md).
+
+### Session Pruning
+
+`session.prune` configures automatic deletion of old chat sessions. Pruning only runs when the Seahorse context manager is active; with the legacy manager the block is accepted but does nothing. Pruning is opt-in (`enabled: false` by default) because it permanently deletes session data. Sessions are deleted oldest-first by last activity; the single most recently active session is never deleted, whatever the thresholds are.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch. Nothing is deleted until this is `true`. |
+| `max_age_days` | `0` (disabled) | Delete sessions whose last activity is older than this many days. |
+| `max_sessions` | `0` (disabled) | Keep at most this many of the most recently active sessions. |
+| `max_db_size_mb` | `0` (disabled) | When the Seahorse SQLite database exceeds this size in MiB, prune the oldest sessions until it fits and then vacuum. |
+| `check_interval_minutes` | `0` (effective `60`) | How often the background prune pass runs. Zero uses the default of 60 minutes. |
+| `vacuum` | `true` when omitted | Run `VACUUM` after a prune pass that deleted sessions. The database-size guard always vacuums. |
+
+Environment overrides use the prefix `PICOCLAW_SESSION_PRUNE_`. For the full settings table with environment keys, see [Seahorse Memory](../architecture/seahorse-memory.md).
 
 ### Routing
 
@@ -346,6 +367,15 @@ Example:
 In the example above, the VIP rule must appear before the broader group rule.
 Because routing is strictly ordered, more specific rules should be placed
 earlier and broader fallback rules later.
+
+The model-routing config also supports two mid-turn escalation guards inside `agents.defaults.routing`:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `escalation_prompt_tokens` | `32768` | Switch to the primary model for the rest of the turn when a light-model response reports more prompt tokens than this. `0` uses the default. |
+| `escalation_tool_iterations` | `3` | Switch to the primary model for the rest of the turn after this many consecutive light-model responses that requested tools. `0` uses the default. |
+
+Escalation happens at most once per turn.
 
 For more complete routing and model-tier examples, see the [Routing Guide](routing-guide.md).
 
@@ -968,6 +998,8 @@ Opt-in example:
 | `channel_list.<name>.settings.streaming.min_growth_chars` | int | Pico default after enabling: `1` | Minimum character growth before sending an intermediate update; final content is always flushed |
 | `model_list[].streaming.enabled` | bool | `false` | Allows this model entry to try provider streaming requests |
 
+> **Per-model sampling parameters**: each `model_list` entry also accepts `max_tokens`, `temperature`, and `context_window`, which override the matching `agents.defaults` values for requests routed to that entry. See [Providers & Model Configuration](providers.md) for the full field reference and override semantics.
+
 Legacy Telegram environment variables remain compatible: `PICOCLAW_CHANNELS_TELEGRAM_STREAMING_ENABLED`, `PICOCLAW_CHANNELS_TELEGRAM_STREAMING_THROTTLE_SECONDS`, and `PICOCLAW_CHANNELS_TELEGRAM_STREAMING_MIN_GROWTH_CHARS`. They only apply to Telegram settings and do not enable or modify Pico `settings.streaming`.
 
 Failure behavior is intentionally conservative: if streaming fails before any visible chunk is sent, PicoClaw retries once through the normal `Chat()` path. If a chunk has already been shown to the user, PicoClaw does not send a second non-streaming answer, because that would duplicate visible output.
@@ -1248,7 +1280,21 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 >
 > **`max_parallel_turns`**: Controls concurrent processing of messages from different sessions. `5` is the default; `0` or `1` = sequential; `>1` = parallel. Messages from the same session are always serialized. See [Steering docs](../architecture/steering.md) for details.
 >
+> **`steering_mode`** (`agents.defaults`, default `"one-at-a-time"`, env `PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE`): controls how many queued steering messages are injected between tool calls. `"one-at-a-time"` injects one steering message per inter-tool check; `"all"` drains the whole steering queue at once. See [Steering](../architecture/steering.md) for the full injection model.
+>
 > **`auxiliary`** (`agents.defaults.auxiliary`): sends background LLM work to a dedicated `model_list` entry instead of the agent's own model. Each slot is a `model_name`; leave it empty to keep the agent's model. `compaction` is used when old history is summarized (so a cheap model can do it); `vision` handles turns with images and takes precedence over `image_model`, which keeps working on its own. The entry's own settings apply to the work routed to it: `api_base`, `request_timeout`, `extra_body`, `custom_headers`, `rpm`, `thinking_level` and `max_tokens`. A slot naming a model that is not in `model_list`, or the agent's own primary model, is ignored with a warning and the agent's model is used. Example: `"auxiliary": {"compaction": "gpt-4o-mini", "vision": "gemini-flash"}`.
+>
+> **`split_on_marker`** (`agents.defaults`, default `false`, env `PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER`): when enabled, PicoClaw injects a system-prompt directive instructing the model to place `<|[SPLIT]|>` between distinct parts of its response. At runtime the assistant reply is split on that marker and delivered as multiple messages. This can improve readability on platforms that render long messages poorly, but it relies on the model following the instruction.
+>
+> **`summarize_message_threshold`** (`agents.defaults`): **Deprecated and ignored.** This field is accepted in config for compatibility but has no effect. Summarization is driven by `summarize_token_percent` instead.
+>
+> **`llm_retry_on_empty_content`** (`agents.defaults`, default `true`): when the model returns a successful response with no text content and no tool calls, PicoClaw retries the request using the same budget as transient provider errors (see `max_llm_retries`). Responses that include tool calls are never retried on this condition; an empty text body is intentional when the model is requesting tools.
+>
+> **`llm_retry_on_finish_reasons`** (`agents.defaults`, default `["length"]`): list of `finish_reason` values that cause an otherwise-successful response to be retried. The built-in entry `"length"` also covers `"truncated"`, which some provider paths use for the same condition. Set to `[]` to disable finish-reason retries. Both fields share the same retry budget and backoff as transient provider errors.
+>
+> **`max_llm_retries`** (`agents.defaults`, default `2`, env `PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES`): number of additional attempts after the first LLM call fails with a transient error (rate limit, 5xx, timeout, network issue) or with a semantic condition covered by `llm_retry_on_empty_content` or `llm_retry_on_finish_reasons`. `0` disables retries.
+>
+> **`llm_retry_backoff_secs`** (`agents.defaults`, default `2`, env `PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS`): base wait in seconds between retry attempts. The actual wait before retry _n_ (0-based) is `(n + 1) × llm_retry_backoff_secs`, so with the default of `2` the waits are 2 s, 4 s, …
 
 </details>
 
@@ -1312,7 +1358,14 @@ Loop detection is an optional guard against consecutive identical tool calls wit
 }
 ```
 
-At `repeat_threshold`, PicoClaw adds a turn-local warning for the model. At `critical_threshold`, it stops the loop with a final response. `window_size` bounds the per-turn hash history and must cover the critical threshold. Calls are compared using the tool name and complete arguments, so legitimate pagination and different paths or IDs remain distinct. `spawn_status` polling is excluded because the same request can return a new task status; it also resets any preceding repeat streak. The feature is disabled by default and complements, rather than replaces, `max_tool_iterations`.
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Enable loop detection. Disabled by default to preserve existing behavior. |
+| `repeat_threshold` | `3` | Number of consecutive identical tool calls that triggers a turn-local warning message to the model. |
+| `critical_threshold` | `6` | Number of consecutive identical tool calls that stops the loop and returns a final response. Must be greater than `repeat_threshold`; if not, the default is used. |
+| `window_size` | `20` | Size of the per-turn call-hash ring buffer. Must be at least as large as `critical_threshold`. |
+
+Calls are compared using the tool name and complete arguments, so legitimate pagination and different paths or IDs remain distinct. `spawn_status` polling is excluded because the same request can return a new task status; it also resets any preceding repeat streak. The feature is disabled by default and complements, rather than replaces, `max_tool_iterations`.
 
 ### Scheduled Tasks / Reminders
 
@@ -1345,3 +1398,4 @@ Command cron jobs can execute shell commands. By default, remote channels cannot
 | [Steering](../architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](../architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
 | [Context Management](../architecture/agent-refactor/context.md) | Context boundary detection, proactive budget check, compression |
+| [Tools Configuration](../reference/tools_configuration.md) | Tool-result artifact settings: `max_inline_result_chars` (default `16384`), `artifact_max_files` (default `128`), `artifact_max_age_hours` (default `24`) |

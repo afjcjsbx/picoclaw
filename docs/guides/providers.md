@@ -58,30 +58,48 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **NEAR AI Cloud**   | `nearai`          | `https://cloud-api.near.ai/v1`                      | OpenAI    | [Get Key](https://near.ai)                                       |
 | **Anthropic**       | `anthropic`       | `https://api.anthropic.com/v1`                      | Anthropic | [Get Key](https://console.anthropic.com)                         |
 | **智谱 AI (GLM)**   | `zhipu`           | `https://open.bigmodel.cn/api/paas/v4`              | OpenAI    | [Get Key](https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys) |
-| **Z.AI Coding Plan** | `openai`         | `https://api.z.ai/api/coding/paas/v4`               | OpenAI    | [Get Key](https://z.ai/manage-apikey/apikey-list)                |
+| **Z.AI Coding Plan** | `zai`            | `https://api.z.ai/api/coding/paas/v4`               | OpenAI    | [Get Key](https://z.ai/manage-apikey/apikey-list)                |
 | **DeepSeek**        | `deepseek`        | `https://api.deepseek.com/v1`                       | OpenAI    | [Get Key](https://platform.deepseek.com)                         |
 | **Google Gemini**   | `gemini`          | `https://generativelanguage.googleapis.com/v1beta`  | Gemini    | [Get Key](https://aistudio.google.com/api-keys)                  |
 | **Groq**            | `groq`            | `https://api.groq.com/openai/v1`                    | OpenAI    | [Get Key](https://console.groq.com)                              |
 | **Moonshot**        | `moonshot`        | `https://api.moonshot.cn/v1`                        | OpenAI    | [Get Key](https://platform.moonshot.cn)                          |
-| **通义千问 (Qwen)** | `qwen`            | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI    | [Get Key](https://dashscope.console.aliyun.com)                  |
+| **通义千问 (Qwen)** | `qwen`            | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI    | [Get Key](https://dashscope.console.aliyun.com) _(China endpoint)_ |
+| **Qwen International** | `qwen-intl`  | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | OpenAI | [Get Key](https://dashscope.console.aliyun.com) |
+| **Qwen US**         | `qwen-us`         | `https://dashscope-us.aliyuncs.com/compatible-mode/v1`   | OpenAI | [Get Key](https://dashscope.console.aliyun.com) |
 | **NVIDIA**          | `nvidia`          | `https://integrate.api.nvidia.com/v1`               | OpenAI    | [Get Key](https://build.nvidia.com)                              |
 | **Ollama**          | `ollama`          | `http://localhost:11434/v1`                         | OpenAI    | Local (no key needed)                                            |
 | **LM Studio**       | `lmstudio`        | `http://localhost:1234/v1`                          | OpenAI    | Optional (local default: no key)                                 |
 | **OpenRouter**      | `openrouter`      | `https://openrouter.ai/api/v1`                      | OpenAI    | [Get Key](https://openrouter.ai/keys)                            |
 | **LiteLLM Proxy**   | `litellm`         | `http://localhost:4000/v1`                          | OpenAI    | Your LiteLLM proxy key                                           |
 | **VLLM**            | `vllm`            | `http://localhost:8000/v1`                          | OpenAI    | Local                                                            |
+| **GPT4Free**        | `gpt4free`        | `http://localhost:1337/v1`                          | OpenAI    | Local (no key needed); alias: `g4f`                              |
 | **Cerebras**        | `cerebras`        | `https://api.cerebras.ai/v1`                        | OpenAI    | [Get Key](https://cerebras.ai)                                   |
 | **VolcEngine (Doubao)** | `volcengine`  | `https://ark.cn-beijing.volces.com/api/v3`          | OpenAI    | [Get Key](https://www.volcengine.com/activity/codingplan?utm_campaign=PicoClaw&utm_content=PicoClaw&utm_medium=devrel&utm_source=OWO&utm_term=PicoClaw) |
 | **神算云**          | `shengsuanyun`    | `https://router.shengsuanyun.com/api/v1`            | OpenAI    | -                                                                |
+| **SiliconFlow**     | `siliconflow`     | `https://api.siliconflow.cn/v1`                     | OpenAI    | [Get Key](https://siliconflow.cn)                                |
 | **BytePlus**        | `byteplus`        | `https://ark.ap-southeast.bytepluses.com/api/v3`    | OpenAI    | [Get Key](https://www.byteplus.com)                              |
 | **Vivgrid**         | `vivgrid`         | `https://api.vivgrid.com/v1`                        | OpenAI    | [Get Key](https://vivgrid.com)                                   |
 | **LongCat**         | `longcat`         | `https://api.longcat.chat/openai`                   | OpenAI    | [Get Key](https://longcat.chat/platform)                         |
 | **ModelScope (魔搭)**| `modelscope`     | `https://api-inference.modelscope.cn/v1`            | OpenAI    | [Get Token](https://modelscope.cn/my/tokens)                     |
 | **Xiaomi MiMo**     | `mimo`            | `https://api.xiaomimimo.com/v1`                     | OpenAI    | [Get Key](https://platform.xiaomimimo.com)                       |
-| **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com)                              |
+| **MiniMax**         | `minimax`         | `https://api.minimaxi.com/v1`                       | OpenAI    | [Get Key](https://platform.minimaxi.com)                         |
+| **Mistral AI**      | `mistral`         | `https://api.mistral.ai/v1`                         | OpenAI    | [Get Key](https://console.mistral.ai)                            |
+| **Avian**           | `avian`           | `https://api.avian.io/v1`                           | OpenAI    | [Get Key](https://avian.io)                                      |
+| **Novita AI**       | `novita`          | `https://api.novita.ai/openai`                      | OpenAI    | [Get Key](https://novita.ai)                                     |
+| **ElevenLabs ASR**  | `elevenlabs`      | `https://api.elevenlabs.io`                         | ASR only  | [Get Key](https://elevenlabs.io) _(voice transcription, not a chat model)_ |
+| **Alibaba Coding Plan** | `alibaba-coding` | `https://coding-intl.dashscope.aliyuncs.com/v1` | OpenAI    | [Get Key](https://alibabacloud.com)                              |
+| **Alibaba Coding Plan (Anthropic)** | `alibaba-coding-anthropic` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | Anthropic Messages | [Get Key](https://alibabacloud.com) |
+| **AWS Bedrock**     | `bedrock`         | _(endpoint from region or env)_                     | Bedrock Converse | AWS SDK credentials (no `api_key` needed) |
+| **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com) or keyless (Managed Identity / Entra ID) |
+| **Claude CLI**      | `claude-cli`      | _(local CLI binary)_                                | CLI       | No API key; uses Claude CLI auth (alias: `claudecli`) |
+| **Codex CLI**       | `codex-cli`       | _(local CLI binary)_                                | CLI       | No API key; uses Codex CLI auth (alias: `codexcli`) |
 | **Antigravity**     | `antigravity`     | Google Cloud                                        | Custom    | OAuth only                                                       |
 | **GitHub Copilot**  | `github-copilot`  | `localhost:4321`                                    | gRPC      | -                                                                |
 | **OpenCode Go**     | `opencode-go`     | `https://opencode.ai/inference/go`                  | Multi     | [Get Key](https://opencode.ai/docs/go/)                          |
+
+> **Qwen regional endpoints:** `qwen` (alias `qwen-portal`) targets the China DashScope endpoint and is the default. Outside China use `qwen-intl` (international) or `qwen-us` (US) to avoid connectivity issues. All three accept the same API key.
+
+> **AWS Bedrock note:** Bedrock support requires the `bedrock` build tag: `go build -tags bedrock`. Without it the provider returns an error at runtime. Credentials come from the AWS SDK default chain (env vars such as `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, `~/.aws/credentials` profiles, or IAM instance/task roles). No `api_key` field is used.
 
 #### Basic Configuration
 
@@ -129,8 +147,11 @@ This design also enables **multi-agent support** with flexible provider selectio
 | `provider` | string | No | Preferred provider identifier. When present, PicoClaw sends `model` unchanged to that provider                                                                                                                                              |
 | `model` | string | Yes | Native model ID when `provider` is set. If `provider` is omitted, the legacy `provider/model` form is still supported                                                                                                                       |
 | `api_keys` | string[] | Yes* | API key(s) for authentication. Multiple keys enable per-request rotation. Not required for local providers (Ollama, LM Studio, VLLM)                                                                                                        |
-| `api_base` | string | No | Override the default API endpoint URL                                                                                                                                                                                                       |
+| `api_base` | string | No | Override the default API endpoint URL. For `bedrock`: a value containing `://` is a full endpoint URL; otherwise treated as a region name (e.g. `us-east-1`). |
 | `proxy` | string | No | HTTP proxy URL for this model entry                                                                                                                                                                                                         |
+| `auth_method` | string | No | Authentication method: `oauth` or `token`. Used by `openai` (Codex OAuth) and `anthropic` (Claude OAuth) to authenticate via the PicoClaw auth store instead of an API key. |
+| `connect_mode` | string | No | Connection mode for `github-copilot`: `grpc` (default) or `stdio`.                                                                                                         |
+| `workspace` | string | No | Working directory for CLI-based providers (`claude-cli`, `codex-cli`). Defaults to `.` (current directory).                                                                |
 | `user_agent` | string | No | Custom `User-Agent` header sent with API requests (supported by OpenAI-compatible, Gemini, Anthropic, and Azure providers)                                                                                                                  |
 | `session_header` | string | No | HTTP header name that carries a stable per-conversation session ID. Supported by OpenAI-compatible, OpenAI Responses, Anthropic Messages, and OpenCode Go providers; other providers log a warning and ignore it. Leave empty to disable. |
 | `request_timeout` | int | No | Request timeout in seconds (default varies by provider)                                                                                                                                                                                     |
@@ -233,6 +254,8 @@ Examples:
 You can configure a dedicated model for audio transcription with `voice.model_name`. This lets you reuse existing multimodal providers that support audio input instead of relying only on Groq.
 
 If `voice.model_name` is not configured, PicoClaw will continue to fall back to Groq transcription when a Groq API key is available.
+
+> **ElevenLabs ASR:** The `elevenlabs` provider (`https://api.elevenlabs.io`) is a dedicated speech-to-text provider. It is not a chat model and cannot be used in `model_list` for general agent inference. Use it only as the `voice.model_name` for audio transcription.
 
 ```json
 {
@@ -338,16 +361,16 @@ Notes that matter:
 ```
 
 **Z.AI Coding Plan (GLM)**
-> Z.AI and 智谱 AI are two brands of the same provider. For the Z.AI Coding Plan use the `openai` model key and the api base as follows, rather than the zhipu config
+> Z.AI and 智谱 AI are two brands of the same provider. Use the canonical `zai` provider:
 ```json
 {
   "model_name": "glm-4.7",
-  "provider": "openai",
+  "provider": "zai",
   "model": "glm-4.7",
-  "api_keys": ["your-z.ai-key"],
-  "api_base": "https://api.z.ai/api/coding/paas/v4"
+  "api_keys": ["your-z.ai-key"]
 }
 ```
+> Legacy form (still works): `"provider": "openai"` with `"api_base": "https://api.z.ai/api/coding/paas/v4"`.
 
 **DeepSeek**
 
@@ -460,6 +483,20 @@ one-click **x-opencode-session** preset.
 `api_base` defaults to `http://localhost:1234/v1`. API key is optional unless your LM Studio server enables authentication.<br/>
 With explicit `provider`, PicoClaw sends `openai/gpt-oss-20b` unchanged to the LM Studio server. The legacy compatibility form `"model": "lmstudio/openai/gpt-oss-20b"` still resolves to the same upstream model ID when `provider` is omitted.
 
+**GPT4Free (local)**
+
+[GPT4Free](https://github.com/xtekky/gpt4free) runs a local OpenAI-compatible server on `http://localhost:1337/v1`. No API key is required:
+
+```json
+{
+  "model_name": "gpt4free-local",
+  "provider": "gpt4free",
+  "model": "gpt-4o"
+}
+```
+
+Alias `g4f` works as well. Set `api_base` if your server listens on a different address.
+
 **Custom Proxy/API**
 
 ```json
@@ -488,21 +525,97 @@ With explicit `provider`, PicoClaw sends `openai/gpt-oss-20b` unchanged to the L
 
 With explicit `provider`, PicoClaw sends `model` unchanged. That means `"provider": "litellm", "model": "lite-gpt4"` sends `lite-gpt4`, while `"provider": "litellm", "model": "openai/gpt-4o"` sends `openai/gpt-4o`. The legacy compatibility forms `litellm/lite-gpt4` and `litellm/openai/gpt-4o` still resolve the same way when `provider` is omitted.
 
+**MiniMax**
+
+PicoClaw automatically injects `"reasoning_split": true` into every request body for the `minimax` provider unless you set it yourself. This field splits the response into reasoning and answer parts as required by the MiniMax API. To override it (e.g. disable it), set the field explicitly in `extra_body`:
+
+```json
+{
+  "model_name": "minimax-m3",
+  "provider": "minimax",
+  "model": "MiniMax-M3",
+  "api_keys": ["your-minimax-key"],
+  "extra_body": { "reasoning_split": false }
+}
+```
+
+**Azure OpenAI (keyless)**
+
+When `api_keys` is omitted, PicoClaw uses Azure's `DefaultAzureCredential` (Managed Identity, Workload Identity, Entra ID CLI login, etc.) — no API key needed:
+
+```json
+{
+  "model_name": "azure-gpt-5",
+  "provider": "azure",
+  "model": "gpt-5-deployment",
+  "api_base": "https://your-resource.openai.azure.com"
+}
+```
+
+**Claude CLI / Codex CLI (local)**
+
+`claude-cli` and `codex-cli` spawn the respective CLI binary in a local workspace. No API key is used; authentication is handled by the CLI itself. Set `workspace` to control the working directory:
+
+```json
+{
+  "model_name": "claude-local",
+  "provider": "claude-cli",
+  "model": "claude-sonnet-4-6",
+  "workspace": "/path/to/your/project"
+}
+```
+
+```json
+{
+  "model_name": "codex-local",
+  "provider": "codex-cli",
+  "model": "codex-mini-latest",
+  "workspace": "/path/to/your/project"
+}
+```
+
+`workspace` defaults to `.` (current directory) when omitted.
+
 **Z.AI Coding Plan**
 
-If the standard Zhipu endpoint (`https://open.bigmodel.cn/api/paas/v4`) returns 429 (code 1113: insufficient balance), try using the Z.AI Coding Plan endpoint instead:
+If the standard Zhipu endpoint (`https://open.bigmodel.cn/api/paas/v4`) returns 429 (code 1113: insufficient balance), try using the canonical `zai` provider instead:
 
 ```json
 {
   "model_name": "glm-4.7",
-  "provider": "openai",
+  "provider": "zai",
   "model": "glm-4.7",
-  "api_keys": ["your-zhipu-api-key"],
-  "api_base": "https://api.z.ai/api/coding/paas/v4"
+  "api_keys": ["your-z.ai-key"]
 }
 ```
 
 **Note:** The Z.AI Coding Plan endpoint and standard Zhipu endpoint use the same API key format but have separate billing. If you encounter 429 errors with the standard Zhipu endpoint, the Z.AI Coding Plan endpoint may have available balance.
+
+**AWS Bedrock**
+
+Bedrock requires the `-tags bedrock` build flag. Credentials are resolved automatically via the AWS SDK default chain (env vars, `~/.aws/credentials`, IAM roles). No `api_key` is used.
+
+The `api_base` field has special semantics for Bedrock:
+- **Region name** (no `://`): PicoClaw passes it to the AWS SDK as the region, which resolves the correct partition endpoint (all AWS partitions: `aws`, `aws-cn`, `aws-us-gov`, etc.).
+- **Full endpoint URL** (contains `://`): PicoClaw uses it directly as the Bedrock Runtime endpoint.
+
+```json
+{
+  "model_name": "bedrock-claude",
+  "provider": "bedrock",
+  "model": "anthropic.claude-sonnet-4-6-v1:0",
+  "api_base": "us-east-1"
+}
+```
+
+```json
+{
+  "model_name": "bedrock-claude-custom-endpoint",
+  "provider": "bedrock",
+  "model": "anthropic.claude-sonnet-4-6-v1:0",
+  "api_base": "https://bedrock-runtime.us-east-1.amazonaws.com"
+}
+```
 
 #### Load Balancing
 
@@ -623,10 +736,18 @@ For detailed migration guide, see [migration/model-list-migration.md](../migrati
 
 PicoClaw routes providers by protocol family:
 
-- OpenAI-compatible protocol: OpenRouter, OpenAI-compatible gateways, Groq, Zhipu, and vLLM-style endpoints.
-- Gemini native protocol: Google Gemini via the native `models/*:generateContent` and `models/*:streamGenerateContent` endpoints.
-- Anthropic protocol: Claude-native API behavior.
-- Codex/OAuth path: OpenAI OAuth/token authentication route.
+- **OpenAI-compatible HTTP** (`openai`, `openrouter`, `groq`, `zhipu`, `deepseek`, `nvidia`, `cerebras`, `volcengine`, `moonshot`, `venice`, `nearai`, `ollama`, `lmstudio`, `vllm`, `gpt4free`, `litellm`, `qwen-portal`/`qwen`, `qwen-intl`, `qwen-us`, `mistral`, `avian`, `novita`, `siliconflow`, `shengsuanyun`, `vivgrid`, `byteplus`, `longcat`, `modelscope`, `mimo`, `zai`, `alibaba-coding` and other OpenAI-compatible endpoints).
+- **OAuth/token auth** (`openai` or `anthropic` with `auth_method: oauth|token`): authenticates via the PicoClaw auth store instead of an API key. Used by both Codex (`openai`, via `createCodexAuthProvider`) and Claude (`anthropic`, via `createClaudeAuthProvider`). Run `picoclaw auth login --provider openai|anthropic` to store credentials.
+- **Azure OpenAI** (`azure`): deployment-based URLs with API key or keyless Managed Identity / Entra ID.
+- **AWS Bedrock** (`bedrock`): Bedrock Runtime Converse API; credentials from the AWS SDK default chain. Requires `-tags bedrock` build flag.
+- **Google Gemini native** (`gemini`): native `models/*:generateContent` and `models/*:streamGenerateContent` endpoints.
+- **MiniMax** (`minimax`): OpenAI-compatible with automatic `reasoning_split` injection.
+- **Anthropic HTTP** (`anthropic`): OpenAI-compatible chat completions endpoint at `api.anthropic.com`; optionally use `auth_method: oauth|token` (see OAuth/token above).
+- **Anthropic Messages native** (`anthropic-messages`, `alibaba-coding-anthropic`): Anthropic's native `/v1/messages` wire format.
+- **OpenCode Go** (`opencode-go`): multi-protocol proxy; selects OpenAI Responses, Anthropic Messages, or Gemini automatically from the model ID prefix.
+- **Antigravity / Google Code Assist** (`antigravity`): OAuth-only managed provider.
+- **CLI providers** (`claude-cli`, `codex-cli`): spawn the respective CLI binary in a workspace directory; no API key or network connection required.
+- **GitHub Copilot** (`github-copilot`): gRPC connection to a local Copilot bridge on `localhost:4321`.
 
 This keeps the runtime lightweight while making new OpenAI-compatible backends mostly a config operation (`api_base` + `api_keys`).
 

@@ -24,7 +24,7 @@ The exec tool is used to execute shell commands.
 authorized by `tools.cron.command_allowed_remotes` instead and are not blocked by
 `allow_remote`.
 
-Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_UNKNOWN_COMMAND_POLICY`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because its value is structured.
+Environment variables use the `PICOCLAW_TOOLS_EXEC_` prefix: `PICOCLAW_TOOLS_EXEC_ENABLED`, `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_RISK_THRESHOLD`, `PICOCLAW_TOOLS_EXEC_UNKNOWN_COMMAND_POLICY`, `PICOCLAW_TOOLS_EXEC_APPROVAL_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_ALLOW_REMOTE`, `PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS`, `PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS`, `PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS`, `PICOCLAW_TOOLS_EXEC_MAX_OUTPUT_CHARS`, `PICOCLAW_TOOLS_EXEC_ENV_ALLOWLIST` (comma-separated). `env_set` is JSON-only because its value is structured.
 
 ### Risk classification
 
@@ -148,9 +148,11 @@ Non-zero exit codes are not automatically tool failures: `grep` returns `1` when
 
 Signal terminations are different from ordinary non-zero exits. `137` usually means SIGKILL, including the OOM killer, and an out-of-memory kill may leave no stderr of its own: check the system log (for example `dmesg -T | tail`) before retrying. `143` means SIGTERM. On Unix, when the direct child is killed by a signal the header reports `exitCode: null` and the human-readable suffix says `killed by signal`; the `kill` action reports `-1` for a session it terminated.
 
-When output is truncated, the header carries `totalBytes`, `omittedBytes` and `artifactPath`, and the same artifact path also appears after the body as a `[file:...]` local artifact path, with the full stream stored up to `5,000,000` bytes. The message as a whole is therefore not one JSON document: only the first line is JSON metadata.
+When output is truncated, the header carries `totalBytes`, `omittedBytes` and `artifactPath`, and the same artifact path also appears after the body as a `[file:...]` local artifact path, with the full stream stored up to `5,000,000` bytes. When the artifact file itself reaches that cap an inline text note `[Full output artifact capped at 5,000,000 bytes]` is appended after the body; this is a plain text note, not a JSON header field. The message as a whole is therefore not one JSON document: only the first line is JSON metadata.
 
-Background session actions return a JSON `ExecResponse` instead. Once the session has finished, `exitCode` is present and includes `0`; while it is still running, the field is omitted.
+Background session actions (`poll`, `wait`, `read`, `kill`) return a JSON `ExecResponse` instead, which includes `artifactCapped: true` when the 5,000,000-byte artifact limit is reached; see below.
+
+Background session actions (`poll`, `wait`, `read`, `kill`) return a JSON `ExecResponse` instead. Once the session has finished, `exitCode` is present and includes `0`; while it is still running, the field is omitted.
 
 | Argument | Type | Required for | Description |
 |----------|------|--------------|-------------|
