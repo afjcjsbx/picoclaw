@@ -91,6 +91,8 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **Alibaba Coding Plan (Anthropic)** | `alibaba-coding-anthropic` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | Anthropic Messages | [Get Key](https://alibabacloud.com) |
 | **AWS Bedrock**     | `bedrock`         | _(endpoint from region or env)_                     | Bedrock Converse | AWS SDK credentials (no `api_key` needed) |
 | **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com) or keyless (Managed Identity / Entra ID) |
+| **Claude CLI**      | `claude-cli`      | _(local CLI binary)_                                | CLI       | No API key; uses Claude CLI auth (alias: `claudecli`) |
+| **Codex CLI**       | `codex-cli`       | _(local CLI binary)_                                | CLI       | No API key; uses Codex CLI auth (alias: `codexcli`) |
 | **Antigravity**     | `antigravity`     | Google Cloud                                        | Custom    | OAuth only                                                       |
 | **GitHub Copilot**  | `github-copilot`  | `localhost:4321`                                    | gRPC      | -                                                                |
 | **OpenCode Go**     | `opencode-go`     | `https://opencode.ai/inference/go`                  | Multi     | [Get Key](https://opencode.ai/docs/go/)                          |
@@ -549,6 +551,30 @@ When `api_keys` is omitted, PicoClaw uses Azure's `DefaultAzureCredential` (Mana
   "api_base": "https://your-resource.openai.azure.com"
 }
 ```
+
+**Claude CLI / Codex CLI (local)**
+
+`claude-cli` and `codex-cli` spawn the respective CLI binary in a local workspace. No API key is used; authentication is handled by the CLI itself. Set `workspace` to control the working directory:
+
+```json
+{
+  "model_name": "claude-local",
+  "provider": "claude-cli",
+  "model": "claude-sonnet-4-6",
+  "workspace": "/path/to/your/project"
+}
+```
+
+```json
+{
+  "model_name": "codex-local",
+  "provider": "codex-cli",
+  "model": "codex-mini-latest",
+  "workspace": "/path/to/your/project"
+}
+```
+
+`workspace` defaults to `.` (current directory) when omitted.
 
 **Z.AI Coding Plan**
 
