@@ -23,6 +23,7 @@ Every command accepts the global `--no-color` flag, which disables ANSI colors i
 | [`auth`](#auth) | OAuth login, credentials, and QR channel setup |
 | [`skills`](#skills) | Install and manage skills |
 | [`cron`](#cron) | Manage scheduled tasks |
+| [`plugin`](#plugin) | Manage agent plugins |
 | [`mcp`](#mcp) | Manage MCP servers |
 | [`migrate`](#migrate) | Migrate from OpenClaw |
 
@@ -239,6 +240,22 @@ picoclaw cron add --name "Morning brief" --message "Summarize my calendar" --cro
 picoclaw cron list
 picoclaw cron disable 1
 ```
+
+## Plugin
+
+Manages agent plugin entries in `config.json`. Full reference: [Plugin CLI](plugins-cli.md).
+
+| Subcommand | Purpose |
+| --- | --- |
+| `plugin list` | List installed plugins |
+| `plugin show <name>` | Show plugin details |
+| `plugin add <name> <path-or-url>` | Add or update a plugin |
+| `plugin remove <name>` | Remove a plugin (alias: `rm`) |
+| `plugin enable <name>` / `plugin disable <name>` | Enable or disable a plugin |
+| `plugin edit` | Open the plugin config in `$EDITOR` |
+| `plugin init` | Scaffold a new plugin package |
+| `plugin validate <path>` | Validate a plugin package |
+| `plugin test <name>` | Test a plugin |
 
 ## MCP
 
