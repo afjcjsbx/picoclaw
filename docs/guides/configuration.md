@@ -132,6 +132,8 @@ The `evolution` block controls PicoClaw's self-evolution runtime. When enabled, 
 | `cold_path_trigger` | `after_turn` | Runs draft generation `after_turn`, on a `scheduled` cadence, or disables automatic cold-path runs when set to `manual`. There is no user-facing manual trigger yet. Applies only in `draft` and `apply` modes. |
 | `cold_path_times` | `[]` | Scheduled run times used when `cold_path_trigger` is `scheduled`, written as `HH:MM` strings. |
 
+> **Deprecated aliases**: `min_case_count` (replaced by `min_task_count`) and `min_success_rate` (replaced by `min_success_ratio`) are still accepted in `config.json` for backward compatibility but are deprecated. If both the new and the old name are set, the new name takes precedence. Use the new names for all new configuration.
+
 Use `observe` first if you want to inspect learning records without generating skill changes. Use `draft` when you want PicoClaw to prepare reviewable improvements. Use `apply` only when you are comfortable letting accepted drafts update workspace skills.
 
 ### Request Context Policy
