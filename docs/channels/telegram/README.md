@@ -86,12 +86,16 @@ Examples:
 explain how to squash the last 3 commits
 ```
 
+When you send a command that accepts sub-commands (for example `/list`), the usage reply includes inline-keyboard buttons for each sub-command that can run without arguments. Tapping a button runs the equivalent slash command without typing it again.
+
+Sending `/use` without arguments opens a **paginated skill picker**. The bot replies with a grid of inline buttons — one per installed skill — plus Previous/Next navigation buttons when there are more than fit on one page. Tapping a skill runs `/use <skill>` and arms that skill for your next message.
+
 Model switching:
 
 - `/list models` shows the configured models as a numbered list.
 - `/switch model <index>` switches to the model at that position (for example `/switch model 3`).
 - `/switch model <name>` still accepts the exact model name, an unambiguous prefix, and the legacy `/switch model to <name>` form.
-- `/switch model` on its own prints the numbered list instead of an error.
+- `/switch model` on its own opens a **paginated model picker** with inline-keyboard buttons. Tapping a model runs `/switch model <index>` and switches immediately.
 
 ## Advanced Formatting
 
