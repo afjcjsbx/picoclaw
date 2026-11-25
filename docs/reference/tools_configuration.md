@@ -147,6 +147,10 @@ For example:
 Note: Nested map-style config (for example `tools.mcp.servers.<name>.*`) is configured in `config.json` rather than
 environment variables.
 
+## Concurrency
+
+`agents.defaults.max_parallel_tool_calls` (env `PICOCLAW_AGENTS_DEFAULTS_MAX_PARALLEL_TOOL_CALLS`, default `4`) controls how many tool calls from a single LLM response may run at the same time. `0` or `1` runs all calls sequentially. See [Parallel tool calls](../architecture/parallel-tool-calls.md) for which tools are parallel-eligible and how conflicts are resolved.
+
 ## Memory
 
 The `memory` tool and its companion prompt injections are configured under `agents.defaults.memory` (not under `tools`). Limits are counted in Unicode characters (Go runes). A non-positive value falls back to its default.
