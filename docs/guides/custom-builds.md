@@ -11,6 +11,20 @@ These tags affect the executable being built. They do not remove packages from
 the source tree or from `go.mod`, and they do not change other binaries such as
 `cmd/membench`.
 
+## The `goolm` and `stdjson` Tags
+
+These two tags appear in every Makefile example. They are pass-through tags for
+dependencies, not for PicoClaw's own packages:
+
+| Tag | Dependency | Effect |
+| --- | --- | --- |
+| `goolm` | `maunium.net/go/mautrix` (Matrix) | Selects the pure-Go olm cryptography implementation instead of the system `libolm` C library. Required for `CGO_ENABLED=0` builds. Without it, Matrix E2EE falls back to `libolm` which needs CGO. |
+| `stdjson` | `github.com/bytedance/sonic` | Disables sonic's SIMD-accelerated JSON parser and falls back to stdlib `encoding/json`. Required on architectures where sonic's native implementation is unavailable (mipsle, s390x, loong64, riscv64). |
+
+Omit `goolm` only if you are building with CGO enabled and have `libolm` installed
+on the target system. Omit `stdjson` only on amd64 or arm64 targets where sonic
+runs. For any other target or a fully static build, keep both.
+
 ## Default Build
 
 The regular Makefile targets use `GO_BUILD_TAGS=goolm,stdjson`. Without
