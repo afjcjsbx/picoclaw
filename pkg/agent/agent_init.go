@@ -127,6 +127,16 @@ func NewAgentLoop(
 			"error": err.Error(),
 		})
 	}
+	hardwareApprovalHook := NamedHook(
+		"hardware-write-approval",
+		&hardwareWriteApprovalHook{agent: al},
+	)
+	hardwareApprovalHook.Priority = 100
+	if err := al.MountHook(hardwareApprovalHook); err != nil {
+		logger.WarnCF("agent", "Failed to mount hardware approval hook", map[string]any{
+			"error": err.Error(),
+		})
+	}
 	al.contextManager = al.resolveContextManager()
 
 	// Register shared tools to all agents (now that al is created)
@@ -186,15 +196,32 @@ func registerSharedTools(
 			}
 		}
 
-		// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
+		// Hardware tools (I2C, SPI, serial) - write access is fail-closed and
+		// local sessions/policies are rebuilt with every agent registry.
+		maxWrites := cfg.Tools.Hardware.GetMaxWritesPerMinute()
+		dryRun := cfg.Tools.Hardware.DryRun
 		if cfg.Tools.IsToolEnabled("i2c") {
-			agent.Tools.Register(hardwaretools.NewI2CTool())
+			agent.Tools.Register(hardwaretools.NewI2CTool(hardwaretools.I2COptions{
+				Policy: hardwaretools.NewI2CWritePolicy(
+					cfg.Tools.I2C.AllowWrite, cfg.Tools.I2C.Allow, dryRun, maxWrites,
+				),
+			}))
 		}
 		if cfg.Tools.IsToolEnabled("spi") {
-			agent.Tools.Register(hardwaretools.NewSPITool())
+			agent.Tools.Register(hardwaretools.NewSPITool(hardwaretools.SPIOptions{
+				Policy: hardwaretools.NewSPIWritePolicy(
+					cfg.Tools.SPI.AllowWrite, cfg.Tools.SPI.Allow, dryRun, maxWrites,
+				),
+			}))
 		}
 		if cfg.Tools.IsToolEnabled("serial") {
-			agent.Tools.Register(hardwaretools.NewSerialTool())
+			agent.Tools.Register(hardwaretools.NewSerialTool(hardwaretools.SerialOptions{
+				Policy: hardwaretools.NewSerialWritePolicy(
+					cfg.Tools.Serial.AllowWrite, cfg.Tools.Serial.Allow, dryRun, maxWrites,
+				),
+				SessionTTL:  time.Duration(cfg.Tools.Hardware.GetSerialSessionTTLSeconds()) * time.Second,
+				MaxSessions: cfg.Tools.Hardware.GetSerialMaxSessions(),
+			}))
 		}
 
 		// Message tool

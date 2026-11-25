@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -16,23 +17,7 @@ const (
 	spiIocWrMode        = 0x40016B01 // _IOW('k', 1, __u8)
 	spiIocWrBitsPerWord = 0x40016B03 // _IOW('k', 3, __u8)
 	spiIocWrMaxSpeedHz  = 0x40046B04 // _IOW('k', 4, __u32)
-	spiIocMessage1      = 0x40206B00 // _IOW('k', 0, struct spi_ioc_transfer) — 32 bytes
 )
-
-// spiTransfer matches Linux kernel struct spi_ioc_transfer (32 bytes on all architectures).
-type spiTransfer struct {
-	txBuf       uint64
-	rxBuf       uint64
-	length      uint32
-	speedHz     uint32
-	delayUsecs  uint16
-	bitsPerWord uint8
-	csChange    uint8
-	txNbits     uint8
-	rxNbits     uint8
-	wordDelay   uint8
-	pad         uint8
-}
 
 // configureSPI opens an SPI device and sets mode, bits per word, and speed
 func configureSPI(devPath string, mode uint8, bits uint8, speed uint32) (int, *ToolResult) {
@@ -79,25 +64,57 @@ func (t *SPITool) transfer(args map[string]any) *ToolResult {
 		return ErrorResult(errMsg)
 	}
 
-	dataRaw, ok := args["data"].([]any)
-	if !ok || len(dataRaw) == 0 {
-		return ErrorResult("data is required for transfer (array of byte values 0-255)")
+	segments, hasSegments, err := parseSPISegments(args)
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
-	if len(dataRaw) > 4096 {
-		return ErrorResult("data too long: maximum 4096 bytes per SPI transfer")
+	if !hasSegments {
+		segment, ok, parseErr := parseSPISingleSegment(args)
+		if parseErr != nil {
+			return ErrorResult(parseErr.Error())
+		}
+		if !ok {
+			return ErrorResult("data is required for transfer (array of byte values 0-255), or provide segments")
+		}
+		segments = []spiSegment{segment}
 	}
 
-	txBuf := make([]byte, len(dataRaw))
-	for i, v := range dataRaw {
-		f, ok := v.(float64)
-		if !ok {
-			return ErrorResult(fmt.Sprintf("data[%d] is not a valid byte value", i))
+	buffers, err := buildSPITransfers(segments, speed)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	policy := t.writePolicy()
+	if policy.DryRun {
+		if result := policy.checkTarget(dev); result != nil {
+			return result
 		}
-		b := int(f)
-		if b < 0 || b > 255 {
-			return ErrorResult(fmt.Sprintf("data[%d] = %d is out of byte range (0-255)", i, b))
+		drySegments := make([]map[string]any, len(segments))
+		for i, segment := range segments {
+			hexBytes := make([]string, len(segment.Data))
+			for j, b := range segment.Data {
+				hexBytes[j] = fmt.Sprintf("0x%02x", b)
+			}
+			drySegments[i] = map[string]any{
+				"data_hex":    hexBytes,
+				"read_length": segment.ReadLength,
+				"delay_usecs": segment.DelayUsecs,
+				"cs_change":   segment.CSChange,
+			}
 		}
-		txBuf[i] = byte(b)
+		result, _ := json.MarshalIndent(map[string]any{
+			"dry_run":  true,
+			"action":   "transfer",
+			"device":   fmt.Sprintf("/dev/spidev%s", dev),
+			"speed":    speed,
+			"mode":     mode,
+			"bits":     bits,
+			"segments": drySegments,
+		}, "", "  ")
+		return SilentResult(string(result))
+	}
+	if result := policy.checkWrite(dev, time.Now()); result != nil {
+		return result
 	}
 
 	devPath := fmt.Sprintf("/dev/spidev%s", dev)
@@ -107,36 +124,49 @@ func (t *SPITool) transfer(args map[string]any) *ToolResult {
 	}
 	defer syscall.Close(fd)
 
-	rxBuf := make([]byte, len(txBuf))
-
-	xfer := spiTransfer{
-		txBuf:       uint64(uintptr(unsafe.Pointer(&txBuf[0]))),
-		rxBuf:       uint64(uintptr(unsafe.Pointer(&rxBuf[0]))),
-		length:      uint32(len(txBuf)),
-		speedHz:     speed,
-		bitsPerWord: bits,
-	}
-
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), spiIocMessage1, uintptr(unsafe.Pointer(&xfer)))
-	runtime.KeepAlive(txBuf)
-	runtime.KeepAlive(rxBuf)
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_IOCTL,
+		uintptr(fd),
+		spiIocMessage(len(buffers.transfers)),
+		uintptr(unsafe.Pointer(&buffers.transfers[0])),
+	)
+	runtime.KeepAlive(buffers.keepAlive)
 	if errno != 0 {
 		return ErrorResult(fmt.Sprintf("SPI transfer failed: %v", errno))
 	}
 
-	// Format received bytes
-	hexBytes := make([]string, len(rxBuf))
-	intBytes := make([]int, len(rxBuf))
-	for i, b := range rxBuf {
-		hexBytes[i] = fmt.Sprintf("0x%02x", b)
-		intBytes[i] = int(b)
+	type segmentResult struct {
+		Sent     int      `json:"sent"`
+		Received int      `json:"received"`
+		Bytes    []int    `json:"bytes,omitempty"`
+		Hex      []string `json:"hex,omitempty"`
+	}
+	results := make([]segmentResult, len(segments))
+	totalSent := 0
+	totalReceived := 0
+	for i, segment := range segments {
+		rx := buffers.rxBuffers[i]
+		intBytes := make([]int, len(rx))
+		hexBytes := make([]string, len(rx))
+		for j, b := range rx {
+			intBytes[j] = int(b)
+			hexBytes[j] = fmt.Sprintf("0x%02x", b)
+		}
+		results[i] = segmentResult{
+			Sent:     len(segment.Data),
+			Received: len(rx),
+			Bytes:    intBytes,
+			Hex:      hexBytes,
+		}
+		totalSent += len(segment.Data)
+		totalReceived += len(rx)
 	}
 
 	result, _ := json.MarshalIndent(map[string]any{
 		"device":   devPath,
-		"sent":     len(txBuf),
-		"received": intBytes,
-		"hex":      hexBytes,
+		"segments": results,
+		"sent":     totalSent,
+		"received": totalReceived,
 	}, "", "  ")
 	return SilentResult(string(result))
 }
@@ -148,12 +178,12 @@ func (t *SPITool) readDevice(args map[string]any) *ToolResult {
 		return ErrorResult(errMsg)
 	}
 
-	length := 0
-	if l, ok := args["length"].(float64); ok {
-		length = int(l)
+	length, err := parseSPIReadCount(args)
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
-	if length < 1 || length > 4096 {
-		return ErrorResult("length is required for read (1-4096)")
+	if result := t.writePolicy().checkTarget(dev); result != nil {
+		return result
 	}
 
 	devPath := fmt.Sprintf("/dev/spidev%s", dev)

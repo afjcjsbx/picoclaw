@@ -7,13 +7,46 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sync"
 )
 
-// I2CTool provides I2C bus interaction for reading sensors and controlling peripherals.
-type I2CTool struct{}
+// i2cBusLocks serializes compound transactions on the same bus. Parallel tool
+// calls can otherwise interleave a register write and its read on /dev/i2c-N,
+// which corrupts the device conversation even though the kernel serializes
+// individual transfers.
+var i2cBusLocks sync.Map
 
-func NewI2CTool() *I2CTool {
-	return &I2CTool{}
+func lockI2CBus(bus string) func() {
+	value, _ := i2cBusLocks.LoadOrStore(bus, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// I2CTool provides I2C bus interaction for reading sensors and controlling peripherals.
+type I2CTool struct {
+	policy *WritePolicy
+}
+
+type I2COptions struct {
+	Policy *WritePolicy
+}
+
+var readOnlyI2CPolicy = NewI2CWritePolicy(false, nil, false, 0)
+
+func NewI2CTool(opts ...I2COptions) *I2CTool {
+	tool := &I2CTool{policy: readOnlyI2CPolicy}
+	if len(opts) > 0 && opts[0].Policy != nil {
+		tool.policy = opts[0].Policy
+	}
+	return tool
+}
+
+func (t *I2CTool) writePolicy() *WritePolicy {
+	if t == nil || t.policy == nil {
+		return readOnlyI2CPolicy
+	}
+	return t.policy
 }
 
 func (t *I2CTool) Name() string {
@@ -21,7 +54,7 @@ func (t *I2CTool) Name() string {
 }
 
 func (t *I2CTool) Description() string {
-	return "Interact with I2C bus devices for reading sensors and controlling peripherals. Actions: detect (list buses), scan (find devices on a bus), read (read bytes from device), write (send bytes to device). Linux only."
+	return "Interact with I2C bus devices for reading sensors and controlling peripherals. Actions: detect (list buses), scan (find devices on a bus), read (read bytes from device), write (send bytes to device). Reads can send a register or a raw command first, using a repeated START (combined transaction) or a delay. Linux only."
 }
 
 func (t *I2CTool) Parameters() map[string]any {
@@ -39,11 +72,16 @@ func (t *I2CTool) Parameters() map[string]any {
 			},
 			"address": map[string]any{
 				"type":        "integer",
-				"description": "7-bit I2C device address (0x03-0x77). Required for read/write.",
+				"description": "7-bit I2C device address (0x03-0x77), for example 56 for 0x38. Required for read/write.",
 			},
 			"register": map[string]any{
 				"type":        "integer",
-				"description": "Register address to read from or write to. If set, sends register byte before read/write.",
+				"description": "Register address (0-255), for example 118 for 0x76. If set, sends the register byte before read/write.",
+			},
+			"command": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "integer"},
+				"description": "Raw command bytes to send before a read (0-255 each). Use this for devices without register addressing, such as the AHT20's [172, 51, 0]. Conflicts with register.",
 			},
 			"data": map[string]any{
 				"type":        "array",
@@ -53,6 +91,18 @@ func (t *I2CTool) Parameters() map[string]any {
 			"length": map[string]any{
 				"type":        "integer",
 				"description": "Number of bytes to read (1-256). Default: 1. Used with read action.",
+			},
+			"count": map[string]any{
+				"type":        "integer",
+				"description": "Deprecated alias for length; use length.",
+			},
+			"delay_ms": map[string]any{
+				"type":        "integer",
+				"description": "Wait this many milliseconds between the command/register write and the read, or after a write. Range: 0-60000. Use 80 for an AHT20 measurement.",
+			},
+			"repeated_start": map[string]any{
+				"type":        "boolean",
+				"description": "For read: keep the command/register and the read in one I2C transaction using a repeated START. Ignored when delay_ms is greater than 0.",
 			},
 			"confirm": map[string]any{
 				"type":        "boolean",
@@ -77,11 +127,11 @@ func (t *I2CTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	case "detect":
 		return t.detect()
 	case "scan":
-		return t.scan(args)
+		return t.scan(ctx, args)
 	case "read":
-		return t.readDevice(args)
+		return t.readDevice(ctx, args)
 	case "write":
-		return t.writeDevice(args)
+		return t.writeDevice(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: detect, scan, read, write)", action))
 	}

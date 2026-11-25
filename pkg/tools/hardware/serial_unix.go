@@ -3,6 +3,7 @@
 package hardwaretools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -61,16 +62,27 @@ func serialListPorts() ([]serialPortInfo, error) {
 	return ports, nil
 }
 
-func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
+type serialHandle = int
+
+func serialOpenHandle(cfg serialConfig, timeout time.Duration) (serialHandle, error) {
+	return unixSerialOpenPort(cfg)
+}
+
+func serialCloseHandle(handle serialHandle) error {
+	return unixSerialClosePort(handle)
+}
+
+func serialSetHandleTimeout(handle serialHandle, timeout time.Duration) error {
+	return nil
+}
+
+func serialReadHandle(ctx context.Context, handle serialHandle, length int, timeout time.Duration) ([]byte, error) {
 	if err := serialContextErr(ctx); err != nil {
 		return nil, err
 	}
-
-	fd, err := unixSerialOpenPort(cfg)
-	if err != nil {
+	if err := serialSetHandleTimeout(handle, timeout); err != nil {
 		return nil, err
 	}
-	defer unixSerialClosePort(fd)
 
 	buf := make([]byte, length)
 	total := 0
@@ -86,7 +98,7 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 			break
 		}
 
-		n, err := unixSerialPollRead(fd, buf[total:], minSerialPollTimeout(remaining))
+		n, err := unixSerialPollRead(handle, buf[total:], minSerialPollTimeout(remaining))
 		if err != nil {
 			return nil, err
 		}
@@ -99,16 +111,88 @@ func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.
 	return buf[:total], nil
 }
 
-func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
+// serialReadUntilHandle reads one byte at a time so it never consumes data
+// past the delimiter. A strace-level inefficiency is preferable to losing the
+// next NMEA/AT line.
+func serialReadUntilHandle(
+	ctx context.Context,
+	handle serialHandle,
+	delimiter []byte,
+	maxLength int,
+	timeout time.Duration,
+) ([]byte, error) {
+	return serialReadHandleWithStop(ctx, handle, maxLength, timeout, delimiter, false)
+}
+
+func serialReadAvailableHandle(
+	ctx context.Context,
+	handle serialHandle,
+	maxLength int,
+	timeout time.Duration,
+) ([]byte, error) {
+	return serialReadHandleWithStop(ctx, handle, maxLength, timeout, nil, true)
+}
+
+func serialReadHandleWithStop(
+	ctx context.Context,
+	handle serialHandle,
+	maxLength int,
+	timeout time.Duration,
+	delimiter []byte,
+	idleStop bool,
+) ([]byte, error) {
+	if err := serialContextErr(ctx); err != nil {
+		return nil, err
+	}
+	if err := serialSetHandleTimeout(handle, timeout); err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, 0, min(maxLength, 256))
+	chunk := make([]byte, 256)
+	if len(delimiter) > 0 {
+		chunk = chunk[:1]
+	}
+	deadline := unixSerialNow().Add(timeout)
+
+	for len(buf) < maxLength {
+		if err := serialContextErr(ctx); err != nil {
+			return nil, err
+		}
+		remaining := deadline.Sub(unixSerialNow())
+		if remaining <= 0 {
+			break
+		}
+		pollTimeout := minSerialPollTimeout(remaining)
+		if idleStop && len(buf) > 0 {
+			pollTimeout = min(remaining, 50*time.Millisecond)
+		}
+		n, err := unixSerialPollRead(handle, chunk, pollTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			if idleStop && len(buf) > 0 {
+				break
+			}
+			continue
+		}
+		take := min(n, maxLength-len(buf))
+		buf = append(buf, chunk[:take]...)
+		if len(delimiter) > 0 && bytes.HasSuffix(buf, delimiter) {
+			return buf, nil
+		}
+	}
+	return buf, nil
+}
+
+func serialWriteHandle(ctx context.Context, handle serialHandle, data []byte, timeout time.Duration) (int, error) {
 	if err := serialContextErr(ctx); err != nil {
 		return 0, err
 	}
-
-	fd, err := unixSerialOpenPort(cfg)
-	if err != nil {
+	if err := serialSetHandleTimeout(handle, timeout); err != nil {
 		return 0, err
 	}
-	defer unixSerialClosePort(fd)
 
 	total := 0
 	deadline := unixSerialNow().Add(timeout)
@@ -122,7 +206,7 @@ func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout tim
 			return total, fmt.Errorf("timeout while writing serial data")
 		}
 
-		n, err := unixSerialPollWrite(fd, data[total:], minSerialPollTimeout(remaining))
+		n, err := unixSerialPollWrite(handle, data[total:], minSerialPollTimeout(remaining))
 		if err != nil {
 			return total, err
 		}
@@ -167,6 +251,13 @@ func configureUnixSerialPort(fd int, cfg serialConfig) error {
 	tio.Cc[unix.VMIN] = 0
 	tio.Cc[unix.VTIME] = 0
 
+	switch cfg.FlowControl {
+	case "rtscts":
+		tio.Cflag |= serialCRTSCTS
+	case "xonxoff":
+		tio.Iflag |= unix.IXON | unix.IXOFF
+	}
+
 	switch cfg.DataBits {
 	case 5:
 		tio.Cflag |= unix.CS5
@@ -189,15 +280,16 @@ func configureUnixSerialPort(fd int, cfg serialConfig) error {
 		tio.Cflag |= unix.CSTOPB
 	}
 
-	speed, err := serialBaudToUnix(cfg.Baud)
-	if err != nil {
+	if err := serialSetSpeed(tio, cfg.Baud); err != nil {
 		return err
 	}
-	if err := serialSetSpeed(tio, speed); err != nil {
+	if err := serialSetTermios(fd, tio); err != nil {
 		return err
 	}
-
-	return serialSetTermios(fd, tio)
+	if err := serialApplyBaud(fd, cfg.Baud); err != nil {
+		return err
+	}
+	return serialSetRS485(fd, cfg)
 }
 
 func serialBaudToUnix(baud int) (uint32, error) {

@@ -584,8 +584,18 @@
     "find_skills": {
       "enabled": true
     },
+    "hardware": {
+      "require_approval": true,
+      "approval_timeout_seconds": 300,
+      "max_writes_per_minute": 30,
+      "dry_run": false,
+      "serial_session_ttl_seconds": 60,
+      "serial_max_sessions": 2
+    },
     "i2c": {
-      "enabled": false
+      "enabled": false,
+      "allow_write": false,
+      "allow": []
     },
     "install_skill": {
       "enabled": true
@@ -607,7 +617,9 @@
       "mode": "auto"
     },
     "serial": {
-      "enabled": false
+      "enabled": false,
+      "allow_write": false,
+      "allow": []
     },
     "send_tts": {
       "enabled": false
@@ -619,7 +631,9 @@
       "enabled": true
     },
     "spi": {
-      "enabled": false
+      "enabled": false,
+      "allow_write": false,
+      "allow": []
     },
     "subagent": {
       "enabled": true

@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	hardwaretools "github.com/sipeed/picoclaw/pkg/tools/hardware"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 	"github.com/sipeed/picoclaw/pkg/usage"
 )
@@ -567,6 +568,11 @@ func (al *AgentLoop) buildCommandsRuntime(
 			if tool, ok := agent.Tools.Get("exec"); ok {
 				if execTool, ok := tool.(*tools.ExecTool); ok {
 					execTool.ClearSession(agent.ID, opts.SessionKey)
+				}
+			}
+			if tool, ok := agent.Tools.Get("serial"); ok {
+				if serialTool, ok := tool.(*hardwaretools.SerialTool); ok {
+					serialTool.ClearSession(agent.ID, opts.SessionKey)
 				}
 			}
 			agent.ContextBuilder.ForgetMemorySnapshot(opts.SessionKey)

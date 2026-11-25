@@ -41,13 +41,16 @@ description: "当前项目已有的硬件相关能力主要分为两条线：因
 
 ## Serial Tool 设计
 
-`serial` 采用无状态调用模型，每次请求都自行打开和关闭端口，避免在 agent 回合之间维护串口会话状态。
+`serial` 默认采用无状态调用模型，每次 `read`/`write` 自行打开和关闭端口；需要跨调用保持端口时，使用显式的 `open`/`close` 持久会话。会话按 agent + conversation 隔离，空闲 `60s`（可配置）后自动关闭，`/clear` 和 agent 退出时也会关闭。
 
 支持动作：
 
 - `list`：枚举主机串口
-- `read`：从串口读取指定长度字节
+- `open`：打开持久会话
+- `read`：读取指定长度、读到分隔符（`read_until`）、或读取当前可用数据（`read_available`）
 - `write`：向串口写入字节或文本
+- `close`：关闭持久会话
+- `sessions`：列出当前会话
 
 公共参数：
 
@@ -56,20 +59,27 @@ description: "当前项目已有的硬件相关能力主要分为两条线：因
 - `data_bits`
 - `parity`
 - `stop_bits`
+- `flow_control`：`none`、`rtscts`、`xonxoff`
 - `timeout_ms`
+- `rs485` / `rs485_delay_before_ms` / `rs485_delay_after_ms`（仅 Linux）
 
 当前波特率实现边界：
 
 - Windows 允许配置工具层接受的范围 `50-4000000`
-- Linux / macOS 当前仅支持标准 termios 波特率，实际支持到 `230400`
-- 因此 `baud` 的跨平台可移植取值应优先使用 `230400` 及以下的常见标准速率
+- Linux 支持标准 termios 波特率，最高到 `4000000`
+- macOS 除标准速率外，还通过 `IOSSIOSPEED` 支持 `50-4000000` 的任意速率
+- 因此 `baud` 的跨平台可移植取值应优先使用常见标准速率
 
 安全约束：
 
-- `write` 必须显式传 `confirm: true`
+- `write` 必须显式传 `confirm: true`，并设置 `tools.serial.allow_write=true`
+- 默认所有硬件写入是只读的；设备还必须在 `tools.serial.allow` 中列出
+- 写入会经过 `tools.hardware.require_approval` 的人类审批；无交互用户时 fail-closed
+- 支持每分钟写入次数限制和 `tools.hardware.dry_run` 预演
 - 单次读写负载限制为 `4096` 字节
 - `port` 只接受白名单串口名：
   - Linux / macOS 仅允许 `/dev/tty*`、`/dev/cu.*` 及对应简写设备名
+  - Linux 额外支持 `/dev/serial/by-id/...` 和 `/dev/serial/by-path/...`，解析符号链接后仍要求目标是 `/dev` 下的串口设备
   - Windows 仅允许 `COM\d+` 或 `\\.\COM\d+`
   - 明确拒绝 `..`、普通文件绝对路径、盘符路径等非串口设备路径，避免路径穿越或误打开任意文件
 
@@ -77,7 +87,7 @@ description: "当前项目已有的硬件相关能力主要分为两条线：因
 
 - Linux / macOS：
   - 基于 `golang.org/x/sys/unix` 和 termios 配置串口参数。
-  - 当前仅接入标准 termios 波特率映射，最高到 `230400`，尚未扩展 `460800`、`921600`、`1000000`、`2000000` 等更高速率。
+  - Linux 接入标准 termios 波特率映射到 `4000000`；macOS 对非标准速率使用 `IOSSIOSPEED`。
   - 通过 `/dev/...` 枚举和访问设备。
 
 - Windows：

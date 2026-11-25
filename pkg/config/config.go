@@ -1695,6 +1695,70 @@ func (c ReadFileToolConfig) EffectiveMode() string {
 	}
 }
 
+// HardwareToolConfig configures one hardware tool. Writes are disabled by
+// default; enabling the tool only enables read/discovery paths.
+type HardwareToolConfig struct {
+	Enabled    bool     `json:"enabled"         yaml:"-" env:"ENABLED"`
+	AllowWrite bool     `json:"allow_write"     yaml:"-" env:"ALLOW_WRITE"`
+	Allow      []string `json:"allow,omitempty" yaml:"-" env:"ALLOW"`
+}
+
+// HardwareConfig holds the cross-tool write safety and serial session policy.
+type HardwareConfig struct {
+	// RequireApproval asks the originating user before a hardware write.
+	// nil means true, so existing configs stay fail-closed.
+	RequireApproval         *bool `json:"require_approval,omitempty"           yaml:"-" env:"REQUIRE_APPROVAL"`
+	ApprovalTimeoutSeconds  int   `json:"approval_timeout_seconds,omitempty"   yaml:"-" env:"APPROVAL_TIMEOUT_SECONDS"`
+	MaxWritesPerMinute      int   `json:"max_writes_per_minute,omitempty"      yaml:"-" env:"MAX_WRITES_PER_MINUTE"`
+	DryRun                  bool  `json:"dry_run,omitempty"                    yaml:"-" env:"DRY_RUN"`
+	SerialSessionTTLSeconds int   `json:"serial_session_ttl_seconds,omitempty" yaml:"-" env:"SERIAL_SESSION_TTL_SECONDS"`
+	SerialMaxSessions       int   `json:"serial_max_sessions,omitempty"        yaml:"-" env:"SERIAL_MAX_SESSIONS"`
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func (c HardwareConfig) GetRequireApproval() bool {
+	if c.RequireApproval == nil {
+		return true
+	}
+	return *c.RequireApproval
+}
+
+func (c HardwareConfig) GetApprovalTimeoutSeconds() int {
+	if c.ApprovalTimeoutSeconds <= 0 {
+		return 300
+	}
+	return c.ApprovalTimeoutSeconds
+}
+
+// GetMaxWritesPerMinute returns 30 when unset. A negative value disables the
+// limit; zero selects the default.
+func (c HardwareConfig) GetMaxWritesPerMinute() int {
+	if c.MaxWritesPerMinute < 0 {
+		return -1
+	}
+	if c.MaxWritesPerMinute == 0 {
+		return 30
+	}
+	return c.MaxWritesPerMinute
+}
+
+func (c HardwareConfig) GetSerialSessionTTLSeconds() int {
+	if c.SerialSessionTTLSeconds <= 0 {
+		return 60
+	}
+	return c.SerialSessionTTLSeconds
+}
+
+func (c HardwareConfig) GetSerialMaxSessions() int {
+	if c.SerialMaxSessions <= 0 {
+		return 2
+	}
+	return c.SerialMaxSessions
+}
+
 type ToolsConfig struct {
 	AllowReadPaths  []string `json:"allow_read_paths"  yaml:"-" env:"PICOCLAW_TOOLS_ALLOW_READ_PATHS"`
 	AllowWritePaths []string `json:"allow_write_paths" yaml:"-" env:"PICOCLAW_TOOLS_ALLOW_WRITE_PATHS"`
@@ -1726,10 +1790,11 @@ type ToolsConfig struct {
 	Skills              SkillsToolsConfig       `json:"skills"                 yaml:"skills,omitempty"`
 	MediaCleanup        MediaCleanupConfig      `json:"media_cleanup"          yaml:"-"`
 	MCP                 MCPConfig               `json:"mcp"                    yaml:"-"`
+	Hardware            HardwareConfig          `json:"hardware"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_HARDWARE_"`
 	AppendFile          ToolConfig              `json:"append_file"            yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
 	EditFile            ToolConfig              `json:"edit_file"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
 	FindSkills          ToolConfig              `json:"find_skills"            yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
-	I2C                 ToolConfig              `json:"i2c"                    yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_I2C_"`
+	I2C                 HardwareToolConfig      `json:"i2c"                    yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_I2C_"`
 	ImageGenerate       ImageGenerateToolConfig `json:"image_generate"         yaml:"-"`
 	InstallSkill        ToolConfig              `json:"install_skill"          yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
 	ListDir             ToolConfig              `json:"list_dir"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
@@ -1738,12 +1803,12 @@ type ToolsConfig struct {
 	Reaction            ToolConfig              `json:"reaction"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_REACTION_"`
 	ReadFile            ReadFileToolConfig      `json:"read_file"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
 	SearchFiles         ToolConfig              `json:"search_files"           yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SEARCH_FILES_"`
-	Serial              ToolConfig              `json:"serial"                 yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
+	Serial              HardwareToolConfig      `json:"serial"                 yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SERIAL_"`
 	SendFile            ToolConfig              `json:"send_file"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
 	SendTTS             ToolConfig              `json:"send_tts"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
 	Spawn               ToolConfig              `json:"spawn"                  yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
 	SpawnStatus         ToolConfig              `json:"spawn_status"           yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
-	SPI                 ToolConfig              `json:"spi"                    yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SPI_"`
+	SPI                 HardwareToolConfig      `json:"spi"                    yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SPI_"`
 	Subagent            ToolConfig              `json:"subagent"               yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
 	Todo                ToolConfig              `json:"todo"                   yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_TODO_"`
 	WebFetch            ToolConfig              `json:"web_fetch"              yaml:"-"                                                            envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`

@@ -153,7 +153,9 @@ func TestSerialWriteToolResultCarriesWrittenCount(t *testing.T) {
 		return len(src), nil
 	}
 
-	tool := NewSerialTool()
+	tool := NewSerialTool(SerialOptions{
+		Policy: NewSerialWritePolicy(true, []string{"/dev/ttyUSB0"}, false, 0),
+	})
 	result := tool.Execute(context.Background(), map[string]any{
 		"action":  "write",
 		"port":    "/dev/ttyUSB0",

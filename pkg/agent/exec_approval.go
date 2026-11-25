@@ -24,6 +24,9 @@ const (
 	// longer unknown command cannot be reviewed safely in chat, so it is
 	// denied instead of showing a truncated view the user might approve.
 	maxExecApprovalCommandRunes = 12000
+	// maxToolApprovalDetailsRunes leaves room for the "Command: " prefix and
+	// the quoted form while still bounding hardware write summaries.
+	maxToolApprovalDetailsRunes = maxExecApprovalCommandRunes + 2048
 )
 
 // execUnknownCommandApprovalHook asks the originating user to approve a
@@ -113,19 +116,65 @@ func (h *execUnknownCommandApprovalHook) ask(
 	command, reason string,
 ) (ApprovalDecision, error) {
 	al := h.agent
+	if al == nil {
+		return ApprovalDecision{Reason: "approval is unavailable"}, nil
+	}
+
+	cfg := al.GetConfig()
+	if cfg != nil && !cfg.Tools.Exec.AllowRemote &&
+		req.Context != nil && req.Context.Inbound != nil &&
+		!constants.IsInternalChannel(req.Context.Inbound.Channel) {
+		// The exec tool rejects remote runs before executing them, so there is
+		// nothing for the user to approve.
+		return ApprovalDecision{Approved: true}, nil
+	}
+
+	display, ok := formatExecApprovalCommand(command)
+	if !ok {
+		return ApprovalDecision{
+			Reason: "unknown command is too long to display for approval; shorten it or set unknown_command_policy to allow",
+		}, nil
+	}
+
+	return al.askToolApproval(
+		ctx,
+		req,
+		"Approval required for an unknown exec command.",
+		fmt.Sprintf("Command: %s", display),
+		display,
+		reason,
+		"command",
+	)
+}
+
+// askToolApproval is the shared human gate used by exec and hardware writes.
+// Every failure path denies the request, including an unattended or automated
+// sender. The caller owns the decision to ask at all.
+func (al *AgentLoop) askToolApproval(
+	ctx context.Context,
+	req *ToolApprovalRequest,
+	title string,
+	details string,
+	metadataValue string,
+	reason string,
+	deniedNoun string,
+) (ApprovalDecision, error) {
+	if al == nil {
+		return ApprovalDecision{Reason: "approval is unavailable"}, nil
+	}
 	if !al.running.Load() {
 		return ApprovalDecision{
-			Reason: "unknown command requires approval, but no interactive user is available",
+			Reason: fmt.Sprintf("%s requires approval, but no interactive user is available", deniedNoun),
 		}, nil
 	}
 	if al.channelManager == nil {
 		return ApprovalDecision{
-			Reason: "unknown command requires approval, but no channel is available",
+			Reason: fmt.Sprintf("%s requires approval, but no channel is available", deniedNoun),
 		}, nil
 	}
-	if req.Context == nil || req.Context.Inbound == nil {
+	if req == nil || req.Context == nil || req.Context.Inbound == nil {
 		return ApprovalDecision{
-			Reason: "unknown command requires approval, but the request has no origin",
+			Reason: fmt.Sprintf("%s requires approval, but the request has no origin", deniedNoun),
 		}, nil
 	}
 
@@ -133,21 +182,14 @@ func (h *execUnknownCommandApprovalHook) ask(
 	if origin.Channel == "" || origin.ChatID == "" || origin.SenderID == "" ||
 		origin.Channel == "system" || isAutomatedExecSender(origin.SenderID) {
 		return ApprovalDecision{
-			Reason: "unknown command requires approval, but no interactive user is available",
+			Reason: fmt.Sprintf("%s requires approval, but no interactive user is available", deniedNoun),
 		}, nil
-	}
-
-	cfg := al.GetConfig()
-	if cfg != nil && !cfg.Tools.Exec.AllowRemote && !constants.IsInternalChannel(origin.Channel) {
-		// The exec tool rejects remote runs before executing them, so there is
-		// nothing for the user to approve.
-		return ApprovalDecision{Approved: true}, nil
 	}
 
 	channel, ok := al.channelManager.GetChannel(origin.Channel)
 	if !ok || !channel.IsRunning() {
 		return ApprovalDecision{
-			Reason: "unknown command requires approval, but its channel is not running",
+			Reason: fmt.Sprintf("%s requires approval, but its channel is not running", deniedNoun),
 		}, nil
 	}
 
@@ -155,11 +197,9 @@ func (h *execUnknownCommandApprovalHook) ask(
 	if !ok {
 		deadline = time.Now().Add(defaultHookApprovalTimeout)
 	}
-
-	display, ok := formatExecApprovalCommand(command)
-	if !ok {
+	if len([]rune(details)) > maxToolApprovalDetailsRunes {
 		return ApprovalDecision{
-			Reason: "unknown command is too long to display for approval; shorten it or set unknown_command_policy to allow",
+			Reason: "approval details are too long to display safely; shorten the request",
 		}, nil
 	}
 
@@ -186,11 +226,11 @@ func (h *execUnknownCommandApprovalHook) ask(
 		reasonLine = fmt.Sprintf("Reason: %s\n", reason)
 	}
 	message := fmt.Sprintf(
-		"Approval required for an unknown exec command.\n"+
+		"%s\n"+
 			"Reply \"approve\" to run it or \"deny\" to cancel. "+
 			"If more than one request is pending, reply \"approve %s\" or \"deny %s\" instead. "+
-			"This request expires in %s.\n\n%sCommand: %s",
-		token, token, remaining.Round(time.Second), reasonLine, display,
+			"This request expires in %s.\n\n%s%s",
+		title, token, token, remaining.Round(time.Second), reasonLine, details,
 	)
 	outboundCtx := outboundContextFromInbound(
 		req.Context.Inbound,
@@ -203,7 +243,7 @@ func (h *execUnknownCommandApprovalHook) ask(
 	}
 	outboundCtx.Raw[metadataKeyMessageKind] = messageKindApproval
 	outboundCtx.Raw[metadataKeyApprovalToken] = token
-	outboundCtx.Raw[metadataKeyApprovalCommand] = display
+	outboundCtx.Raw[metadataKeyApprovalCommand] = metadataValue
 	outboundCtx.Raw[metadataKeyApprovalExpires] = strconv.FormatInt(deadline.UnixMilli(), 10)
 	if reason != "" {
 		outboundCtx.Raw[metadataKeyApprovalReason] = reason
@@ -218,7 +258,7 @@ func (h *execUnknownCommandApprovalHook) ask(
 	})
 	cancel()
 	if err != nil {
-		logger.WarnCF("agent", "Failed to deliver unknown-command approval prompt", map[string]any{
+		logger.WarnCF("agent", "Failed to deliver tool approval prompt", map[string]any{
 			"agent_id": req.Meta.AgentID,
 			"channel":  origin.Channel,
 			"error":    err.Error(),
@@ -226,7 +266,7 @@ func (h *execUnknownCommandApprovalHook) ask(
 		return ApprovalDecision{Reason: "could not deliver the approval request"}, nil
 	}
 
-	logger.InfoCF("agent", "Unknown-command approval requested", map[string]any{
+	logger.InfoCF("agent", "Tool approval requested", map[string]any{
 		"agent_id": req.Meta.AgentID,
 		"channel":  origin.Channel,
 		"chat_id":  origin.ChatID,
@@ -234,28 +274,28 @@ func (h *execUnknownCommandApprovalHook) ask(
 
 	select {
 	case approved := <-pending.decision:
-		return execApprovalDecision(approved), nil
+		return approvalDecision(approved, deniedNoun), nil
 	case <-ctx.Done():
 		// Prefer a decision that arrived at the deadline over the timeout.
 		select {
 		case approved := <-pending.decision:
-			return execApprovalDecision(approved), nil
+			return approvalDecision(approved, deniedNoun), nil
 		default:
 		}
 		al.sendExecApprovalReply(
 			ctx,
 			origin,
-			fmt.Sprintf("Approval request %s expired; the command was denied.", token),
+			fmt.Sprintf("Approval request %s expired; the %s was denied.", token, deniedNoun),
 		)
 		return ApprovalDecision{Reason: "approval expired or was canceled"}, nil
 	}
 }
 
-func execApprovalDecision(approved bool) ApprovalDecision {
+func approvalDecision(approved bool, deniedNoun string) ApprovalDecision {
 	if approved {
 		return ApprovalDecision{Approved: true}
 	}
-	return ApprovalDecision{Reason: "user denied the unknown command"}
+	return ApprovalDecision{Reason: fmt.Sprintf("user denied the %s", deniedNoun)}
 }
 
 func isAutomatedExecSender(senderID string) bool {
@@ -274,9 +314,10 @@ func formatExecApprovalCommand(command string) (string, bool) {
 	return fmt.Sprintf("%q", command), true
 }
 
-// tryHandleExecApproval consumes approval replies before they can enter
-// steering or the LLM, including while the original turn is blocked in the
-// approval hook. It reports whether the message was an approval reply.
+// tryHandleExecApproval consumes approval replies for exec and hardware
+// writes before they can enter steering or the LLM, including while the
+// original turn is blocked in the approval hook. It reports whether the
+// message was an approval reply.
 func (al *AgentLoop) tryHandleExecApproval(ctx context.Context, msg bus.InboundMessage) bool {
 	msg = bus.NormalizeInboundMessage(msg)
 	parts := strings.Fields(strings.TrimSpace(msg.Content))
@@ -340,7 +381,7 @@ func (al *AgentLoop) tryHandleExecApproval(ctx context.Context, msg bus.InboundM
 				approved := action == "approve" || action == "/approve"
 				pending.decision <- approved
 				response = "Approval response received."
-				logger.InfoCF("agent", "Unknown-command approval answered", map[string]any{
+				logger.InfoCF("agent", "Tool approval answered", map[string]any{
 					"channel":  origin.Channel,
 					"chat_id":  origin.ChatID,
 					"approved": approved,

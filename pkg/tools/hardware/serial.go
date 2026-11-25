@@ -1,39 +1,73 @@
 package hardwaretools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
 
 const (
-	defaultSerialBaud      = 115200
-	defaultSerialDataBits  = 8
-	defaultSerialStopBits  = 1
-	defaultSerialTimeoutMS = 1000
-	maxSerialPayloadBytes  = 4096
-	maxSerialReadBytes     = 4096
-	serialPollInterval     = 100 * time.Millisecond
+	defaultSerialBaud        = 115200
+	defaultSerialDataBits    = 8
+	defaultSerialStopBits    = 1
+	defaultSerialTimeoutMS   = 1000
+	maxSerialPayloadBytes    = 4096
+	maxSerialReadBytes       = 4096
+	serialPollInterval       = 100 * time.Millisecond
+	defaultSerialSessionTTL  = time.Minute
+	defaultSerialMaxSessions = 2
 )
 
 var (
-	unixSerialPortPattern = regexp.MustCompile(
-		`^(?:/dev/)?(?:ttyS\d+|ttyUSB\d+|ttyACM\d+|ttyAMA\d+|rfcomm\d+|tty\.[A-Za-z0-9._-]+|cu\.[A-Za-z0-9._-]+)$`,
+	unixSerialBasePattern = regexp.MustCompile(
+		`^(?:ttyS\d+|ttyUSB\d+|ttyACM\d+|ttyAMA\d+|serial\d+|rfcomm\d+|tty\.[A-Za-z0-9._-]+|cu\.[A-Za-z0-9._-]+)$`,
 	)
 	windowsSerialPortPattern = regexp.MustCompile(`^(?:\\\\\.\\)?COM[1-9]\d*$`)
-	unixSerialBaudRates      = map[int]struct{}{
-		50: {}, 75: {}, 110: {}, 134: {}, 150: {}, 200: {}, 300: {}, 600: {}, 1200: {}, 1800: {},
-		2400: {}, 4800: {}, 9600: {}, 19200: {}, 38400: {}, 57600: {}, 115200: {}, 230400: {},
-	}
+
+	serialNormalizePort = normalizeSerialPort
 )
 
-type SerialTool struct{}
+type SerialTool struct {
+	mu          sync.Mutex
+	sessions    map[string]*serialSession
+	sessionTTL  time.Duration
+	maxSessions int
+	policy      *WritePolicy
+}
+
+type SerialOptions struct {
+	Policy      *WritePolicy
+	SessionTTL  time.Duration
+	MaxSessions int
+}
+
+var readOnlySerialPolicy = NewSerialWritePolicy(false, nil, false, 0)
+
+func (t *SerialTool) writePolicy() *WritePolicy {
+	if t == nil || t.policy == nil {
+		return readOnlySerialPolicy
+	}
+	return t.policy
+}
+
+type serialSession struct {
+	key      string
+	cfg      serialConfig
+	handle   serialHandle
+	lastUsed time.Time
+	timer    *time.Timer
+	mu       sync.Mutex
+}
 
 type serialPortInfo struct {
 	Name string `json:"name"`
@@ -41,15 +75,36 @@ type serialPortInfo struct {
 }
 
 type serialConfig struct {
-	Port     string
-	Baud     int
-	DataBits int
-	Parity   string
-	StopBits int
+	Port               string
+	Baud               int
+	DataBits           int
+	Parity             string
+	StopBits           int
+	FlowControl        string
+	RS485              bool
+	RS485DelayBeforeMS int
+	RS485DelayAfterMS  int
 }
 
-func NewSerialTool() *SerialTool {
-	return &SerialTool{}
+func NewSerialTool(opts ...SerialOptions) *SerialTool {
+	tool := &SerialTool{
+		sessions:    make(map[string]*serialSession),
+		sessionTTL:  defaultSerialSessionTTL,
+		maxSessions: defaultSerialMaxSessions,
+		policy:      readOnlySerialPolicy,
+	}
+	if len(opts) > 0 {
+		if opts[0].Policy != nil {
+			tool.policy = opts[0].Policy
+		}
+		if opts[0].SessionTTL > 0 {
+			tool.sessionTTL = opts[0].SessionTTL
+		}
+		if opts[0].MaxSessions > 0 {
+			tool.maxSessions = opts[0].MaxSessions
+		}
+	}
+	return tool
 }
 
 func (t *SerialTool) Name() string {
@@ -57,7 +112,7 @@ func (t *SerialTool) Name() string {
 }
 
 func (t *SerialTool) Description() string {
-	return "Interact with host serial ports. Actions: list (enumerate ports), read (receive bytes), write (send bytes with explicit confirmation). Supports Linux, macOS, and Windows."
+	return "Interact with host serial ports. Actions: list (enumerate ports), read (receive an exact byte count, bytes up to a delimiter, or currently available bytes), write (send bytes with explicit confirmation). Supports Linux, macOS, and Windows."
 }
 
 func (t *SerialTool) Parameters() map[string]any {
@@ -66,16 +121,16 @@ func (t *SerialTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"list", "read", "write"},
-				"description": "Action to perform: list available serial ports, read bytes from a port, or write bytes to a port.",
+				"enum":        []string{"list", "open", "read", "write", "close", "sessions"},
+				"description": "Action to perform: list ports, open a persistent session, read (exact bytes, until a delimiter, or available data), write bytes, close a session, or list open sessions.",
 			},
 			"port": map[string]any{
 				"type":        "string",
-				"description": "Serial port path or name, for example /dev/ttyUSB0, /dev/cu.usbserial-0001, or COM3. Required for read/write.",
+				"description": "Serial port path or name, for example /dev/ttyUSB0, /dev/cu.usbserial-0001, /dev/serial/by-id/usb-..., or COM3. Required for read/write.",
 			},
 			"baud": map[string]any{
 				"type":        "integer",
-				"description": "Baud rate. Default: 115200. Linux/macOS currently support standard termios rates up to 230400; Windows accepts configured rates up to 4000000.",
+				"description": "Baud rate. Default: 115200. Linux supports standard termios rates up to 4000000; macOS supports standard rates plus arbitrary rates through IOSSIOSPEED; Windows accepts rates up to 4000000.",
 			},
 			"data_bits": map[string]any{
 				"type":        "integer",
@@ -90,13 +145,38 @@ func (t *SerialTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "Stop bits. Supported values: 1, 2. Default: 1.",
 			},
+			"flow_control": map[string]any{
+				"type":        "string",
+				"enum":        []string{"none", "rtscts", "xonxoff"},
+				"description": "Flow control. none (default), rtscts (hardware RTS/CTS), or xonxoff (software XON/XOFF).",
+			},
+			"rs485": map[string]any{
+				"type":        "boolean",
+				"description": "Enable Linux RS-485 mode through TIOCSRS485. Unsupported on macOS and Windows.",
+			},
+			"rs485_delay_before_ms": map[string]any{
+				"type":        "integer",
+				"description": "RS-485 RTS delay before sending (0-1000 ms). Requires rs485=true. Default: 0.",
+			},
+			"rs485_delay_after_ms": map[string]any{
+				"type":        "integer",
+				"description": "RS-485 RTS delay after sending (0-1000 ms). Requires rs485=true. Default: 0.",
+			},
 			"timeout_ms": map[string]any{
 				"type":        "integer",
 				"description": "Read/write timeout in milliseconds. Default: 1000.",
 			},
 			"length": map[string]any{
 				"type":        "integer",
-				"description": "Number of bytes to read. Required for read. Range: 1-4096.",
+				"description": "Number of bytes to read with a plain read (1-4096). Required unless read_until or read_available is set; in those modes it caps the buffer. Default cap: 4096.",
+			},
+			"read_until": map[string]any{
+				"type":        "string",
+				"description": "Read until this delimiter, for example \"\\n\" for NMEA or \"\\r\\n\" for AT commands. The delimiter is included in the payload.",
+			},
+			"read_available": map[string]any{
+				"type":        "boolean",
+				"description": "Read whatever is available, stopping after 50 ms of idle time or when timeout_ms expires.",
 			},
 			"data": map[string]any{
 				"type":        "array",
@@ -125,12 +205,26 @@ func (t *SerialTool) Execute(ctx context.Context, args map[string]any) *ToolResu
 	switch action {
 	case "list":
 		return t.list()
+	case "open":
+		cfg, errResult := parseSerialConfig(args)
+		if errResult != nil {
+			return errResult
+		}
+		return t.openSession(ctx, cfg)
 	case "read":
 		return t.read(ctx, args)
 	case "write":
 		return t.write(ctx, args)
+	case "close":
+		cfg, errResult := parseSerialConfig(args)
+		if errResult != nil {
+			return errResult
+		}
+		return t.closeSession(ctx, cfg.Port)
+	case "sessions":
+		return t.listSessions(ctx)
 	default:
-		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: list, read, write)", action))
+		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: list, open, read, write, close, sessions)", action))
 	}
 }
 
@@ -155,26 +249,77 @@ func (t *SerialTool) read(ctx context.Context, args map[string]any) *ToolResult 
 	if errResult != nil {
 		return errResult
 	}
-
-	length := 0
-	if v, ok := args["length"].(float64); ok {
-		length = int(v)
-	}
-	if length < 1 || length > maxSerialReadBytes {
-		return ErrorResult(fmt.Sprintf("length is required for read (1-%d)", maxSerialReadBytes))
+	if result := t.writePolicy().checkTarget(cfg.Port); result != nil {
+		return result
 	}
 
 	timeout, errResult := parseSerialTimeout(args)
 	if errResult != nil {
 		return errResult
 	}
+	delimiter, hasDelimiter, err := parseSerialReadUntil(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	readAvailable, err := parseSerialReadAvailable(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if hasDelimiter && readAvailable {
+		return ErrorResult("read_until and read_available cannot be used together")
+	}
+	length, hasLength, err := parseSerialReadLength(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
 
-	data, err := serialRead(ctx, cfg, length, timeout)
+	if (hasDelimiter || readAvailable) && !hasLength {
+		length = maxSerialReadBytes
+	}
+	if !hasDelimiter && !readAvailable && !hasLength {
+		return ErrorResult("length is required for read (1-4096) unless read_until or read_available is set")
+	}
+
+	session, unlock, errResult := t.lockSession(ctx, cfg)
+	if errResult != nil {
+		return errResult
+	}
+	var handle serialHandle
+	if session != nil {
+		defer unlock()
+		handle = session.handle
+	} else {
+		openTimeout := timeout
+		if hasDelimiter || readAvailable {
+			openTimeout = min(timeout, 100*time.Millisecond)
+		}
+		handle, err = serialOpenHandle(cfg, openTimeout)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("failed to open %s: %v", cfg.Port, err))
+		}
+		defer serialCloseHandle(handle)
+	}
+
+	var data []byte
+	var extra map[string]any
+	switch {
+	case hasDelimiter:
+		data, err = serialReadUntilHandle(ctx, handle, delimiter, length, timeout)
+		extra = map[string]any{
+			"read_until": string(delimiter),
+			"matched":    bytes.HasSuffix(data, delimiter),
+		}
+	case readAvailable:
+		data, err = serialReadAvailableHandle(ctx, handle, length, timeout)
+		extra = map[string]any{"read_available": true}
+	default:
+		data, err = serialReadHandle(ctx, handle, length, timeout)
+	}
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err))
 	}
 
-	return SilentResult(formatSerialPayload("read", cfg, data, timeout, nil))
+	return SilentResult(formatSerialPayload("read", cfg, data, timeout, extra))
 }
 
 func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult {
@@ -189,6 +334,10 @@ func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult
 	if errResult != nil {
 		return errResult
 	}
+	policy := t.writePolicy()
+	if result := policy.checkTarget(cfg.Port); result != nil {
+		return result
+	}
 	timeout, errResult := parseSerialTimeout(args)
 	if errResult != nil {
 		return errResult
@@ -198,7 +347,37 @@ func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult
 		return errResult
 	}
 
-	written, err := serialWrite(ctx, cfg, payload, timeout)
+	if policy.DryRun {
+		result, _ := json.MarshalIndent(map[string]any{
+			"dry_run": true,
+			"action":  "write",
+			"port":    cfg.Port,
+			"payload": serialPayloadSummary(payload),
+		}, "", "  ")
+		return SilentResult(string(result))
+	}
+	if result := policy.checkWrite(cfg.Port, time.Now()); result != nil {
+		return result
+	}
+
+	session, unlock, errResult := t.lockSession(ctx, cfg)
+	if errResult != nil {
+		return errResult
+	}
+	var handle serialHandle
+	if session != nil {
+		defer unlock()
+		handle = session.handle
+	} else {
+		opened, openErr := serialOpenHandle(cfg, timeout)
+		if openErr != nil {
+			return ErrorResult(fmt.Sprintf("failed to open %s: %v", cfg.Port, openErr))
+		}
+		handle = opened
+		defer serialCloseHandle(handle)
+	}
+
+	written, err := serialWriteHandle(ctx, handle, payload, timeout)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("serial write failed on %s: %v", cfg.Port, err))
 	}
@@ -217,17 +396,18 @@ func parseSerialConfig(args map[string]any) (serialConfig, *ToolResult) {
 		)
 	}
 
-	normalizedPort, err := normalizeSerialPort(port)
+	normalizedPort, err := serialNormalizePort(port)
 	if err != nil {
 		return serialConfig{}, ErrorResult(err.Error())
 	}
 
 	cfg := serialConfig{
-		Port:     normalizedPort,
-		Baud:     defaultSerialBaud,
-		DataBits: defaultSerialDataBits,
-		Parity:   "none",
-		StopBits: defaultSerialStopBits,
+		Port:        normalizedPort,
+		Baud:        defaultSerialBaud,
+		DataBits:    defaultSerialDataBits,
+		Parity:      "none",
+		StopBits:    defaultSerialStopBits,
+		FlowControl: "none",
 	}
 
 	if v, ok := args["baud"].(float64); ok {
@@ -262,6 +442,51 @@ func parseSerialConfig(args map[string]any) (serialConfig, *ToolResult) {
 		return serialConfig{}, ErrorResult("stop_bits must be 1 or 2")
 	}
 
+	if v, ok := args["flow_control"].(string); ok && strings.TrimSpace(v) != "" {
+		normalized := strings.ToLower(strings.TrimSpace(v))
+		normalized = strings.NewReplacer("/", "", "-", "", "_", "").Replace(normalized)
+		switch normalized {
+		case "none":
+			cfg.FlowControl = "none"
+		case "rtscts", "hardware":
+			cfg.FlowControl = "rtscts"
+		case "xonxoff", "software":
+			cfg.FlowControl = "xonxoff"
+		default:
+			return serialConfig{}, ErrorResult(`flow_control must be one of "none", "rtscts", or "xonxoff"`)
+		}
+	}
+
+	if v, ok := args["rs485"].(bool); ok {
+		cfg.RS485 = v
+	}
+	if v, ok := args["rs485_delay_before_ms"]; ok && v != nil {
+		value, err := parseI2CScalar(v, "rs485_delay_before_ms")
+		if err != nil {
+			return serialConfig{}, ErrorResult(err.Error())
+		}
+		if value < 0 || value > 1000 {
+			return serialConfig{}, ErrorResult("rs485_delay_before_ms must be between 0 and 1000")
+		}
+		cfg.RS485DelayBeforeMS = value
+	}
+	if v, ok := args["rs485_delay_after_ms"]; ok && v != nil {
+		value, err := parseI2CScalar(v, "rs485_delay_after_ms")
+		if err != nil {
+			return serialConfig{}, ErrorResult(err.Error())
+		}
+		if value < 0 || value > 1000 {
+			return serialConfig{}, ErrorResult("rs485_delay_after_ms must be between 0 and 1000")
+		}
+		cfg.RS485DelayAfterMS = value
+	}
+	if !cfg.RS485 && (cfg.RS485DelayBeforeMS != 0 || cfg.RS485DelayAfterMS != 0) {
+		return serialConfig{}, ErrorResult("rs485_delay_* requires rs485: true")
+	}
+	if err := validatePlatformSerialConfig(cfg); err != nil {
+		return serialConfig{}, ErrorResult(err.Error())
+	}
+
 	return cfg, nil
 }
 
@@ -274,6 +499,95 @@ func parseSerialTimeout(args map[string]any) (time.Duration, *ToolResult) {
 		return 0, ErrorResult("timeout_ms must be between 1 and 60000")
 	}
 	return time.Duration(timeoutMS) * time.Millisecond, nil
+}
+
+func parseSerialReadLength(args map[string]any) (int, bool, error) {
+	raw, ok := args["length"]
+	if !ok || raw == nil {
+		return 0, false, nil
+	}
+	value, err := parseI2CScalar(raw, "length")
+	if err != nil {
+		return 0, false, err
+	}
+	if value < 1 || value > maxSerialReadBytes {
+		return 0, false, fmt.Errorf("length must be between 1 and %d", maxSerialReadBytes)
+	}
+	return value, true, nil
+}
+
+func parseSerialReadUntil(args map[string]any) ([]byte, bool, error) {
+	raw, ok := args["read_until"]
+	if !ok || raw == nil {
+		return nil, false, nil
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return nil, false, fmt.Errorf("read_until must be a string")
+	}
+	delimiter, err := decodeSerialDelimiter(text)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(delimiter) == 0 {
+		return nil, false, fmt.Errorf("read_until must not be empty")
+	}
+	if len(delimiter) > 32 {
+		return nil, false, fmt.Errorf("read_until must be at most 32 bytes")
+	}
+	return delimiter, true, nil
+}
+
+func parseSerialReadAvailable(args map[string]any) (bool, error) {
+	raw, ok := args["read_available"]
+	if !ok || raw == nil {
+		return false, nil
+	}
+	value, ok := raw.(bool)
+	if !ok {
+		return false, fmt.Errorf("read_available must be a boolean")
+	}
+	return value, nil
+}
+
+// decodeSerialDelimiter turns the sequences an LLM writes in JSON into bytes.
+// A literal newline is already a valid delimiter; this also accepts "\\n",
+// "\\r\\n", "\\t", "\\\\", and "\\xNN".
+func decodeSerialDelimiter(text string) ([]byte, error) {
+	out := make([]byte, 0, len(text))
+	for i := 0; i < len(text); i++ {
+		if text[i] != '\\' {
+			out = append(out, text[i])
+			continue
+		}
+		i++
+		if i >= len(text) {
+			return nil, fmt.Errorf("read_until ends with a trailing backslash")
+		}
+		switch text[i] {
+		case 'n':
+			out = append(out, '\n')
+		case 'r':
+			out = append(out, '\r')
+		case 't':
+			out = append(out, '\t')
+		case '\\':
+			out = append(out, '\\')
+		case 'x':
+			if i+2 >= len(text) {
+				return nil, fmt.Errorf("read_until has an incomplete \\x escape")
+			}
+			value, err := strconv.ParseUint(text[i+1:i+3], 16, 8)
+			if err != nil {
+				return nil, fmt.Errorf("read_until has an invalid \\x escape")
+			}
+			out = append(out, byte(value))
+			i += 2
+		default:
+			return nil, fmt.Errorf("read_until has an unsupported escape \\%c", text[i])
+		}
+	}
+	return out, nil
 }
 
 func parseSerialWritePayload(args map[string]any) ([]byte, *ToolResult) {
@@ -325,14 +639,20 @@ func formatSerialPayload(
 	extra map[string]any,
 ) string {
 	fields := map[string]any{
-		"action":     action,
-		"port":       cfg.Port,
-		"baud":       cfg.Baud,
-		"data_bits":  cfg.DataBits,
-		"parity":     cfg.Parity,
-		"stop_bits":  cfg.StopBits,
-		"timeout_ms": timeout.Milliseconds(),
-		"payload":    serialPayloadSummary(data),
+		"action":       action,
+		"port":         cfg.Port,
+		"baud":         cfg.Baud,
+		"data_bits":    cfg.DataBits,
+		"parity":       cfg.Parity,
+		"stop_bits":    cfg.StopBits,
+		"flow_control": cfg.FlowControl,
+		"timeout_ms":   timeout.Milliseconds(),
+		"payload":      serialPayloadSummary(data),
+	}
+	if cfg.RS485 {
+		fields["rs485"] = true
+		fields["rs485_delay_before_ms"] = cfg.RS485DelayBeforeMS
+		fields["rs485_delay_after_ms"] = cfg.RS485DelayAfterMS
 	}
 	for key, value := range extra {
 		fields[key] = value
@@ -376,16 +696,70 @@ func normalizeSerialPort(port string) (string, error) {
 }
 
 func normalizeUnixSerialPath(port string) (string, error) {
+	return normalizeUnixSerialPathAt(port, "/dev")
+}
+
+// normalizeUnixSerialPathAt resolves stable /dev/serial/by-id and by-path
+// links to the real tty device. The resolved path must still be a serial
+// device directly under devRoot, so a symlink cannot escape the allowlist.
+func normalizeUnixSerialPathAt(port, devRoot string) (string, error) {
 	trimmed := strings.TrimSpace(port)
-	if !unixSerialPortPattern.MatchString(trimmed) {
+	if trimmed == "" {
+		return "", fmt.Errorf("serial port must not be empty")
+	}
+	if strings.Contains(trimmed, "..") {
+		return "", fmt.Errorf("invalid serial port: %q contains a path traversal segment", trimmed)
+	}
+	devRoot = filepath.Clean(devRoot)
+	if resolvedRoot, err := filepath.EvalSymlinks(devRoot); err == nil {
+		devRoot = resolvedRoot
+	}
+
+	byID := filepath.Join(devRoot, "serial", "by-id") + string(filepath.Separator)
+	byPath := filepath.Join(devRoot, "serial", "by-path") + string(filepath.Separator)
+	if strings.HasPrefix(trimmed, byID) || strings.HasPrefix(trimmed, byPath) {
+		resolved, err := filepath.EvalSymlinks(trimmed)
+		if err != nil {
+			return "", fmt.Errorf(
+				"invalid serial port: %q does not resolve to a device (is the adapter connected?): %w",
+				trimmed,
+				err,
+			)
+		}
+		resolved = filepath.Clean(resolved)
+		if filepath.Dir(resolved) != devRoot || !unixSerialBasePattern.MatchString(filepath.Base(resolved)) {
+			return "", fmt.Errorf(
+				"invalid serial port: %q resolves to %q, which is not a serial device",
+				trimmed,
+				resolved,
+			)
+		}
+		return resolved, nil
+	}
+
+	switch {
+	case strings.HasPrefix(trimmed, devRoot+string(filepath.Separator)):
+		cleaned := filepath.Clean(trimmed)
+		if filepath.Dir(cleaned) != devRoot || !unixSerialBasePattern.MatchString(filepath.Base(cleaned)) {
+			return "", fmt.Errorf(
+				"invalid serial port: expected a safe Unix device name such as /dev/ttyUSB0, /dev/cu.usbserial-0001, or /dev/serial/by-id/...",
+			)
+		}
+		return cleaned, nil
+	case filepath.IsAbs(trimmed):
 		return "", fmt.Errorf(
-			"invalid serial port: expected a safe Unix device name such as /dev/ttyUSB0 or /dev/cu.usbserial-0001",
+			"invalid serial port: %q is outside %s",
+			trimmed,
+			devRoot,
 		)
+	default:
+		if !unixSerialBasePattern.MatchString(trimmed) {
+			return "", fmt.Errorf(
+				"invalid serial port: expected a safe Unix device name such as /dev/ttyUSB0, /dev/cu.usbserial-0001, or /dev/serial/by-id/...",
+			)
+		}
+		return filepath.Join(devRoot, trimmed), nil
 	}
-	if strings.HasPrefix(trimmed, "/dev/") {
-		return trimmed, nil
-	}
-	return "/dev/" + trimmed, nil
 }
 
 func normalizeWindowsSerialPath(port string) (string, error) {
@@ -403,15 +777,7 @@ func validateSerialBaud(baud int) error {
 	if baud < 50 || baud > 4000000 {
 		return fmt.Errorf("baud must be between 50 and 4000000")
 	}
-
-	switch runtime.GOOS {
-	case "linux", "darwin":
-		if _, ok := unixSerialBaudRates[baud]; !ok {
-			return fmt.Errorf("unsupported baud rate on this platform: %d (supported up to 230400)", baud)
-		}
-	}
-
-	return nil
+	return validatePlatformSerialBaud(baud)
 }
 
 func serialContextErr(ctx context.Context) error {
