@@ -2,6 +2,7 @@
 
 package builtin
 
+// Mail is intentionally opt-in: include channel_mail in a custom_channels build.
 import (
 	_ "github.com/sipeed/picoclaw/pkg/channels/a2a"
 	_ "github.com/sipeed/picoclaw/pkg/channels/deltachat"
