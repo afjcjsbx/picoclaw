@@ -168,6 +168,16 @@ Exactly one of `message` (start a task) or `task_id` (attach to a task) must be 
 | `task_id` | string | yes | Task id to fetch history for |
 | `limit` | integer | no | Most recent messages to return (default `10`, max `50`) |
 
+### a2a_orchestrate
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `tasks` | array | yes | List of independent tasks to run in parallel, up to 8 items |
+| `tasks[].agent` | string | yes | Name of a configured remote agent for this task |
+| `tasks[].message` | string | yes | The task or question to send to that agent |
+
+Runs up to 8 independent tasks on separate remote agents (or the same agent) in parallel, with at most 4 in flight at a time. Each task starts a fresh conversation (no `context_id`). All answers are collected and returned together. If every task fails the tool call itself is an error; partial failures are reported inline per task.
+
 **Async tasks.** `a2a_call async=true` submits with `returnImmediately` and starts one watcher per pending task (max 8): it subscribes with `SubscribeToTask` (the socket is idle until the remote has news) and falls back to `GetTask` polling (1 s → 5 s) for peers that cannot stream. When the task settles, the result is delivered to the conversation that started it, like a finished `spawn`. If the peer deadline (`timeout`, default 120 s) passes first the watcher reports that the task may still be running and does **not** cancel it: use `a2a_poll` / `a2a_cancel`. Blocking `a2a_call` benefits too: when a peer answers `SendMessage` before the task is done, it now waits over SSE and fetches the result once, instead of running a poll loop.
 
 PicoClaw does not register push webhooks when it is the *client*: that would need an inbound, publicly reachable endpoint, while the SSE watcher only dials out and works behind NAT.
