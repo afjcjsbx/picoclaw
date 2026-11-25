@@ -8,7 +8,7 @@ Short answers to questions that come up often. When an answer points to a full d
 ## Requirements and installation
 
 **What hardware do I need?**
-Any Linux board from ~$10 upward, plus macOS, Windows, and Android. Recent builds use 10–20 MB of RAM and boot in under a second even on 0.6 GHz single-core CPUs. See the [Hardware Compatibility List](hardware-compatibility.md).
+Any Linux board from ~$10 upward, plus macOS and Windows. Recent builds use 10–20 MB of RAM and boot in under a second even on 0.6 GHz single-core CPUs. See the [Hardware Compatibility List](hardware-compatibility.md).
 
 **How do I install PicoClaw?**
 Use the one-line installer (Linux/macOS/PowerShell), download the binaries from [GitHub Releases](https://github.com/afjcjsbx/picoclaw/releases), or read the [Docker & Quick Start Guide](docker.md). The installer sets up both `picoclaw` and `picoclaw-launcher`.

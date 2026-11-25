@@ -97,7 +97,7 @@ python3 scripts/bench-agent-tui.py --cmd opencode --runs 3 --keys '\x03'
 
 </details>
 
-> **[硬件兼容列表](https://afjcjsbx.github.io/picoclaw/guides/hardware-compatibility.html)** —— 从 5 美元的 RISC-V 设备到 Raspberry Pi 和 Android 手机，均已测试。没有你的开发板？欢迎提交 PR！
+> **[硬件兼容列表](https://afjcjsbx.github.io/picoclaw/guides/hardware-compatibility.html)** —— 从 5 美元的 RISC-V 设备到 Raspberry Pi，均已测试。没有你的开发板？欢迎提交 PR！
 
 ## 安装
 

@@ -26,7 +26,6 @@ const sidebars = {
         d('guides/chat-apps', 'Chat Apps'),
         d('guides/configuration', 'Configuration'),
         d('guides/hardware-compatibility', 'Hardware Compatibility'),
-        d('guides/android-termux', 'Android (Termux)'),
         d('guides/faq', 'FAQ'),
       ],
     },
