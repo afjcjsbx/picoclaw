@@ -733,3 +733,141 @@ mosquitto_sub -t "/picoclaw/assistant/device1/response"
 For full configuration options see [MQTT Channel Docs](../channels/mqtt/).
 
 </details>
+
+<a id="slack_webhook"></a>
+<details>
+<summary><b>Slack Webhook (outbound-only)</b></summary>
+
+`slack_webhook` is an **outbound-only** channel. PicoClaw can deliver messages to Slack via Incoming Webhooks, but it never receives or processes inbound messages from Slack. Use it as a notification destination alongside a bidirectional control channel.
+
+**1. Create a Slack Incoming Webhook**
+
+1. Go to [Slack API apps](https://api.slack.com/apps), create or open your app.
+2. Navigate to **Incoming Webhooks** and enable it.
+3. Click **Add New Webhook to Workspace**, select the target channel, and copy the HTTPS URL.
+
+**2. Configure**
+
+```json
+{
+  "channel_list": {
+    "slack_webhook": {
+      "enabled": true,
+      "type": "slack_webhook",
+      "settings": {
+        "webhooks": {
+          "default": {
+            "webhook_url": "NOT_HERE",
+            "username": "PicoClaw",
+            "icon_emoji": ":robot_face:"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Store the actual webhook URL in `~/.picoclaw/.security.yml`:
+
+```yaml
+channel_list:
+  slack_webhook:
+    settings:
+      webhooks:
+        default:
+          webhook_url: "https://hooks.slack.com/services/..."
+```
+
+**Configuration fields**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `webhooks` | Yes | Map of named webhook targets. A `default` target is required |
+| `webhooks.<name>.webhook_url` | Yes | HTTPS Incoming Webhook URL (must use `https://`) |
+| `webhooks.<name>.username` | No | Display name override for the bot in Slack |
+| `webhooks.<name>.icon_emoji` | No | Emoji override for the bot icon in Slack (e.g. `:robot_face:`) |
+
+**3. Send a message to Slack**
+
+Use the `message` tool from any control channel and pass the webhook target name as `chat_id` (defaults to `default` when omitted):
+
+```
+Send the deployment summary to slack_webhook
+```
+
+**4. Run**
+
+```bash
+picoclaw gateway
+```
+
+</details>
+
+<a id="teams_webhook"></a>
+<details>
+<summary><b>Teams Webhook (outbound-only)</b></summary>
+
+`teams_webhook` is an **outbound-only** channel. PicoClaw can deliver messages to Microsoft Teams via Power Automate workflow webhooks, but it never receives or processes inbound messages from Teams.
+
+**1. Create a Teams Incoming Webhook**
+
+1. In Microsoft Teams, open the channel or chat you want to post to.
+2. Go to **Connectors** (or use Power Automate to create a workflow with an HTTP trigger) and add an **Incoming Webhook**.
+3. Copy the generated HTTPS URL.
+
+**2. Configure**
+
+```json
+{
+  "channel_list": {
+    "teams_webhook": {
+      "enabled": true,
+      "type": "teams_webhook",
+      "settings": {
+        "webhooks": {
+          "default": {
+            "webhook_url": "NOT_HERE",
+            "title": "PicoClaw Notification"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Store the actual webhook URL in `~/.picoclaw/.security.yml`:
+
+```yaml
+channel_list:
+  teams_webhook:
+    settings:
+      webhooks:
+        default:
+          webhook_url: "https://prod-xx.westeurope.logic.azure.com/..."
+```
+
+**Configuration fields**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `webhooks` | Yes | Map of named webhook targets. A `default` target is required |
+| `webhooks.<name>.webhook_url` | Yes | HTTPS Power Automate webhook URL (must use `https://`) |
+| `webhooks.<name>.title` | No | Card title shown in the Teams message. Defaults to `PicoClaw Notification` |
+
+**3. Send a message to Teams**
+
+Use the `message` tool from any control channel and pass the webhook target name as `chat_id` (defaults to `default` when omitted):
+
+```
+Send the alert to teams_webhook
+```
+
+**4. Run**
+
+```bash
+picoclaw gateway
+```
+
+</details>
