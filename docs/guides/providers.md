@@ -78,6 +78,10 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **LongCat**         | `longcat`         | `https://api.longcat.chat/openai`                   | OpenAI    | [Get Key](https://longcat.chat/platform)                         |
 | **ModelScope (魔搭)**| `modelscope`     | `https://api-inference.modelscope.cn/v1`            | OpenAI    | [Get Token](https://modelscope.cn/my/tokens)                     |
 | **Xiaomi MiMo**     | `mimo`            | `https://api.xiaomimimo.com/v1`                     | OpenAI    | [Get Key](https://platform.xiaomimimo.com)                       |
+| **MiniMax**         | `minimax`         | `https://api.minimaxi.com/v1`                       | OpenAI    | [Get Key](https://platform.minimaxi.com)                         |
+| **Mistral AI**      | `mistral`         | `https://api.mistral.ai/v1`                         | OpenAI    | [Get Key](https://console.mistral.ai)                            |
+| **Avian**           | `avian`           | `https://api.avian.io/v1`                           | OpenAI    | [Get Key](https://avian.io)                                      |
+| **Novita AI**       | `novita`          | `https://api.novita.ai/openai`                      | OpenAI    | [Get Key](https://novita.ai)                                     |
 | **AWS Bedrock**     | `bedrock`         | _(endpoint from region or env)_                     | Bedrock Converse | AWS SDK credentials (no `api_key` needed) |
 | **Azure OpenAI**    | `azure`           | `https://{resource}.openai.azure.com`               | Azure     | [Get Key](https://portal.azure.com) or keyless (Managed Identity / Entra ID) |
 | **Antigravity**     | `antigravity`     | Google Cloud                                        | Custom    | OAuth only                                                       |
