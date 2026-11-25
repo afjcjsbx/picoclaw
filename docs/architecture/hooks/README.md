@@ -719,6 +719,9 @@ The host does not currently accept new RPCs initiated by the process hook. In pr
 - `dir`
 - `env`
 - `observe`
+  Runtime event kinds to subscribe to. Each entry is a kind string such as
+  `agent.turn.end` or a legacy alias. The values `"*"` and `"all"` (and the
+  empty string `""`) subscribe to every runtime event kind.
 - `intercept`
 
 ## Troubleshooting

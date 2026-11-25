@@ -484,6 +484,10 @@ Representative `kind` values by family:
 | `gateway.*` | `gateway.start`, `gateway.ready`, `gateway.shutdown`, `gateway.reload.started`, `gateway.reload.completed`, `gateway.reload.failed` |
 | `mcp.*` | `mcp.server.connected`, `mcp.server.connecting`, `mcp.server.failed`, `mcp.tool.discovered`, `mcp.tool.call.start`, `mcp.tool.call.end` |
 
+Setting `observe` to `["*"]` or `["all"]` (or the empty string `[""]`) subscribes to
+every runtime event kind. This is equivalent to listing every kind individually and
+is useful during development to capture all activity.
+
 Legacy observe configuration names such as `turn_end` and `tool_exec_start` are still accepted and normalized to runtime event names. New process hook notifications use `hook.runtime_event`.
 
 ---
