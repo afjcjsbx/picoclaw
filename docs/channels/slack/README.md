@@ -17,7 +17,10 @@ Slack is a leading enterprise instant messaging platform. PicoClaw uses Slack's 
       "type": "slack",
       "bot_token": "xoxb-...",
       "app_token": "xapp-...",
-      "allow_from": []
+      "allow_from": [],
+      "placeholder": { "enabled": true, "text": ["Thinking..."] },
+      "group_trigger": { "mention_only": false },
+      "reasoning_channel_id": ""
     }
   }
 }
@@ -29,6 +32,9 @@ Slack is a leading enterprise instant messaging platform. PicoClaw uses Slack's 
 | bot_token  | string | Yes      | Bot User OAuth Token for the Slack bot (starts with xoxb-)               |
 | app_token  | string | Yes      | Socket Mode App Level Token for the Slack app (starts with xapp-)        |
 | allow_from | array  | No       | User ID whitelist; empty means all users are allowed                     |
+| placeholder | object | No      | Placeholder message shown while the agent is working                     |
+| group_trigger | object | No    | Group trigger settings (e.g. `{ "mention_only": true }`)                 |
+| reasoning_channel_id | string | No | Optional channel ID to route reasoning/thinking output to a separate channel |
 
 ## Setup
 
