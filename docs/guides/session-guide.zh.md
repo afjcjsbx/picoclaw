@@ -142,7 +142,7 @@ legacy context manager 还会保护头部和尾部，而不是只保留最后 4 
 - `min_tail_user_messages`（默认 `1`）：尾部至少保留的真实 `user` 消息条数。`0` 关闭该保证。
 - `tail_token_budget`（默认自动）：从最新消息向前按估算 token 数累计的尾部预算。自动值为可用窗口（`context_window - max_tokens`）的 10%，限制在 2,000-32,000，且不超过窗口的一半。可以设置明确的 token 数，或设为 `0` 只保留消息条数/用户消息下限。
 
-这些配置位于 `agents.defaults`，也可以使用对应的 `PICOCLAW_AGENTS_DEFAULTS_*` 环境变量。如果受保护的尾部本身超出预算，尾部内的旧工具输出会被归档到 `<workspace>/.artifacts/evicted/`，并替换为指向文件的 stub，因此单个巨大的工具结果不会导致整段对话被丢弃。
+这些配置位于 `agents.defaults`，也可以使用对应的 `PICOCLAW_AGENTS_DEFAULTS_*` 环境变量。切分点始终对齐到 Turn 边界，因此当唯一安全的边界晚于目标位置时，实际保留的尾部可能少于 `protect_last_n`。如果受保护的尾部本身超出预算，尾部内的旧工具输出会被归档到 `<workspace>/.artifacts/evicted/`，并替换为指向文件的 stub，因此单个巨大的工具结果不会导致整段对话被丢弃。这只能尽最大可能：只有足够大的工具结果会成为候选，由 user/assistant 消息组成的尾部仍可能超出预算。
 
 ## 常见配置方案
 

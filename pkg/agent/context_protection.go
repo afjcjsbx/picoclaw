@@ -155,20 +155,27 @@ func pruneProtectedHistory(
 	protection historyProtection,
 	agent *AgentInstance,
 ) bool {
-	historicalTailStart := min(protection.tailStartBeforeSnap, protection.compactableEnd)
-	if historicalTailStart < protection.headEnd {
-		historicalTailStart = protection.headEnd
+	// Prefer the snapped tail when it is a real protected boundary (a backward
+	// snap). When there is no safe Turn boundary, the unsnapped target still
+	// separates old outputs from the floors; pruning does not need a Turn cut
+	// because it keeps every message.
+	tailStart := protection.tailStartBeforeSnap
+	if protection.ok && protection.snappedTailStart < tailStart {
+		tailStart = protection.snappedTailStart
 	}
+	tailStart = min(tailStart, protection.compactableEnd)
+	tailStart = max(tailStart, protection.headEnd)
 	pruned := pruneToolResultsInRange(
 		history,
 		protection.headEnd,
-		historicalTailStart,
+		tailStart,
 		agent.Workspace,
 	)
 	if pruneToolResultsToBudget(
 		history,
-		historicalTailStart,
+		tailStart,
 		protection.compactableEnd,
+		len(history),
 		agent.Workspace,
 		agent.Provider,
 		protection.tailTokenBudget,

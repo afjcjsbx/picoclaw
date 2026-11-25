@@ -280,7 +280,7 @@ func TestPruneToolResultsToBudget_StopsWhenTheRangeFits(t *testing.T) {
 		{Role: "tool", Content: bulky},
 		{Role: "tool", Content: bulky},
 	}
-	if !pruneToolResultsToBudget(history, 0, len(history), workspace, nil, 2_500) {
+	if !pruneToolResultsToBudget(history, 0, len(history), len(history), workspace, nil, 2_500) {
 		t.Fatal("expected the first result to be evicted")
 	}
 	if !strings.HasPrefix(history[0].Content, archivedToolResultPrefix) {

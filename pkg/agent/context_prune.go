@@ -111,11 +111,13 @@ func pruneToolResultsInRange(
 }
 
 // pruneToolResultsToBudget evicts the oldest bulky tool outputs in
-// history[start:end] until the range fits budget. It stops as soon as the range
-// fits, so newer tail results survive when an older one is enough.
+// history[start:end] until history[start:measureEnd] fits budget. measureEnd can
+// extend past end so the unprunable active-turn messages counted in the tail
+// are still accounted for. It stops as soon as the measured range fits, so
+// newer tail results survive when an older one is enough.
 func pruneToolResultsToBudget(
 	history []providers.Message,
-	start, end int,
+	start, end, measureEnd int,
 	workspace string,
 	provider providers.LLMProvider,
 	budget int,
@@ -124,11 +126,12 @@ func pruneToolResultsToBudget(
 		return false
 	}
 	start, end = clampHistoryRange(history, start, end)
+	start, measureEnd = clampHistoryRange(history, start, measureEnd)
 	if start >= end {
 		return false
 	}
 
-	tokens := estimateRangeTokens(history, start, end, provider)
+	tokens := estimateRangeTokens(history, start, measureEnd, provider)
 	if tokens <= budget {
 		return false
 	}
