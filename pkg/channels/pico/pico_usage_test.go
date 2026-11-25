@@ -16,6 +16,7 @@ func TestSetTokenUsagePayloadTurnCounters(t *testing.T) {
 			TotalTokens:   1801,
 			Requests:      4,
 			ContextTokens: 320,
+			DurationMS:    4200,
 		})
 
 		raw, ok := payload[PayloadKeyUsage]
@@ -40,6 +41,9 @@ func TestSetTokenUsagePayloadTurnCounters(t *testing.T) {
 		}
 		if usage["context_tokens"] != 320 {
 			t.Errorf("context_tokens = %v, want 320", usage["context_tokens"])
+		}
+		if usage["duration_ms"] != int64(4200) {
+			t.Errorf("duration_ms = %v, want 4200", usage["duration_ms"])
 		}
 	})
 

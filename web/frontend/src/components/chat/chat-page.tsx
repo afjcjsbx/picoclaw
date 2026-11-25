@@ -22,6 +22,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react"
@@ -71,6 +72,7 @@ import {
   getTransferredFiles,
   hasFileTransfer,
 } from "@/features/chat/image-input"
+import { getPromptHistory } from "@/features/chat/prompt-history"
 import {
   mergeSplitConversations,
   removeSplitConversation,
@@ -851,6 +853,7 @@ export function ChatPage() {
     loadOlderHistory,
     newChat,
   } = usePicoChat()
+  const promptHistory = useMemo(() => getPromptHistory(messages), [messages])
 
   // isTyping only tracks the "waiting for the model" phase, while the activity
   // stream keeps reporting the session as running until the turn is complete.
@@ -1685,6 +1688,7 @@ export function ChatPage() {
             isDragActive={isDragActive}
             contextUsage={contextUsage}
             slashCommands={slashCommands}
+            promptHistory={promptHistory}
             focusSignal={composerFocusSignal}
             onFocusHandled={handleComposerFocusHandled}
           />

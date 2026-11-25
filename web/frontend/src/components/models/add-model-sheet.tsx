@@ -42,6 +42,7 @@ import {
   getSubmittedAPIBase,
   normalizeApiBase,
 } from "./model-provider-form-shared"
+import { validateModelSampling } from "./model-sampling"
 import { type FieldValidation, validateModelField } from "./model-validation"
 import { ProviderCombobox } from "./provider-combobox"
 import {
@@ -67,6 +68,9 @@ interface AddForm {
   workspace: string
   rpm: string
   maxTokensField: string
+  maxTokens: string
+  temperature: string
+  contextWindow: string
   requestTimeout: string
   providerSort: string
   thinkingLevel: string
@@ -89,6 +93,9 @@ const EMPTY_ADD_FORM: AddForm = {
   workspace: "",
   rpm: "",
   maxTokensField: "",
+  maxTokens: "",
+  temperature: "",
+  contextWindow: "",
   requestTimeout: "",
   providerSort: "",
   thinkingLevel: "",
@@ -385,6 +392,16 @@ export function AddModelSheet({
       return
     }
 
+    const sampling = validateModelSampling(form)
+    if (!sampling.ok) {
+      setServerError(
+        t(`models.field.${sampling.field}`) +
+          ": " +
+          t(`models.field.samplingError.${sampling.reason}`),
+      )
+      return
+    }
+
     onMutationStarted?.()
     setSaving(true)
     setServerError("")
@@ -406,6 +423,9 @@ export function AddModelSheet({
         workspace: form.workspace.trim() || undefined,
         rpm: form.rpm ? Number(form.rpm) : undefined,
         max_tokens_field: form.maxTokensField.trim() || undefined,
+        max_tokens: sampling.payload.max_tokens,
+        temperature: sampling.payload.temperature,
+        context_window: sampling.payload.context_window,
         request_timeout: form.requestTimeout
           ? Number(form.requestTimeout)
           : undefined,
@@ -756,6 +776,48 @@ export function AddModelSheet({
                     value={form.maxTokensField}
                     onChange={setField("maxTokensField")}
                     placeholder="max_completion_tokens"
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.maxTokens")}
+                  hint={t("models.field.maxTokensHint")}
+                >
+                  <Input
+                    value={form.maxTokens}
+                    onChange={setField("maxTokens")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={1}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.temperature")}
+                  hint={t("models.field.temperatureHint")}
+                >
+                  <Input
+                    value={form.temperature}
+                    onChange={setField("temperature")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={0.1}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.contextWindow")}
+                  hint={t("models.field.contextWindowHint")}
+                >
+                  <Input
+                    value={form.contextWindow}
+                    onChange={setField("contextWindow")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={1}
                   />
                 </Field>
 

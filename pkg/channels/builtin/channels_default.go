@@ -3,6 +3,7 @@
 package builtin
 
 import (
+	_ "github.com/sipeed/picoclaw/pkg/channels/a2a"
 	_ "github.com/sipeed/picoclaw/pkg/channels/deltachat"
 	_ "github.com/sipeed/picoclaw/pkg/channels/dingtalk"
 	_ "github.com/sipeed/picoclaw/pkg/channels/discord"

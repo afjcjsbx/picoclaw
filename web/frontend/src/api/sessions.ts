@@ -29,6 +29,7 @@ export interface SessionDetail {
       cache_creation_tokens?: number
       requests?: number
       context_tokens?: number
+      duration_ms?: number
       cost_usd?: number
     }
     media?: string[]

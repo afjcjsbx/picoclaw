@@ -1984,6 +1984,9 @@ func setTokenUsagePayload(payload map[string]any, usage *bus.TokenUsage) {
 	if usage.ContextTokens > 0 {
 		block["context_tokens"] = usage.ContextTokens
 	}
+	if usage.DurationMS > 0 {
+		block["duration_ms"] = usage.DurationMS
+	}
 	payload[PayloadKeyUsage] = block
 }
 

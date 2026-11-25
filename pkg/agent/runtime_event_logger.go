@@ -283,7 +283,13 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 	case ContextCompressPayload:
 		fields["reason"] = payload.Reason
 		fields["dropped_messages"] = payload.DroppedMessages
+		fields["summarized_messages"] = payload.SummarizedMessages
 		fields["remaining_messages"] = payload.RemainingMessages
+		fields["attempts"] = payload.Attempts
+		fields["fallback"] = payload.Fallback
+		if payload.ArchivedPath != "" {
+			fields["archived_path"] = payload.ArchivedPath
+		}
 	case SessionSummarizePayload:
 		fields["summarized_messages"] = payload.SummarizedMessages
 		fields["kept_messages"] = payload.KeptMessages

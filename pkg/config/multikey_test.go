@@ -428,3 +428,25 @@ func TestExpandMultiKeyModels_PrimaryKeepsKeysAndEnabled(t *testing.T) {
 		}
 	}
 }
+
+func TestExpandMultiKeyModels_PreservesSamplingFields(t *testing.T) {
+	temp := 0.2
+	modelCfg := &ModelConfig{
+		ModelName:     "gpt-4",
+		Model:         "openai/gpt-4o",
+		MaxTokens:     2048,
+		Temperature:   &temp,
+		ContextWindow: 32000,
+		APIKeys:       SimpleSecureStrings("key0", "key1"),
+	}
+
+	for i, got := range expandMultiKeyModels([]*ModelConfig{modelCfg}) {
+		if got.MaxTokens != 2048 || got.ContextWindow != 32000 {
+			t.Errorf("entry %d: max_tokens/context_window = %d/%d, want 2048/32000",
+				i, got.MaxTokens, got.ContextWindow)
+		}
+		if got.Temperature == nil || *got.Temperature != 0.2 {
+			t.Errorf("entry %d: temperature = %v, want 0.2", i, got.Temperature)
+		}
+	}
+}

@@ -17,6 +17,8 @@ export interface CoreConfigForm {
   cronExecTimeoutMinutes: string
   maxTokens: string
   contextWindow: string
+  auxiliaryCompaction: string
+  auxiliaryVision: string
   maxToolIterations: string
   summarizeMessageThreshold: string
   summarizeTokenPercent: string
@@ -105,6 +107,8 @@ export const EMPTY_FORM: CoreConfigForm = {
   cronExecTimeoutMinutes: "5",
   maxTokens: "32768",
   contextWindow: "",
+  auxiliaryCompaction: "",
+  auxiliaryVision: "",
   maxToolIterations: "50",
   summarizeMessageThreshold: "20",
   summarizeTokenPercent: "75",
@@ -218,6 +222,7 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
   const cron = asRecord(tools.cron)
   const exec = asRecord(tools.exec)
   const toolFeedback = asRecord(defaults.tool_feedback)
+  const auxiliary = asRecord(defaults.auxiliary)
 
   return {
     workspace: asString(defaults.workspace) || EMPTY_FORM.workspace,
@@ -280,6 +285,8 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
       defaults.context_window,
       EMPTY_FORM.contextWindow,
     ),
+    auxiliaryCompaction: asString(auxiliary.compaction),
+    auxiliaryVision: asString(auxiliary.vision),
     maxToolIterations: asNumberString(
       defaults.max_tool_iterations,
       EMPTY_FORM.maxToolIterations,

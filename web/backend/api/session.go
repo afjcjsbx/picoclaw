@@ -84,6 +84,7 @@ type sessionUsage struct {
 	CostUSD             float64 `json:"cost_usd,omitempty"`
 	Requests            int     `json:"requests,omitempty"`
 	ContextTokens       int     `json:"context_tokens,omitempty"`
+	DurationMS          int64   `json:"duration_ms,omitempty"`
 }
 
 func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
@@ -102,6 +103,7 @@ func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
 		CostUSD:             usage.CostUSD,
 		Requests:            usage.Requests,
 		ContextTokens:       usage.ContextTokens,
+		DurationMS:          usage.DurationMS,
 	}
 }
 

@@ -3,11 +3,13 @@ package updater
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/minio/selfupdate"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/utils"
@@ -49,7 +52,17 @@ func getWithRetry(rawURL string) (*http.Response, error) {
 // release of the current project is used. platform/arch can be used to
 // select the correct asset (e.g. "linux", "amd64").
 func DownloadAndExtractRelease(releaseURL, platform, arch string) (string, error) {
-	assetURL, checksum, err := findAssetInfo(releaseURL, platform, arch)
+	rel, err := fetchReleaseInfo(releaseURL)
+	if err != nil {
+		return "", err
+	}
+	return rel.downloadAndExtract(platform, arch)
+}
+
+// downloadAndExtract downloads the asset matching platform and arch and
+// extracts it to a temporary directory.
+func (rel *releaseInfo) downloadAndExtract(platform, arch string) (string, error) {
+	assetURL, checksum, err := rel.findAsset(platform, arch)
 	if err != nil {
 		return "", err
 	}
@@ -144,7 +157,17 @@ func UpdateSelfFromRelease(releaseURL, platform, arch, programName string) error
 		arch = runtime.GOARCH
 	}
 
-	dir, err := DownloadAndExtractRelease(releaseURL, platform, arch)
+	rel, err := fetchReleaseInfo(releaseURL)
+	if err != nil {
+		return err
+	}
+	return rel.updateSelf(platform, arch, programName)
+}
+
+// updateSelf applies the release binary matching programName to the currently
+// running executable.
+func (rel *releaseInfo) updateSelf(platform, arch, programName string) error {
+	dir, err := rel.downloadAndExtract(platform, arch)
 	if err != nil {
 		return err
 	}
@@ -209,13 +232,26 @@ func GetNightlyReleaseAPIURL() string {
 	return GetReleaseTagAPIURL("sipeed", "nightly")
 }
 
-// findAssetURL resolves the appropriate asset URL for the given release
-// selector. It accepts direct archive URLs as well as GitHub release URLs
-// or empty (latest release for the project).
-func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
-	// returns (assetURL, sha256ChecksumHex, error)
+// releaseAsset is the subset of GitHub release asset metadata needed to pick
+// a download and verify its checksum.
+type releaseAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Digest             string `json:"digest"`
+}
+
+// releaseInfo is the subset of GitHub release metadata needed to check for a
+// newer version and apply it.
+type releaseInfo struct {
+	TagName string         `json:"tag_name"`
+	Assets  []releaseAsset `json:"assets"`
+}
+
+// fetchReleaseInfo queries the release API for releaseURL. An empty releaseURL
+// selects the latest stable release for the project.
+func fetchReleaseInfo(releaseURL string) (*releaseInfo, error) {
 	if looksLikeDirectAssetURL(releaseURL) {
-		return "", "", fmt.Errorf("no checksum found for asset %s", releaseURL)
+		return nil, fmt.Errorf("no checksum found for asset %s", releaseURL)
 	}
 
 	apiURL := buildReleaseAPIURL(releaseURL)
@@ -227,24 +263,35 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 
 	resp, err := getWithRetry(apiURL)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("failed to query releases: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("failed to query releases: status %d", resp.StatusCode)
 	}
 
-	var data struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-			Digest             string `json:"digest"`
-		} `json:"assets"`
+	var rel releaseInfo
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, err
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	return &rel, nil
+}
+
+// findAssetInfo resolves the appropriate asset URL and checksum for the given
+// release selector. It accepts direct archive URLs as well as GitHub release
+// URLs or empty (latest release for the project).
+func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
+	rel, err := fetchReleaseInfo(releaseURL)
+	if err != nil {
 		return "", "", err
 	}
+	return rel.findAsset(platform, arch)
+}
+
+// findAsset selects the asset matching platform and arch and returns its URL
+// and SHA256 checksum.
+func (rel *releaseInfo) findAsset(platform, arch string) (string, string, error) {
+	// returns (assetURL, sha256ChecksumHex, error)
 
 	// Selection order: platform -> arch -> extension.
 	platformLower := strings.ToLower(platform)
@@ -260,7 +307,7 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 
 	// collect indices of assets that contain platform (if provided)
 	var platformIdx []int
-	for i, a := range data.Assets {
+	for i, a := range rel.Assets {
 		n := strings.ToLower(a.Name)
 		if platform == "" || strings.Contains(n, platformLower) {
 			platformIdx = append(platformIdx, i)
@@ -278,7 +325,7 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 			// aliases are ordered by preference: the first one matching any asset wins
 			for _, ali := range archAliases(archLower) {
 				for _, i := range idxs {
-					if assetHasArchSuffix(data.Assets[i].Name, ali) {
+					if assetHasArchSuffix(rel.Assets[i].Name, ali) {
 						archIdx = append(archIdx, i)
 					}
 				}
@@ -299,38 +346,38 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 		if platformLower == "windows" {
 			// prefer .zip only
 			for _, i := range candidates {
-				if isZip(strings.ToLower(data.Assets[i].Name)) {
-					return data.Assets[i].BrowserDownloadURL, i, true
+				if isZip(strings.ToLower(rel.Assets[i].Name)) {
+					return rel.Assets[i].BrowserDownloadURL, i, true
 				}
 			}
 			// if no zip found, fallthrough to first candidate
-			return data.Assets[candidates[0]].BrowserDownloadURL, candidates[0], true
+			return rel.Assets[candidates[0]].BrowserDownloadURL, candidates[0], true
 		}
 
 		// non-windows: prefer tar.gz/tgz, then tar, then zip
 		for _, i := range candidates {
-			if isTarGz(strings.ToLower(data.Assets[i].Name)) {
-				return data.Assets[i].BrowserDownloadURL, i, true
+			if isTarGz(strings.ToLower(rel.Assets[i].Name)) {
+				return rel.Assets[i].BrowserDownloadURL, i, true
 			}
 		}
 		for _, i := range candidates {
-			if isTar(strings.ToLower(data.Assets[i].Name)) {
-				return data.Assets[i].BrowserDownloadURL, i, true
+			if isTar(strings.ToLower(rel.Assets[i].Name)) {
+				return rel.Assets[i].BrowserDownloadURL, i, true
 			}
 		}
 		for _, i := range candidates {
-			if isZip(strings.ToLower(data.Assets[i].Name)) {
-				return data.Assets[i].BrowserDownloadURL, i, true
+			if isZip(strings.ToLower(rel.Assets[i].Name)) {
+				return rel.Assets[i].BrowserDownloadURL, i, true
 			}
 		}
 		// fallback to first candidate
-		return data.Assets[candidates[0]].BrowserDownloadURL, candidates[0], true
+		return rel.Assets[candidates[0]].BrowserDownloadURL, candidates[0], true
 	}
 
 	// Try platform matches first
 	if url, idx, ok := pickBest(platformIdx); ok {
 		// attempt to find checksum: prefer asset digest from API if present
-		if d := strings.TrimSpace(data.Assets[idx].Digest); d != "" {
+		if d := strings.TrimSpace(rel.Assets[idx].Digest); d != "" {
 			dLower := strings.ToLower(d)
 			if strings.HasPrefix(dLower, "sha256:") {
 				hexpart := strings.TrimPrefix(dLower, "sha256:")
@@ -342,14 +389,14 @@ func findAssetInfo(releaseURL, platform, arch string) (string, string, error) {
 			}
 		}
 		// Look for checksum assets and verify by computing the asset's sha256.
-		for j, a := range data.Assets {
+		for j, a := range rel.Assets {
 			n := strings.ToLower(a.Name)
 			if strings.Contains(n, "sha256") ||
 				strings.Contains(n, "sha256sum") ||
 				strings.Contains(n, "checksums") ||
 				strings.HasSuffix(n, ".sha256") ||
 				strings.HasSuffix(n, ".sha256sum") {
-				resp2, err := getWithRetry(data.Assets[j].BrowserDownloadURL)
+				resp2, err := getWithRetry(rel.Assets[j].BrowserDownloadURL)
 				if err != nil {
 					continue
 				}
@@ -753,29 +800,150 @@ func findBinaryInDir(dir, programName string) (string, error) {
 	return found, nil
 }
 
-// NewUpdateCommand returns a cobra command that triggers UpdateSelfFromRelease.
+// updateOptions configures a single `picoclaw update` run.
+type updateOptions struct {
+	releaseURL string
+	platform   string
+	arch       string
+	binaryName string
+	assumeYes  bool
+	checkOnly  bool
+	current    string
+	display    string
+}
+
+// NewUpdateCommand returns a cobra command that checks for a newer release and
+// optionally applies it.
 func NewUpdateCommand(binaryName string) *cobra.Command {
-	var urlStr, platform, arch string
+	var (
+		urlStr, platform, arch string
+		assumeYes, checkOnly   bool
+	)
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Check and apply updates from GitHub releases",
+		Short: "Check for and apply updates from GitHub releases",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if platform == "" {
-				platform = runtime.GOOS
-			}
-			if arch == "" {
-				arch = runtime.GOARCH
-			}
-			fmt.Printf("Current version: %s\n", config.FormatVersion())
-			if err := UpdateSelfFromRelease(urlStr, platform, arch, binaryName); err != nil {
-				return err
-			}
-			fmt.Println("Update applied; restart to use the new version.")
-			return nil
+			return runUpdate(cmd, updateOptions{
+				releaseURL: urlStr,
+				platform:   platform,
+				arch:       arch,
+				binaryName: binaryName,
+				assumeYes:  assumeYes,
+				checkOnly:  checkOnly,
+				current:    config.GetVersion(),
+				display:    config.FormatVersion(),
+			})
 		},
 	}
 	cmd.Flags().StringVarP(&urlStr, "url", "u", "", "Direct URL to download release asset or release page")
 	cmd.Flags().StringVar(&platform, "platform", "", "Target platform (default: runtime.GOOS)")
 	cmd.Flags().StringVar(&arch, "arch", "", "Target arch (default: runtime.GOARCH)")
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "Apply the update without asking for confirmation")
+	cmd.Flags().BoolVar(&checkOnly, "check", false, "Only check whether a newer release is available")
 	return cmd
+}
+
+// updateSelfFn applies a fetched release. It is a variable so tests can avoid
+// replacing the test binary.
+var updateSelfFn = func(rel *releaseInfo, platform, arch, programName string) error {
+	return rel.updateSelf(platform, arch, programName)
+}
+
+// stdinIsTerminalFn reports whether the command can prompt the user. It is a
+// variable so tests can exercise both the interactive and piped paths.
+var stdinIsTerminalFn = func(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+func runUpdate(cmd *cobra.Command, opts updateOptions) error {
+	if opts.platform == "" {
+		opts.platform = runtime.GOOS
+	}
+	if opts.arch == "" {
+		opts.arch = runtime.GOARCH
+	}
+
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "Current version: %s\n", opts.display)
+	fmt.Fprintln(out, "Checking for updates...")
+
+	rel, err := fetchReleaseInfo(opts.releaseURL)
+	if err != nil {
+		return fmt.Errorf("check for updates: %w", err)
+	}
+	latest := strings.TrimSpace(rel.TagName)
+	if latest == "" {
+		return errors.New("check for updates: release has no tag name")
+	}
+	fmt.Fprintf(out, "Latest release: %s\n", latest)
+
+	comparison, canCompare := compareVersions(opts.current, latest)
+	switch {
+	case !canCompare:
+		fmt.Fprintln(out, "The versions cannot be compared automatically.")
+	case comparison < 0:
+		fmt.Fprintf(out, "Update available: %s -> %s\n", opts.current, latest)
+	case opts.releaseURL != "" && comparison > 0:
+		fmt.Fprintf(out, "Requested release %s is older than the current version.\n", latest)
+	case opts.releaseURL != "" && comparison == 0:
+		fmt.Fprintf(out, "Requested release %s matches the current version.\n", latest)
+	default:
+		if comparison > 0 {
+			fmt.Fprintln(out, "Current version is newer than the latest release; nothing to do.")
+		} else {
+			fmt.Fprintln(out, "Already up to date.")
+		}
+		return nil
+	}
+
+	if opts.checkOnly {
+		if canCompare && comparison < 0 {
+			fmt.Fprintln(out, "Run without --check to apply the update.")
+		}
+		return nil
+	}
+
+	if !opts.assumeYes {
+		if !stdinIsTerminalFn(cmd.InOrStdin()) {
+			fmt.Fprintln(
+				out,
+				"Applying update without confirmation (stdin is not a terminal; use --check to only check).",
+			)
+		} else {
+			confirmed, err := confirmUpdate(cmd.InOrStdin(), out, latest)
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				fmt.Fprintln(out, "Update canceled.")
+				return nil
+			}
+		}
+	}
+
+	fmt.Fprintln(
+		out,
+		"Warning: do not restart or power off the device while the update is downloading or being applied.",
+	)
+	if err := updateSelfFn(rel, opts.platform, opts.arch, opts.binaryName); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Update applied; restart to use the new version.")
+	return nil
+}
+
+// confirmUpdate asks the user whether to apply latest and reports the answer.
+// An empty answer, a blank line, or EOF means no.
+func confirmUpdate(r io.Reader, w io.Writer, latest string) (bool, error) {
+	if _, err := fmt.Fprintf(w, "Update to %s? [y/N]: ", latest); err != nil {
+		return false, err
+	}
+
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	answer := strings.TrimSpace(strings.ToLower(line))
+	return answer == "y" || answer == "yes", nil
 }

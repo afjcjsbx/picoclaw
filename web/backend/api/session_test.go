@@ -64,6 +64,7 @@ func TestSessionTranscriptMessagesPreservesUsage(t *testing.T) {
 			CostUSD:             0.0123,
 			Requests:            3,
 			ContextTokens:       900,
+			DurationMS:          4200,
 		},
 	}}, 0, false)
 
@@ -83,6 +84,7 @@ func TestSessionTranscriptMessagesPreservesUsage(t *testing.T) {
 		CostUSD:             0.0123,
 		Requests:            3,
 		ContextTokens:       900,
+		DurationMS:          4200,
 	}
 	if *usage != want {
 		t.Fatalf("Usage = %+v, want %+v", *usage, want)

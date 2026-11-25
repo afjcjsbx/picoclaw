@@ -40,7 +40,9 @@ import {
 import {
   estimateUsageCostUsd,
   formatTokenCount,
+  formatTokensPerSecond,
   formatUsageCostUsd,
+  tokensPerSecond,
 } from "@/features/chat/usage"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 import { formatMessageTime } from "@/hooks/use-pico-chat"
@@ -594,6 +596,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const usageOutput = usage?.output_tokens
   const usageRequests = usage?.requests
   const usageContextTokens = usage?.context_tokens
+  const usageTokensPerSecond = usage ? tokensPerSecond(usage) : undefined
   const usageCostUsd = usage
     ? estimateUsageCostUsd(usage, modelName)
     : undefined
@@ -881,6 +884,16 @@ export const AssistantMessage = memo(function AssistantMessage({
                           output: formatTokenCount(usageOutput ?? 0),
                         })}
                       </span>
+                      {usageTokensPerSecond !== undefined && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>
+                            {t("chat.usage.throughputValue", {
+                              rate: formatTokensPerSecond(usageTokensPerSecond),
+                            })}
+                          </span>
+                        </>
+                      )}
                       {usageCostUsd !== undefined && (
                         <>
                           <span aria-hidden="true">·</span>
@@ -921,6 +934,18 @@ export const AssistantMessage = memo(function AssistantMessage({
                           </span>
                           <span className="text-right tabular-nums">
                             {formatTokenCount(usageOutput)}
+                          </span>
+                        </>
+                      )}
+                      {usageTokensPerSecond !== undefined && (
+                        <>
+                          <span className="opacity-70">
+                            {t("chat.usage.throughput")}
+                          </span>
+                          <span className="text-right tabular-nums">
+                            {t("chat.usage.throughputValue", {
+                              rate: formatTokensPerSecond(usageTokensPerSecond),
+                            })}
                           </span>
                         </>
                       )}

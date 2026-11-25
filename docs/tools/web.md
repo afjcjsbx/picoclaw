@@ -29,6 +29,14 @@ General settings for fetching and processing webpage content.
 | `tools.web.format`  | string | "plaintext"   | Output format of the fetched content. Options: `plaintext` or `markdown` (recommended).       |
 | `tools.web.proxy`   | string | ""            | Optional proxy URL for web tools (`http`, `https`, `socks5`, `socks5h`). For authenticated proxies, prefer the `HTTP_PROXY`/`HTTPS_PROXY` environment variables instead of embedding credentials in config |
 
+### Pages that need a real browser
+
+`web_fetch` is an HTTP client, not a browser: it does not execute JavaScript, keep cookies or a login session, or interact with the page. When a site returns only a JavaScript shell, a 403/429, a cookie or consent wall, or content that appears after client-side rendering, use [browser automation](browser-automation.md) instead. Playwright MCP drives a real Chromium browser with the same agent, while `web_fetch` remains the cheaper default for static pages and structured endpoints.
+
+`web_fetch` already retries one Cloudflare `cf-mitigated: challenge` response with an honest PicoClaw user agent, but it cannot execute the challenge page. If the retry still returns a challenge or a 403/429, the browser is the next step.
+
+A real browser also helps with sites that treat non-browser clients differently, but it is not a CAPTCHA solver or a guarantee against bot detection. See [Anti-bot reality](browser-automation.md#anti-bot-reality).
+
 ## Brave
 
 | Config        | Type     | Default | Description                                    |

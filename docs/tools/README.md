@@ -18,6 +18,7 @@ PicoClaw registers its tools dynamically at runtime. Each one can be enabled or 
 | Subagents | `spawn`, `subagent`, `spawn_status`, `delegate` | [Subagent tools](subagents.md) |
 | Skills registry | `find_skills`, `install_skill` | [Skills tools](skills.md) |
 | MCP | `mcp_<server>_<tool>`, `tool_search_tool_bm25`, `tool_search_tool_regex` | [MCP tools](mcp.md) |
+| Browser automation (MCP) | `mcp_playwright_browser_*` (navigate, snapshot, click, type, screenshot, …) | [Browser automation](browser-automation.md) |
 | Hardware | `i2c`, `spi`, `serial` | [Hardware tools](hardware.md) |
 | Planning | `todo` | [Todo planning tool](todo.md) |
 
@@ -37,3 +38,4 @@ Tool visibility can be narrowed per agent and per request, on top of the global 
 ## Deep dives
 
 - [Image Generation](image-generation.md): configure the `image_generate` tool with OpenAI, Gemini, or OpenRouter models.
+- [Browser automation](browser-automation.md): drive a real Chromium browser through Playwright MCP, including CDP and managed-browser setups.

@@ -95,7 +95,7 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.llm.delta` | Reserved for streaming LLM deltas; the kind is defined, but the current implementation has no natural emit site. | `content_delta_len`, `reasoning_delta_len` |
 | `agent.llm.response` | After the LLM provider returns a complete response. | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | Before retrying an LLM request after context, rate-limit, transient provider, or fallback handling. | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
-| `agent.context.compress` | Agent context history is compressed, for example during proactive budget checks or LLM retry handling. | `reason`, `dropped_messages`, `remaining_messages` |
+| `agent.context.compress` | Agent context history is compressed, for example during proactive budget checks or LLM retry handling. | `reason`, `dropped_messages`, `summarized_messages`, `remaining_messages`, `attempts`, `fallback`, `archived_path` |
 | `agent.session.summarize` | Session history summarization completes, either asynchronously after a turn or on a manual `/compact` (legacy context manager). | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
 | `agent.tool.exec_start` | Before the agent executes a tool call. | `tool`, `args_count`; full arguments are not logged by default |
 | `agent.tool.exec_end` | After a tool call completes, including successful results, tool errors, and async results. For tools that ran concurrently it is emitted in call order once the whole parallel segment finished. | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
@@ -198,7 +198,7 @@ Agent events add safe payload summaries:
 | `agent.llm.delta` | `content_delta_len`, `reasoning_delta_len` |
 | `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
-| `agent.context.compress` | `reason`, `dropped_messages`, `remaining_messages` |
+| `agent.context.compress` | `reason`, `dropped_messages`, `summarized_messages`, `remaining_messages`, `attempts`, `fallback`, `archived_path` |
 | `agent.session.summarize` | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
 | `agent.tool.exec_start` | `tool`, `args_count` |
 | `agent.tool.exec_end` | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |

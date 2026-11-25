@@ -93,6 +93,7 @@ func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
 		CacheReadTokens:     10,
 		CacheCreationTokens: 5,
 		CostUSD:             0.001,
+		DurationMS:          1200,
 	})
 	ts.AddUsage("model-a", &providers.UsageInfo{
 		PromptTokens:     200,
@@ -100,6 +101,7 @@ func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
 		TotalTokens:      250,
 		CacheReadTokens:  20,
 		CostUSD:          0.002,
+		DurationMS:       800,
 	})
 
 	want := providers.UsageInfo{
@@ -111,6 +113,7 @@ func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
 		CostUSD:             0.003,
 		Requests:            2,
 		ContextTokens:       200,
+		DurationMS:          2000,
 	}
 	if got := ts.GetTurnUsage(); got == nil || !reflect.DeepEqual(*got, want) {
 		t.Fatalf("GetTurnUsage() = %+v, want %+v", got, want)

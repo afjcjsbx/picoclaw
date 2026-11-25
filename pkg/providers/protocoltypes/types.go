@@ -85,6 +85,12 @@ type UsageInfo struct {
 	Requests      int `json:"requests,omitempty"`
 	ContextTokens int `json:"context_tokens,omitempty"`
 
+	// DurationMS is how long the provider calls aggregated into the turn took,
+	// measured by the agent around each request and excluding tool execution.
+	// Clients divide CompletionTokens by it to show generation throughput. Zero
+	// means the duration was not recorded, as for usage from older sessions.
+	DurationMS int64 `json:"duration_ms,omitempty"`
+
 	// ByModel splits a turn aggregate by the model that served each call. It is
 	// set only when the turn used more than one model, for example after a
 	// light-model escalation, so per-model totals stay exact.

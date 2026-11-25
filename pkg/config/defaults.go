@@ -38,6 +38,8 @@ func DefaultConfig() *Config {
 				SteeringMode:              "one-at-a-time",
 				MaxParallelTurns:          5,
 				MaxParallelToolCalls:      4,
+				MaxBootstrapChars:         DefaultMaxBootstrapChars,
+				MaxBootstrapTotalChars:    DefaultMaxBootstrapTotalChars,
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:          false,
 					MaxArgsLength:    300,

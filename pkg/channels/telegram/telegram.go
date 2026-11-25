@@ -254,6 +254,9 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
+	bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
+		return c.handleCallbackQuery(ctx, query)
+	}, th.AnyCallbackQuery())
 
 	c.SetRunning(true)
 	logger.InfoCF("telegram", "Telegram bot connected", map[string]any{
@@ -318,6 +321,15 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 	if isToolFeedback {
 		toolFeedbackContent = fitToolFeedbackForTelegram(msg.Content, useMarkdownV2, 4096)
 	}
+
+	// Command usage replies get an inline keyboard built from the command
+	// definitions. Tool feedback is excluded: it is an ephemeral progress
+	// update, not a command result.
+	var commandMarkup *telego.InlineKeyboardMarkup
+	if !isToolFeedback {
+		commandMarkup = telegramCommandMenuMarkup(msg.Content, c.commandDefinitions())
+	}
+
 	trackedChatID := telegramToolFeedbackChatKey(msg.ChatID, &msg.Context)
 	terminalToolFeedback := isToolFeedback && channels.OutboundToolFeedbackIsTerminal(msg)
 	if isToolFeedback && !terminalToolFeedback {
@@ -329,7 +341,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 		}
 	}
 	trackedMsgID, hasTrackedMsg := c.currentToolFeedbackMessage(trackedChatID)
-	if !isToolFeedback {
+	if !isToolFeedback && commandMarkup == nil {
 		if msgIDs, handled := c.finalizeToolFeedbackMessageForChat(ctx, trackedChatID, msg); handled {
 			return msgIDs, nil
 		}
@@ -347,6 +359,15 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 	for len(queue) > 0 {
 		chunk := queue[0]
 		queue = queue[1:]
+
+		// Attach the command keyboard only to the last chunk. If this chunk
+		// gets split further, it is not sent and the final sub-chunk receives
+		// the keyboard instead.
+		chunkIsFinal := len(queue) == 0
+		var chunkMarkup *telego.InlineKeyboardMarkup
+		if chunkIsFinal {
+			chunkMarkup = commandMarkup
+		}
 
 		content := parseContent(chunk, useMarkdownV2)
 
@@ -375,6 +396,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 					replyToID:     replyToID,
 					mdFallback:    chunk,
 					useMarkdownV2: useMarkdownV2,
+					replyMarkup:   chunkMarkup,
 				})
 				if err != nil {
 					return nil, err
@@ -415,6 +437,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 			replyToID:     replyToID,
 			mdFallback:    chunk,
 			useMarkdownV2: useMarkdownV2,
+			replyMarkup:   chunkMarkup,
 		})
 		if err != nil {
 			return nil, err
@@ -440,6 +463,7 @@ type sendChunkParams struct {
 	replyToID     string
 	mdFallback    string
 	useMarkdownV2 bool
+	replyMarkup   *telego.InlineKeyboardMarkup
 }
 
 // classifyTelegramError maps a telego API error to the channel sentinel that
@@ -473,6 +497,9 @@ func (c *TelegramChannel) sendChunk(
 ) (string, error) {
 	tgMsg := tu.Message(tu.ID(params.chatID), params.content)
 	tgMsg.MessageThreadID = params.threadID
+	if params.replyMarkup != nil {
+		tgMsg.ReplyMarkup = params.replyMarkup
+	}
 	if params.useMarkdownV2 {
 		tgMsg.WithParseMode(telego.ModeMarkdownV2)
 	} else {
@@ -570,6 +597,11 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 	}
 	parsedContent := parseContent(content, useMarkdownV2)
 	editMsg := tu.EditMessageText(tu.ID(cid), mid, parsedContent)
+	// Command usage replies can be delivered by editing a placeholder instead
+	// of Send. Keep the inline keyboard in that path too.
+	if markup := telegramCommandMenuMarkup(content, c.commandDefinitions()); markup != nil {
+		editMsg.ReplyMarkup = markup
+	}
 	if useMarkdownV2 {
 		editMsg.WithParseMode(telego.ModeMarkdownV2)
 	} else {
@@ -588,7 +620,9 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 		// Network errors or timeouts should NOT trigger a retry with different content.
 		if strings.Contains(err.Error(), "Bad Request") {
 			logParseFailed(err, useMarkdownV2)
-			_, err = c.bot.EditMessageText(ctx, tu.EditMessageText(tu.ID(cid), mid, content))
+			fallback := tu.EditMessageText(tu.ID(cid), mid, content)
+			fallback.ReplyMarkup = editMsg.ReplyMarkup
+			_, err = c.bot.EditMessageText(ctx, fallback)
 		}
 	}
 
@@ -1090,6 +1124,266 @@ func telegramClearMediaCaptions(msg bus.OutboundMediaMessage) bus.OutboundMediaM
 		cloned.Parts[i].Caption = ""
 	}
 	return cloned
+}
+
+func (c *TelegramChannel) handleCallbackQuery(ctx context.Context, query telego.CallbackQuery) error {
+	if kind, value, ok := telegramSkillCallback(query.Data); ok {
+		return c.handleSkillCallback(ctx, query, kind, value)
+	}
+	if kind, value, ok := telegramModelCallback(query.Data); ok {
+		return c.handleModelCallback(ctx, query, kind, value)
+	}
+
+	commandText, ok := telegramCallbackCommand(query.Data)
+	if !ok {
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		return nil
+	}
+	if !telegramCallbackCommandAllowed(commandText, c.commandDefinitions()) {
+		c.answerCallbackQuery(ctx, query.ID, "Command not available.", true)
+		return nil
+	}
+	return c.runCallbackCommand(ctx, query, commandText)
+}
+
+// runCallbackCommand answers the callback and injects the equivalent slash
+// command into the normal inbound pipeline.
+func (c *TelegramChannel) runCallbackCommand(
+	ctx context.Context,
+	query telego.CallbackQuery,
+	commandText string,
+) error {
+	if query.Message == nil {
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		return nil
+	}
+
+	sender := telegramCallbackSender(query.From)
+	if !c.IsAllowedSender(sender) {
+		c.answerCallbackQuery(ctx, query.ID, "You are not allowed to use this command.", true)
+		return nil
+	}
+
+	// Stop the client-side progress indicator before running the command.
+	c.answerCallbackQuery(ctx, query.ID, "", false)
+
+	chatID, inboundCtx := telegramCallbackInboundContext(c.Name(), query)
+
+	logger.DebugCF("telegram", "Handling command callback", map[string]any{
+		"command": commandText,
+		"chat_id": chatID,
+		"user_id": sender.PlatformID,
+	})
+
+	// A button press is an explicit interaction, so it bypasses the group
+	// mention trigger while still passing through the channel allowlist.
+	if err := c.HandleInboundContext(ctx, chatID, commandText, nil, inboundCtx, sender); err != nil {
+		logger.WarnCF("telegram", "Failed to handle command callback", map[string]any{
+			"command": commandText,
+			"error":   err.Error(),
+		})
+	}
+	return nil
+}
+
+func (c *TelegramChannel) handleSkillCallback(
+	ctx context.Context,
+	query telego.CallbackQuery,
+	kind telegramPickerCallbackKind,
+	value int,
+) error {
+	if query.Message == nil {
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		return nil
+	}
+
+	sender := telegramCallbackSender(query.From)
+	if !c.IsAllowedSender(sender) {
+		c.answerCallbackQuery(ctx, query.ID, "You are not allowed to use this menu.", true)
+		return nil
+	}
+
+	msg := query.Message.Message()
+	if msg == nil || strings.TrimSpace(msg.Text) == "" {
+		c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /use again.", true)
+		return nil
+	}
+
+	skills := telegramSkillNames(msg.Text)
+	if len(skills) == 0 {
+		c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /use again.", true)
+		return nil
+	}
+
+	switch kind {
+	case telegramPickerSelect:
+		if value < 0 || value >= len(skills) {
+			c.answerCallbackQuery(ctx, query.ID, "Skill not available.", true)
+			return nil
+		}
+		return c.runCallbackCommand(ctx, query, "/use "+skills[value])
+
+	case telegramPickerPage:
+		markup := telegramSkillMenuMarkup(skills, value)
+		if markup == nil {
+			c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /use again.", true)
+			return nil
+		}
+
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		chat := query.Message.GetChat()
+		_, err := c.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+			ChatID:      tu.ID(chat.ID),
+			MessageID:   query.Message.GetMessageID(),
+			ReplyMarkup: markup,
+		})
+		if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+			logger.WarnCF("telegram", "Failed to edit skill menu", map[string]any{
+				"chat_id":    chat.ID,
+				"message_id": query.Message.GetMessageID(),
+				"error":      err.Error(),
+			})
+		}
+		return nil
+	}
+
+	c.answerCallbackQuery(ctx, query.ID, "", false)
+	return nil
+}
+
+func (c *TelegramChannel) handleModelCallback(
+	ctx context.Context,
+	query telego.CallbackQuery,
+	kind telegramPickerCallbackKind,
+	value int,
+) error {
+	if query.Message == nil {
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		return nil
+	}
+
+	sender := telegramCallbackSender(query.From)
+	if !c.IsAllowedSender(sender) {
+		c.answerCallbackQuery(ctx, query.ID, "You are not allowed to use this menu.", true)
+		return nil
+	}
+
+	msg := query.Message.Message()
+	if msg == nil || strings.TrimSpace(msg.Text) == "" {
+		c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /switch model again.", true)
+		return nil
+	}
+
+	models := telegramModelOptions(msg.Text)
+	if len(models) == 0 {
+		c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /switch model again.", true)
+		return nil
+	}
+
+	switch kind {
+	case telegramPickerSelect:
+		if value < 0 || value >= len(models) {
+			c.answerCallbackQuery(ctx, query.ID, "Model not available.", true)
+			return nil
+		}
+		return c.runCallbackCommand(ctx, query, fmt.Sprintf("/switch model %d", models[value].Index))
+
+	case telegramPickerPage:
+		markup := telegramModelMenuMarkup(models, value)
+		if markup == nil {
+			c.answerCallbackQuery(ctx, query.ID, "Menu expired. Send /switch model again.", true)
+			return nil
+		}
+
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		chat := query.Message.GetChat()
+		_, err := c.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+			ChatID:      tu.ID(chat.ID),
+			MessageID:   query.Message.GetMessageID(),
+			ReplyMarkup: markup,
+		})
+		if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+			logger.WarnCF("telegram", "Failed to edit model menu", map[string]any{
+				"chat_id":    chat.ID,
+				"message_id": query.Message.GetMessageID(),
+				"error":      err.Error(),
+			})
+		}
+		return nil
+	}
+
+	c.answerCallbackQuery(ctx, query.ID, "", false)
+	return nil
+}
+
+func (c *TelegramChannel) answerCallbackQuery(ctx context.Context, queryID, text string, alert bool) {
+	params := &telego.AnswerCallbackQueryParams{
+		CallbackQueryID: queryID,
+	}
+	if text != "" {
+		params.Text = text
+		params.ShowAlert = alert
+	}
+	if err := c.bot.AnswerCallbackQuery(ctx, params); err != nil {
+		logger.DebugCF("telegram", "Failed to answer callback query", map[string]any{
+			"error": err.Error(),
+		})
+	}
+}
+
+func telegramCallbackSender(user telego.User) bus.SenderInfo {
+	platformID := strconv.FormatInt(user.ID, 10)
+	return bus.SenderInfo{
+		Platform:    "telegram",
+		PlatformID:  platformID,
+		CanonicalID: identity.BuildCanonicalID("telegram", platformID),
+		Username:    user.Username,
+		DisplayName: user.FirstName,
+	}
+}
+
+func telegramCallbackInboundContext(channelName string, query telego.CallbackQuery) (string, bus.InboundContext) {
+	chat := query.Message.GetChat()
+	chatID := strconv.FormatInt(chat.ID, 10)
+	threadID := 0
+	if accessible := query.Message.Message(); accessible != nil {
+		threadID = accessible.MessageThreadID
+	}
+	if chat.IsForum && threadID != 0 {
+		chatID = fmt.Sprintf("%d/%d", chat.ID, threadID)
+	}
+
+	messageID := ""
+	if id := query.Message.GetMessageID(); id != 0 {
+		messageID = strconv.Itoa(id)
+	}
+
+	platformID := strconv.FormatInt(query.From.ID, 10)
+	peerKind := "direct"
+	if chat.Type != "private" {
+		peerKind = "group"
+	}
+
+	inboundCtx := bus.InboundContext{
+		Channel:          channelName,
+		ChatID:           chatID,
+		ChatType:         peerKind,
+		SenderID:         platformID,
+		ReplyToMessageID: messageID,
+		Mentioned:        true,
+		Raw: map[string]string{
+			"user_id":             platformID,
+			"username":            query.From.Username,
+			"first_name":          query.From.FirstName,
+			"is_group":            fmt.Sprintf("%t", chat.Type != "private"),
+			"via":                 "callback",
+			"callback_message_id": messageID,
+		},
+	}
+	if chat.IsForum && threadID != 0 {
+		inboundCtx.TopicID = strconv.Itoa(threadID)
+	}
+	return chatID, inboundCtx
 }
 
 func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Message) error {

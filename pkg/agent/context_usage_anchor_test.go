@@ -125,6 +125,38 @@ func TestCompactBeforeLLMUsesUsageAnchorOverHeuristic(t *testing.T) {
 	}
 }
 
+// The provider-reported size must also feed the compaction health reporter, so
+// an anchor-triggered compaction is measured and throttled like a heuristic one.
+func TestCompactBeforeLLMReportsHealthFromUsageAnchor(t *testing.T) {
+	p, ts, exec, _ := newUsageAnchorTestPipeline()
+	ts.agent.Sessions = newTestSessionStore(t)
+	ts.agent.ContextBuilder = NewContextBuilder(t.TempDir())
+	p.Cfg = &config.Config{}
+	prompt := []providers.Message{
+		{Role: "system", Content: "static prompt"},
+		{Role: "user", Content: "short question"},
+	}
+	recordTestAnchor(t, p, ts, prompt, 9_000)
+	exec.messages = prompt
+
+	cm := &healthTestContextManager{history: prompt[1:]}
+	cm.onCompact = func() { cm.history = nil }
+	p.ContextManager = cm
+
+	p.CompactBeforeLLM(context.Background(), ts, exec)
+
+	if cm.compactCalls != 1 {
+		t.Fatalf("compact calls = %d, want 1 from the provider-reported prompt size", cm.compactCalls)
+	}
+	if len(cm.outcomes) != 1 {
+		t.Fatalf("health outcomes = %d, want 1", len(cm.outcomes))
+	}
+	outcome := cm.outcomes[0]
+	if !outcome.Attempted || !outcome.Effective {
+		t.Fatalf("outcome = %+v, want an attempted effective compaction", outcome)
+	}
+}
+
 // The same prompt without provider usage stays below the threshold: the
 // heuristic fallback is still the behavior when no anchor exists.
 func TestCompactBeforeLLMUsesHeuristicWithoutUsageAnchor(t *testing.T) {
@@ -305,24 +337,20 @@ func TestUsageAnchorCalibrationRatio(t *testing.T) {
 }
 
 func TestScaleHeuristicBudget(t *testing.T) {
-	tests := []struct {
-		name   string
-		budget int
-		ratio  float64
-		want   int
-	}{
-		{name: "no calibration", budget: 1000, ratio: 1, want: 1000},
-		{name: "real tokens larger", budget: 1000, ratio: 2, want: 500},
-		{name: "real tokens smaller", budget: 1000, ratio: 0.5, want: 2000},
-		{name: "never zero", budget: 1, ratio: 8, want: 1},
-		{name: "non-positive budget", budget: 0, ratio: 2, want: 0},
+	if got := scaleHeuristicBudget(1000, 1); got != 1000 {
+		t.Fatalf("scaleHeuristicBudget without calibration = %d, want 1000", got)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := scaleHeuristicBudget(tt.budget, tt.ratio); got != tt.want {
-				t.Fatalf("scaleHeuristicBudget(%d, %v) = %d, want %d", tt.budget, tt.ratio, got, tt.want)
-			}
-		})
+	if got := scaleHeuristicBudget(1000, 2); got != 500 {
+		t.Fatalf("scaleHeuristicBudget with larger real tokens = %d, want 500", got)
+	}
+	if got := scaleHeuristicBudget(1000, 0.5); got != 2000 {
+		t.Fatalf("scaleHeuristicBudget with smaller real tokens = %d, want 2000", got)
+	}
+	if got := scaleHeuristicBudget(1, 8); got != 1 {
+		t.Fatalf("scaleHeuristicBudget must never return zero, got %d", got)
+	}
+	if got := scaleHeuristicBudget(0, 2); got != 0 {
+		t.Fatalf("scaleHeuristicBudget with non-positive budget = %d, want 0", got)
 	}
 }
 

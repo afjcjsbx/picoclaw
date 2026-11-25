@@ -20,6 +20,8 @@
       "max_tool_budget_warning_ratio": 0.75,
       "max_parallel_turns": 5,
       "max_parallel_tool_calls": 4,
+      "max_bootstrap_chars": 20000,
+      "max_bootstrap_total_chars": 24000,
       "subturn": {
         "max_depth": 3,
         "max_concurrent": 3
@@ -35,6 +37,10 @@
       "vision_max_image_dimension": 1568,
       "vision_jpeg_quality": 85,
       "summarize_token_percent": 75,
+      "protect_first_n": 1,
+      "protect_last_n": 4,
+      "min_tail_user_messages": 1,
+      "tail_token_budget": null,
       "split_on_marker": false,
       "max_llm_retries": 2,
       "llm_retry_backoff_secs": 2,

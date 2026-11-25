@@ -34,6 +34,12 @@ type ContextBuilder struct {
 	restrictToWorkspace       bool
 	allowReadOutsideWorkspace bool
 
+	// Bootstrap prompt caps. Zero means use the config defaults. They apply to
+	// AGENT.md/AGENTS.md, SOUL.md and IDENTITY.md; USER.md is injected through
+	// the memory block and is bounded by MemoryConfig.UserCharLimit.
+	bootstrapMaxChars      int
+	bootstrapMaxTotalChars int
+
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
 	// The cache auto-invalidates when workspace source files change (mtime check).
@@ -81,6 +87,16 @@ func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuil
 // WithMemoryConfig sets the limits and switches of the injected memory block.
 func (cb *ContextBuilder) WithMemoryConfig(cfg config.MemoryConfig) *ContextBuilder {
 	cb.memory.cfg = cfg
+	return cb
+}
+
+// WithBootstrapLimits overrides the per-file and total character caps applied
+// to the workspace bootstrap files in the system prompt. Non-positive values
+// fall back to the config defaults.
+func (cb *ContextBuilder) WithBootstrapLimits(maxChars, maxTotalChars int) *ContextBuilder {
+	cb.bootstrapMaxChars = maxChars
+	cb.bootstrapMaxTotalChars = maxTotalChars
+	cb.InvalidateCache()
 	return cb
 }
 
@@ -714,7 +730,7 @@ func (cb *ContextBuilder) InvalidateCache() {
 // rebuild the shared prompt. Skill roots are handled separately because they
 // require both directory-level and recursive file-level checks.
 func (cb *ContextBuilder) sourcePaths() []string {
-	return uniquePaths(cb.LoadAgentDefinition().trackedPaths(cb.workspace))
+	return bootstrapSourcePaths(cb.workspace)
 }
 
 // skillRoots returns all skill root directories that can affect
@@ -918,28 +934,34 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 }
 
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
+	maxChars, maxTotal := cb.bootstrapLimits()
+	budget := maxTotal
 	var sb strings.Builder
 
 	agentDefinition := cb.LoadAgentDefinition()
 	if agentDefinition.Agent != nil {
 		label := string(agentDefinition.Source)
+		path := relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
 		if label == "" {
-			label = relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
+			label = path
 		}
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", label, agentDefinition.Agent.Body)
-	}
-	if agentDefinition.Soul != nil {
-		fmt.Fprintf(
-			&sb,
-			"## %s\n\n%s\n\n",
-			relativeWorkspacePath(cb.workspace, agentDefinition.Soul.Path),
-			agentDefinition.Soul.Content,
+		budget = appendBootstrapSection(
+			&sb, budget, maxChars,
+			label, agentDefinition.Agent.Body, path,
 		)
 	}
-	if agentDefinition.Source != AgentDefinitionSourceAgent {
-		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
-		if data, err := os.ReadFile(filePath); err == nil {
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "IDENTITY.md", data)
+	if agentDefinition.Soul != nil && budget > 0 {
+		path := relativeWorkspacePath(cb.workspace, agentDefinition.Soul.Path)
+		budget = appendBootstrapSection(
+			&sb, budget, maxChars,
+			path, agentDefinition.Soul.Content, path,
+		)
+	}
+	if agentDefinition.Source != AgentDefinitionSourceAgent && budget > 0 {
+		const identity = "IDENTITY.md"
+		filePath := filepath.Join(cb.workspace, identity)
+		if data, ok := readBootstrapFile(filePath); ok {
+			appendBootstrapSection(&sb, budget, maxChars, identity, data, identity)
 		}
 	}
 

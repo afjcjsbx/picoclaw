@@ -209,9 +209,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 		return fmt.Errorf("error creating provider: %w", err)
 	}
 
-	if modelID != "" {
-		cfg.Agents.Defaults.ModelName = modelID
-	}
+	cfg.Agents.Defaults.ModelName = providers.DefaultModelRef(cfg, modelID)
 
 	msgBus := bus.NewMessageBus()
 	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
@@ -646,9 +644,7 @@ func handleConfigReload(
 		return fmt.Errorf("error creating new provider: %w", err)
 	}
 
-	if newModelID != "" {
-		newCfg.Agents.Defaults.ModelName = newModelID
-	}
+	newCfg.Agents.Defaults.ModelName = providers.DefaultModelRef(newCfg, newModelID)
 
 	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), providerReloadTimeout)
 	defer reloadCancel()
