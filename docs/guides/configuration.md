@@ -1275,6 +1275,8 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 >
 > **`split_on_marker`** (`agents.defaults`, default `false`, env `PICOCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER`): when enabled, PicoClaw injects a system-prompt directive instructing the model to place `<|[SPLIT]|>` between distinct parts of its response. At runtime the assistant reply is split on that marker and delivered as multiple messages. This can improve readability on platforms that render long messages poorly, but it relies on the model following the instruction.
 >
+> **`summarize_message_threshold`** (`agents.defaults`): **Deprecated and ignored.** This field is accepted in config for compatibility but has no effect. Summarization is driven by `summarize_token_percent` instead.
+>
 > **`llm_retry_on_empty_content`** (`agents.defaults`, default `true`): when the model returns a successful response with no text content and no tool calls, PicoClaw retries the request using the same budget as transient provider errors (see `max_llm_retries`). Responses that include tool calls are never retried on this condition; an empty text body is intentional when the model is requesting tools.
 >
 > **`llm_retry_on_finish_reasons`** (`agents.defaults`, default `["length"]`): list of `finish_reason` values that cause an otherwise-successful response to be retried. The built-in entry `"length"` also covers `"truncated"`, which some provider paths use for the same condition. Set to `[]` to disable finish-reason retries. Both fields share the same retry budget and backoff as transient provider errors.
