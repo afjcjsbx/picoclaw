@@ -1,8 +1,9 @@
 # Custom Builds
 
-PicoClaw's standard builds keep the full built-in channel set and Seahorse
-support. Go build tags let you produce a smaller `picoclaw` executable when
-you know at build time which channels and context manager you will use.
+PicoClaw's standard builds include the built-in channel set except opt-in
+drivers such as Mail, plus Seahorse support. Go build tags let you produce a
+smaller `picoclaw` executable when you know at build time which channels and
+context manager you will use.
 
 These tags affect the executable being built. They do not remove packages from
 the source tree or from `go.mod`, and they do not change other binaries such as
@@ -13,7 +14,10 @@ the source tree or from `go.mod`, and they do not change other binaries such as
 The regular Makefile targets use `GO_BUILD_TAGS=goolm,stdjson`. Without
 `custom_channels`:
 
-- All channel drivers supported by the target are registered.
+- All channel drivers supported by the target are registered, except opt-in
+  drivers such as Mail.
+- Mail is excluded. To include it, use a `custom_channels` build with the
+  `channel_mail` tag.
 - Seahorse is included on supported targets.
 - Matrix may be unavailable on targets where its SQLite/crypto dependencies
   do not build.

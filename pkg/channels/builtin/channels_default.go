@@ -2,6 +2,7 @@
 
 package builtin
 
+// Mail is intentionally opt-in: include channel_mail in a custom_channels build.
 import (
 	_ "github.com/sipeed/picoclaw/pkg/channels/deltachat"
 	_ "github.com/sipeed/picoclaw/pkg/channels/dingtalk"
@@ -9,7 +10,6 @@ import (
 	_ "github.com/sipeed/picoclaw/pkg/channels/feishu"
 	_ "github.com/sipeed/picoclaw/pkg/channels/irc"
 	_ "github.com/sipeed/picoclaw/pkg/channels/line"
-	_ "github.com/sipeed/picoclaw/pkg/channels/mail"
 	_ "github.com/sipeed/picoclaw/pkg/channels/maixcam"
 	_ "github.com/sipeed/picoclaw/pkg/channels/mqtt"
 	_ "github.com/sipeed/picoclaw/pkg/channels/onebot"

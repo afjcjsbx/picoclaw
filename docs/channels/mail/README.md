@@ -2,6 +2,19 @@
 
 PicoClaw can talk over e-mail. It reads a mailbox over IMAP (IDLE push when the server supports it, polling otherwise) and answers over SMTP, threading each reply onto the mail it answers. It works with Gmail, Outlook, Fastmail, or any self-hosted IMAP/SMTP server.
 
+## 🛠️ Build
+
+Mail is **opt-in** and is not included in the standard binary. Build a custom
+binary with the `channel_mail` tag:
+
+```bash
+make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_mail'
+```
+
+This example registers only the mail driver. Add any other `channel_<name>` tags
+you need to the same `GO_BUILD_TAGS` list; see
+[Custom Builds](../../guides/custom-builds.md).
+
 ## 🚀 Quick Start
 
 **1. Add the channel to `~/.picoclaw/config.json`** (no secrets here):
