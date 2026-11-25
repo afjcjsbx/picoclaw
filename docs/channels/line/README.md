@@ -18,7 +18,10 @@ PicoClaw supports LINE through the LINE Messaging API with webhook callbacks.
       "channel_secret": "YOUR_CHANNEL_SECRET",
       "channel_access_token": "YOUR_CHANNEL_ACCESS_TOKEN",
       "webhook_path": "/webhook/line",
-      "allow_from": []
+      "allow_from": [],
+      "placeholder": { "enabled": true, "text": ["Thinking..."] },
+      "group_trigger": { "mention_only": false },
+      "reasoning_channel_id": ""
     }
   }
 }
@@ -31,6 +34,9 @@ PicoClaw supports LINE through the LINE Messaging API with webhook callbacks.
 | channel_access_token | string | Yes      | Channel Access Token for the LINE Messaging API                    |
 | webhook_path         | string | No       | Webhook path (default: /webhook/line)                              |
 | allow_from           | array  | No       | User ID whitelist; empty means all users are allowed               |
+| placeholder          | object | No       | Placeholder message shown while the agent is working               |
+| group_trigger        | object | No       | Group trigger settings (e.g. `{ "mention_only": true }`)           |
+| reasoning_channel_id | string | No       | Optional ID to route reasoning/thinking output to a separate chat  |
 
 ## Setup
 
