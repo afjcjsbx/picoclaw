@@ -486,7 +486,7 @@ func (m *legacyContextManager) Clear(ctx context.Context, sessionKey string) err
 // compaction: the start of the turn in progress when its persisted record still
 // matches the history tail, or len(history) when ts is nil. activeLen is the
 // number of trailing messages owned by the turn.
-func historyLimitForTurn(history []providers.Message, ts *turnState) (limit, activeLen int) {
+func historyLimitForTurn(history []providers.Message, ts *turnState) (compactableEnd, activeLen int) {
 	if ts == nil {
 		return len(history), 0
 	}
@@ -519,7 +519,7 @@ func (m *legacyContextManager) pruneSessionToolResults(
 		return 0, false
 	}
 
-	limit, activeLen := historyLimitForTurn(history, ts)
+	compactableEnd, activeLen := historyLimitForTurn(history, ts)
 	activeEnd := len(history)
 	if ts != nil {
 		// Older rounds of the active turn are prunable; its newest
@@ -527,10 +527,10 @@ func (m *legacyContextManager) pruneSessionToolResults(
 		activeEnd = activeTurnPruneEnd(history, ts.persistedMessagesSnapshot())
 	}
 
-	protection := computeHistoryProtection(history, limit, agent)
+	protection := computeHistoryProtection(history, compactableEnd, agent)
 	pruned := pruneProtectedHistory(history, protection, agent)
-	if activeEnd > limit {
-		if pruneToolResultsInRange(history, limit, activeEnd, agent.Workspace) {
+	if activeEnd > compactableEnd {
+		if pruneToolResultsInRange(history, compactableEnd, activeEnd, agent.Workspace) {
 			pruned = true
 		}
 	}
@@ -699,8 +699,8 @@ func (m *legacyContextManager) forceCompressionLocked(
 		return compressionResult{}, false
 	}
 
-	limit, _ := historyLimitForTurn(history, ts)
-	protection := computeHistoryProtection(history, limit, agent)
+	compactableEnd, _ := historyLimitForTurn(history, ts)
+	protection := computeHistoryProtection(history, compactableEnd, agent)
 	turns := parseTurnBoundaries(history)
 	var mid int
 	if len(turns) >= 2 {
@@ -708,10 +708,10 @@ func (m *legacyContextManager) forceCompressionLocked(
 	} else {
 		mid = findSafeBoundary(history, len(history)/2)
 	}
-	if limit > 0 && mid > limit {
+	if compactableEnd > 0 && mid > compactableEnd {
 		// Never cut into the active turn when older history can be dropped
 		// instead; a steering message inside the turn is not a safe cut.
-		mid = limit
+		mid = compactableEnd
 	}
 
 	var keptHistory []providers.Message
@@ -840,13 +840,13 @@ func (m *legacyContextManager) summarizeSession(
 
 	// The turn in progress is never cut: a steering message inside it is a user
 	// message too, and would otherwise look like a Turn boundary.
-	limit, _ := historyLimitForTurn(history, ts)
-	protection := computeHistoryProtection(history, limit, agent)
+	compactableEnd, _ := historyLimitForTurn(history, ts)
+	protection := computeHistoryProtection(history, compactableEnd, agent)
 	if !protection.ok {
 		return false
 	}
-	safeCut := protection.tailStart
-	if safeCut <= protection.headEnd || safeCut > limit {
+	safeCut := protection.snappedTailStart
+	if safeCut <= protection.headEnd || safeCut > compactableEnd {
 		return false
 	}
 	toSummarize := history[protection.headEnd:safeCut]

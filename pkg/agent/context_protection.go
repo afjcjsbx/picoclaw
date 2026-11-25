@@ -40,12 +40,12 @@ type ContextProtection struct {
 // historyProtection describes where the protected head and tail start in a
 // history slice. ok is false when there is no compressible middle.
 type historyProtection struct {
-	headEnd         int
-	tailStart       int
-	tailStartFull   int
-	limit           int
-	tailTokenBudget int
-	ok              bool
+	headEnd             int
+	snappedTailStart    int
+	tailStartBeforeSnap int
+	compactableEnd      int
+	tailTokenBudget     int
+	ok                  bool
 }
 
 // autoTailTokenBudget derives the default tail budget from the usable input
@@ -101,9 +101,10 @@ func resolveContextProtection(
 	return protection
 }
 
-// computeHistoryProtection resolves the protected head and tail for history
-// [:limit]. limit is the end of the region eligible for compaction: it excludes
-// the active turn so compaction never folds it into a summary.
+// computeHistoryProtection resolves the protected head and tail for
+// history[:compactableEnd]. compactableEnd is the end of the region eligible
+// for compaction: it excludes the active turn so compaction never folds it
+// into a summary.
 //
 // The head is a fixed message count, aligned forward so an assistant tool call
 // is never split from its tool results. The tail is the union of the
@@ -112,36 +113,37 @@ func resolveContextProtection(
 // sequences are not torn apart.
 func computeHistoryProtection(
 	history []providers.Message,
-	limit int,
+	compactableEnd int,
 	agent *AgentInstance,
 ) historyProtection {
-	if limit < 0 {
-		limit = 0
+	if compactableEnd < 0 {
+		compactableEnd = 0
 	}
-	if limit > len(history) {
-		limit = len(history)
+	if compactableEnd > len(history) {
+		compactableEnd = len(history)
 	}
 	cfg := agent.Protection
-	headEnd := alignHeadEnd(history, min(cfg.ProtectFirstN, limit), limit)
+	headEnd := alignHeadEnd(history, min(cfg.ProtectFirstN, compactableEnd), compactableEnd)
 
-	// Resolve the tail against the full history. The active turn (history[limit:])
-	// is protected by limit itself, so a tail that starts inside it does not
-	// additionally protect older messages. Capping the cut at limit preserves
-	// that distinction while the token budget can still reach into earlier
-	// turns when the active turn is small.
-	tailStartFull := computeTailStart(history, len(history), headEnd, cfg, agent.Provider)
-	tailStart := min(tailStartFull, limit)
-	if limit > 0 {
-		tailStart = findSafeBoundary(history[:limit], tailStart)
+	// Resolve the tail against the full history. The active turn
+	// (history[compactableEnd:]) is protected by compactableEnd itself, so a
+	// tail that starts inside it does not additionally protect older messages.
+	// Capping the cut at compactableEnd preserves that distinction while the
+	// token budget can still reach into earlier turns when the active turn is
+	// small.
+	tailStartBeforeSnap := computeTailStart(history, len(history), headEnd, cfg, agent.Provider)
+	snappedTailStart := min(tailStartBeforeSnap, compactableEnd)
+	if compactableEnd > 0 {
+		snappedTailStart = findSafeBoundary(history[:compactableEnd], snappedTailStart)
 	}
 
 	return historyProtection{
-		headEnd:         headEnd,
-		tailStart:       tailStart,
-		tailStartFull:   tailStartFull,
-		limit:           limit,
-		tailTokenBudget: cfg.TailTokenBudget,
-		ok:              tailStart > headEnd && tailStart > 0,
+		headEnd:             headEnd,
+		snappedTailStart:    snappedTailStart,
+		tailStartBeforeSnap: tailStartBeforeSnap,
+		compactableEnd:      compactableEnd,
+		tailTokenBudget:     cfg.TailTokenBudget,
+		ok:                  snappedTailStart > headEnd && snappedTailStart > 0,
 	}
 }
 
@@ -156,7 +158,7 @@ func pruneProtectedHistory(
 	if agent == nil {
 		return false
 	}
-	historicalTailStart := min(protection.tailStartFull, protection.limit)
+	historicalTailStart := min(protection.tailStartBeforeSnap, protection.compactableEnd)
 	if historicalTailStart < protection.headEnd {
 		historicalTailStart = protection.headEnd
 	}
@@ -169,7 +171,7 @@ func pruneProtectedHistory(
 	if pruneToolResultsToBudget(
 		history,
 		historicalTailStart,
-		protection.limit,
+		protection.compactableEnd,
 		agent.Workspace,
 		agent.Provider,
 		protection.tailTokenBudget,
@@ -179,50 +181,43 @@ func pruneProtectedHistory(
 	return pruned
 }
 
-func agentProvider(agent *AgentInstance) providers.LLMProvider {
-	if agent == nil {
-		return nil
-	}
-	return agent.Provider
-}
-
 // alignHeadEnd extends the head forward while the next message is a tool
 // result, keeping the protected prefix from splitting a tool-call group.
-func alignHeadEnd(history []providers.Message, end, limit int) int {
+func alignHeadEnd(history []providers.Message, end, compactableEnd int) int {
 	if end <= 0 {
 		return 0
 	}
-	if end > limit {
-		end = limit
+	if end > compactableEnd {
+		end = compactableEnd
 	}
-	for end < limit && history[end].Role == "tool" {
+	for end < compactableEnd && history[end].Role == "tool" {
 		end++
 	}
 	return end
 }
 
-// computeTailStart walks backwards from limit: first the protect_last_n message
-// floor, then the token budget, then the minimum number of user messages. It
-// never crosses headEnd.
+// computeTailStart walks backwards from compactableEnd: first the protect_last_n
+// message floor, then the token budget, then the minimum number of user messages.
+// It never crosses headEnd.
 func computeTailStart(
 	history []providers.Message,
-	limit, headEnd int,
+	compactableEnd, headEnd int,
 	cfg ContextProtection,
 	provider providers.LLMProvider,
 ) int {
-	if limit <= headEnd {
-		return limit
+	if compactableEnd <= headEnd {
+		return compactableEnd
 	}
 
-	start := limit
+	start := compactableEnd
 	if cfg.ProtectLastN > 0 {
-		start = limit - cfg.ProtectLastN
+		start = compactableEnd - cfg.ProtectLastN
 	}
 	if start < headEnd {
 		start = headEnd
 	}
 
-	tokens := estimateRangeTokens(history, start, limit, provider)
+	tokens := estimateRangeTokens(history, start, compactableEnd, provider)
 	if cfg.TailTokenBudget > 0 {
 		for start > headEnd && tokens < cfg.TailTokenBudget {
 			start--
@@ -231,7 +226,7 @@ func computeTailStart(
 	}
 
 	if cfg.MinTailUserMessages > 0 {
-		users := countUserMessages(history, start, limit)
+		users := countUserMessages(history, start, compactableEnd)
 		for users < cfg.MinTailUserMessages && start > headEnd {
 			start--
 			if history[start].Role == "user" {

@@ -93,8 +93,8 @@ func TestComputeHistoryProtection_ActiveTurnDoesNotOverProtectHistory(t *testing
 	if !got.ok {
 		t.Fatal("expected a compressible middle")
 	}
-	if got.tailStart != 6 {
-		t.Fatalf("tail start = %d, want the active-turn limit 6", got.tailStart)
+	if got.snappedTailStart != 6 {
+		t.Fatalf("tail start = %d, want the active-turn boundary 6", got.snappedTailStart)
 	}
 	if got.headEnd != 1 {
 		t.Fatalf("head end = %d, want 1", got.headEnd)
@@ -354,7 +354,7 @@ func TestPruneProtectedHistory_KeepsHeadAndPrunesMiddle(t *testing.T) {
 		{Role: "assistant", Content: "tail answer"},
 	}
 	protection := computeHistoryProtection(history, len(history), agent)
-	if protection.headEnd != 3 || protection.tailStart != 6 {
+	if protection.headEnd != 3 || protection.snappedTailStart != 6 {
 		t.Fatalf("protection = %+v, want head end 3 and tail start 6", protection)
 	}
 	if !pruneProtectedHistory(history, protection, agent) {
