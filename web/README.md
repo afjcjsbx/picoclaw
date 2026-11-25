@@ -270,7 +270,7 @@ Examples:
 Current launcher flags:
 
 - `-port`
-- `-public`
+- `-public` — bind all interfaces; first-run setup still requires the one-time bootstrap token from `~/.picoclaw/dashboard-setup-token`
 - `-no-browser`
 - `-lang`
 - `-console`

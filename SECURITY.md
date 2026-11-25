@@ -35,6 +35,12 @@ There is no formal support window. Use the latest release, and include the affec
 - `restrict_to_workspace` limits PicoClaw's file tools; it does not isolate the main PicoClaw process. Optional process isolation is disabled by default, applies to child processes, and has platform-specific limits. See [Subprocess Isolation](docs/security/isolation.md).
 - Run PicoClaw as a dedicated, unprivileged user and avoid giving its workspace access to sensitive host files.
 
+### Protect launcher first-run setup
+
+- On first run, the launcher writes a one-time setup token to `~/.picoclaw/dashboard-setup-token` with owner-only permissions (`0600`) and prints it in console mode. Enter it at `/launcher-setup` to create the dashboard password. The HTTP API never returns this token.
+- Treat the setup token like an administrator credential. Do not share it, commit it, or expose it through forwarded logs, backups, or workspace files. Console/container output that contains it is sensitive until setup completes. It is single-use and is removed after successful setup; an uninitialized launcher generates a new token on every restart.
+- Binding with `-public` or a non-loopback `-host` does not remove the setup-token requirement. Keep the launcher private until setup is complete, and use a TLS reverse proxy plus IP allowlists for remote access.
+
 ### Consider data sent to external services
 
 Prompts and selected conversation content are sent to the configured model provider; channel and tool integrations may send data to their own services. Review each provider's privacy and retention terms, and avoid sending data you are not authorized to share.

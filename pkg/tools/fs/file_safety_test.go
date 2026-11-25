@@ -98,6 +98,47 @@ func TestFileSafetyProtectedWorkspaceReads(t *testing.T) {
 	}
 }
 
+func TestFileSafetyProtectsDashboardSetupToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PICOCLAW_HOME", home)
+	path := filepath.Join(home, "dashboard-setup-token")
+	if err := os.WriteFile(path, []byte("BOOTSTRAP_SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, restrict := range []bool{false, true} {
+		read := NewReadFileTool(home, restrict, MaxReadFileSize)
+		result := read.Execute(context.Background(), map[string]any{"path": path})
+		if !result.IsError || strings.Contains(result.ForLLM, "BOOTSTRAP_SECRET") {
+			t.Fatalf("read_file exposed setup token, restrict=%v: %+v", restrict, result)
+		}
+		for _, tool := range []interface {
+			Execute(ctx context.Context, args map[string]any) *ToolResult
+		}{
+			NewWriteFileTool(home, restrict), NewEditFileTool(home, restrict), NewAppendFileTool(home, restrict),
+		} {
+			result := tool.Execute(context.Background(), map[string]any{
+				"path": path, "content": "changed", "overwrite": true,
+				"old_text": "BOOTSTRAP_SECRET", "new_text": "changed",
+			})
+			if !result.IsError {
+				t.Fatalf("setup token write allowed, restrict=%v: %+v", restrict, result)
+			}
+		}
+	}
+
+	list := NewListDirTool(home, true).Execute(context.Background(), map[string]any{"path": "."})
+	if list.IsError || strings.Contains(list.ForLLM, "dashboard-setup-token") {
+		t.Fatalf("directory listing exposed setup token: %+v", list)
+	}
+	search := NewSearchFilesTool(home, true).Execute(context.Background(), map[string]any{
+		"pattern": "BOOTSTRAP_SECRET",
+	})
+	if search.IsError || strings.Contains(search.ForLLM, "BOOTSTRAP_SECRET") {
+		t.Fatalf("search exposed setup token: %+v", search)
+	}
+}
+
 func TestFileSafetyBlocksProtectedWrites(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, ".env")
@@ -161,7 +202,7 @@ func TestStripExtendedDrivePrefix(t *testing.T) {
 }
 
 func TestFileSafetySymlinkedCredentialTargets(t *testing.T) {
-	for _, name := range []string{"auth.json", "auth/mcp", "plugin-data", "channels/weixin/context-tokens", "codex/auth.json"} {
+	for _, name := range []string{"auth.json", "auth/mcp", "plugin-data", "channels/weixin/context-tokens", "dashboard-setup-token", "codex/auth.json"} {
 		t.Run(name, func(t *testing.T) {
 			workspace := t.TempDir()
 			home := t.TempDir()
@@ -178,7 +219,7 @@ func TestFileSafetySymlinkedCredentialTargets(t *testing.T) {
 			}
 			link := filepath.Join(home, filepath.FromSlash(name))
 			target := root
-			if name == "auth.json" || name == "codex/auth.json" {
+			if name == "auth.json" || name == "codex/auth.json" || name == "dashboard-setup-token" {
 				target = path
 			}
 			if name == "codex/auth.json" {
@@ -242,7 +283,7 @@ func TestFileSafetyCaseInsensitivePaths(t *testing.T) {
 	}
 	t.Setenv("PICOCLAW_HOME", home)
 	t.Setenv("CODEX_HOME", home)
-	for _, name := range []string{"auth.json", "auth/mcp/token.txt", "plugin-data/demo/token.txt", "channels/weixin/context-tokens/account.json", "sessions/chat.jsonl"} {
+	for _, name := range []string{"auth.json", "auth/mcp/token.txt", "plugin-data/demo/token.txt", "channels/weixin/context-tokens/account.json", "dashboard-setup-token", "sessions/chat.jsonl"} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(home, filepath.FromSlash(name))
 			alias := filepath.Join(homeAlias, filepath.FromSlash(strings.ToUpper(name)))
@@ -284,7 +325,7 @@ func TestFileSafetyCaseInsensitivePaths(t *testing.T) {
 			}
 		})
 	}
-	for _, name := range []string{"AUTH.JSON", "AUTH/MCP/new/token.txt", "SESSIONS/new/chat.jsonl"} {
+	for _, name := range []string{"AUTH.JSON", "AUTH/MCP/new/token.txt", "DASHBOARD-SETUP-TOKEN", "SESSIONS/new/chat.jsonl"} {
 		freshHome := t.TempDir()
 		t.Setenv("PICOCLAW_HOME", freshHome)
 		result := NewWriteFileTool(freshHome, false).Execute(context.Background(), map[string]any{

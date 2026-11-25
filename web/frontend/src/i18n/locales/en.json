@@ -49,7 +49,10 @@
   },
   "launcherSetup": {
     "title": "Set dashboard password",
-    "description": "Choose a password to protect access to this dashboard. You will use it every time you sign in.",
+    "description": "Enter the one-time setup token from the launcher, then choose a password to protect this dashboard.",
+    "tokenLabel": "Setup token",
+    "tokenPlaceholder": "Paste the one-time setup token",
+    "tokenHelp": "Find it in the launcher console or in $PICOCLAW_HOME/dashboard-setup-token (default ~/.picoclaw/dashboard-setup-token). It is valid only until the password is set.",
     "passwordLabel": "Password",
     "passwordPlaceholder": "At least 8 characters",
     "confirmLabel": "Confirm password",

@@ -47,7 +47,14 @@ docker compose -f docker/docker-compose.yml --profile gateway down
 docker compose -f docker/docker-compose.yml --profile launcher up -d
 ```
 
-在浏览器中打开 <http://localhost:18800>。Launcher 会自动管理 Gateway 进程。
+在浏览器中打开 <http://localhost:18800>。首次启动时，从容器中获取一次性设置令牌，并在 `/launcher-setup` 中输入：
+
+```bash
+docker compose -f docker/docker-compose.yml --profile launcher exec picoclaw-launcher \
+  cat /root/.picoclaw/dashboard-setup-token
+```
+
+Launcher 会自动管理 Gateway 进程。容器以控制台模式运行，因此启动日志也会包含设置令牌；在完成设置前，请将这些日志视为敏感信息。
 
 > [!WARNING]
 > Web 控制台通过 dashboard 登录密码保护。**不要**将启动器暴露到不可信网络或公网。完整说明见 [配置指南](configuration.md) 中的「Web 启动器控制台」一节。

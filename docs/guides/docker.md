@@ -49,7 +49,14 @@ The `launcher` image includes both binaries (`picoclaw`, `picoclaw-launcher`) an
 docker compose -f docker/docker-compose.yml --profile launcher up -d
 ```
 
-Open http://localhost:18800 in your browser. The launcher manages the gateway process automatically.
+Open http://localhost:18800 in your browser. On first run, retrieve the one-time setup token from the container and enter it at `/launcher-setup`:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile launcher exec picoclaw-launcher \
+  cat /root/.picoclaw/dashboard-setup-token
+```
+
+The launcher manages the gateway process automatically. Because the container runs in console mode, its startup logs also contain the setup token; treat those logs as sensitive until setup is complete.
 
 > [!WARNING]
 > The web console is protected by dashboard password login. **Do not** expose the launcher to untrusted networks or the public internet. See [Web launcher dashboard](configuration.md#web-launcher-dashboard) in the Configuration Guide.

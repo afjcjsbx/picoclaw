@@ -27,7 +27,7 @@ On Windows and Linux desktop builds, a system tray icon appears while the launch
 | --- | --- | --- |
 | `-port` | `18800` | Listen port (1–65535) |
 | `-host` | `""` | Bind host; when set, overrides `-public`. Env var `PICOCLAW_LAUNCHER_HOST` is used when `-host` is not supplied; the flag takes priority over the env var, which takes priority over `launcher-config.json`. |
-| `-public` | `false` | Bind all interfaces instead of localhost; ignored when `-host` or `PICOCLAW_LAUNCHER_HOST` is set |
+| `-public` | `false` | Bind all interfaces instead of localhost; ignored when `-host` or `PICOCLAW_LAUNCHER_HOST` is set. First-run setup still requires the one-time bootstrap token. |
 | `-no-browser` | `false` | Do not auto-open the browser |
 | `-lang` | auto | UI language (`en` or `zh`) |
 | `-console` | `false` | Console mode: no tray, logs to the terminal |
@@ -44,8 +44,9 @@ The launcher stores its own settings (port, public flag, IP allowlists) in `laun
 ## First Run
 
 1. If no `config.json` exists yet, the launcher automatically runs the equivalent of `picoclaw onboard` to create the configuration and workspace.
-2. The browser opens the **setup page** (`/launcher-setup`): create a dashboard password (at least 8 characters). It is stored as a bcrypt hash in `launcher-auth.db` (or in `launcher-config.json` on platforms without the SQLite store).
-3. After setup, the dashboard opens. When the launcher auto-opens a **local** browser, it logs you in automatically via a one-shot loopback endpoint; manual sign-ins happen at `/launcher-login`.
+2. The launcher generates a one-time 256-bit setup token, writes it to `~/.picoclaw/dashboard-setup-token` with owner-only permissions (`0600`), and prints it in console mode. The token is never returned by the HTTP API.
+3. The browser opens the **setup page** (`/launcher-setup`): enter the setup token and create a dashboard password (at least 8 characters). The password is stored as a bcrypt hash in `launcher-auth.db` (or in `launcher-config.json` on platforms without the SQLite store). The token is single-use and its file is removed after successful setup; restarting before setup generates a new token.
+4. After setup, sign in at `/launcher-login`. When the launcher auto-opens a **local** browser after a later startup, it logs you in automatically via a one-shot loopback endpoint.
 
 Sessions last about 31 days but are invalidated when the launcher restarts, so a restart asks you to log in again. Login attempts are rate-limited per client IP.
 
@@ -97,7 +98,7 @@ Remote-facing deployments are controlled by the launcher config (also editable f
 | `trusted_proxy_cidrs` | CIDRs whose forwarding headers are trusted (for reverse proxies) |
 
 > [!WARNING]
-> Never expose the launcher directly to the public internet. The dashboard is protected by its password and the IP allowlist; if you need public access, put it behind a reverse proxy with TLS. The session cookie is only marked `Secure` when TLS is terminated in front of the launcher (or `X-Forwarded-Proto: https` is trusted).
+> Never expose the launcher directly to the public internet. Before the first password is set, only someone who can read the owner-only setup token can claim the dashboard. Treat that token like an administrator credential. The dashboard is subsequently protected by its password and the IP allowlist; if you need public access, put it behind a reverse proxy with TLS. The session cookie is only marked `Secure` when TLS is terminated in front of the launcher (or `X-Forwarded-Proto: https` is trusted).
 
 ## Tray, Autostart, and Logs
 

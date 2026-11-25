@@ -31,6 +31,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/netbind"
 	"github.com/sipeed/picoclaw/web/backend/api"
 	"github.com/sipeed/picoclaw/web/backend/dashboardauth"
+	"github.com/sipeed/picoclaw/web/backend/dashboardsetup"
 	"github.com/sipeed/picoclaw/web/backend/launcherconfig"
 	"github.com/sipeed/picoclaw/web/backend/middleware"
 	"github.com/sipeed/picoclaw/web/backend/utils"
@@ -400,7 +401,12 @@ func launcherAllowlistBypassLogPolicy(
 func main() {
 	port := flag.String("port", "18800", "Port to listen on")
 	host := flag.String("host", "", "Host to listen on (overrides -public when set)")
-	public := flag.Bool("public", false, "Listen on all interfaces (IPv4 and IPv6) instead of localhost only")
+	public := flag.Bool(
+		"public",
+		false,
+		"Listen on all interfaces (IPv4 and IPv6) instead of localhost only; "+
+			"first-run setup still requires the one-time bootstrap token",
+	)
 	noBrowser = flag.Bool("no-browser", false, "Do not auto-open browser on startup")
 	lang := flag.String("lang", "", "Language: en (English) or zh (Chinese). Default: auto-detect from system locale")
 	console := flag.Bool("console", false, "Console mode, no GUI")
@@ -628,16 +634,37 @@ func main() {
 
 	var localAutoLogin *middleware.LauncherDashboardLocalAutoLogin
 	needsInitialSetup := false
+	setupTokenPath := dashboardsetup.TokenPath(picoHome)
+	var dashboardSetupToken string
 	if passwordStore != nil {
 		initialized, initErr := passwordStore.IsInitialized(context.Background())
 		if initErr != nil {
 			logger.ErrorC("web", fmt.Sprintf("Warning: could not check dashboard password state: %v", initErr))
 		} else if !initialized {
 			needsInitialSetup = true
-		} else if shouldEnableLocalAutoLogin(*noBrowser, openResult.ProbeHost) {
-			localAutoLogin, err = middleware.NewLauncherDashboardLocalAutoLogin(5 * time.Minute)
+			dashboardSetupToken, err = dashboardsetup.NewToken()
 			if err != nil {
-				logger.Fatalf("Failed to create local auto-login grant: %v", err)
+				logger.Fatalf("Dashboard auth setup failed: %v", err)
+			}
+			if err = dashboardsetup.WriteToken(setupTokenPath, dashboardSetupToken); err != nil {
+				logger.Fatalf("Dashboard auth setup failed: %v", err)
+			}
+			logger.InfoC(
+				"web",
+				fmt.Sprintf("Dashboard setup required. Use the one-time token from %s", setupTokenPath),
+			)
+		} else {
+			if removeErr := os.Remove(setupTokenPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				logger.WarnC(
+					"web",
+					fmt.Sprintf("Could not remove stale dashboard setup token file %s: %v", setupTokenPath, removeErr),
+				)
+			}
+			if shouldEnableLocalAutoLogin(*noBrowser, openResult.ProbeHost) {
+				localAutoLogin, err = middleware.NewLauncherDashboardLocalAutoLogin(5 * time.Minute)
+				if err != nil {
+					logger.Fatalf("Failed to create local auto-login grant: %v", err)
+				}
 			}
 		}
 	}
@@ -649,6 +676,15 @@ func main() {
 		SessionCookie: dashboardSessionCookie,
 		PasswordStore: passwordStore,
 		StoreError:    authStoreErr,
+		SetupToken:    dashboardSetupToken,
+		OnInitialSetup: func() {
+			if removeErr := os.Remove(setupTokenPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				logger.WarnC(
+					"web",
+					fmt.Sprintf("Could not remove used dashboard setup token file %s: %v", setupTokenPath, removeErr),
+				)
+			}
+		},
 	})
 
 	// API Routes (e.g. /api/status)
@@ -702,10 +738,14 @@ func main() {
 		fmt.Print(utils.Banner)
 		fmt.Println()
 		if needsInitialSetup {
+			fmt.Printf("  First-time setup token: %s\n", dashboardSetupToken)
+			fmt.Printf("  Owner-only token file: %s\n", setupTokenPath)
 			if *noBrowser {
-				fmt.Println("  First-time setup: open /launcher-setup to create the dashboard password.")
+				fmt.Println(
+					"  First-time setup: open /launcher-setup and enter the token to create the dashboard password.",
+				)
 			} else {
-				fmt.Println("  Launcher will open /launcher-setup automatically.")
+				fmt.Println("  Launcher will open /launcher-setup automatically; enter the token to continue.")
 			}
 			fmt.Println()
 		}

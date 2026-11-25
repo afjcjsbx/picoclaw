@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/sipeed/picoclaw/web/backend/middleware"
 )
@@ -31,6 +33,11 @@ type LauncherAuthRouteOpts struct {
 	// non-nil and PasswordStore is nil, auth endpoints fail closed with a
 	// recovery message.
 	StoreError error
+	// SetupToken is the one-time bootstrap grant required to initialize the
+	// first dashboard password. It is never required for password changes.
+	SetupToken string
+	// OnInitialSetup runs after the first password is persisted successfully.
+	OnInitialSetup func()
 }
 
 type launcherAuthLoginBody struct {
@@ -38,8 +45,9 @@ type launcherAuthLoginBody struct {
 }
 
 type launcherAuthSetupBody struct {
-	Password string `json:"password"`
-	Confirm  string `json:"confirm"`
+	Password   string `json:"password"`
+	Confirm    string `json:"confirm"`
+	SetupToken string `json:"setup_token"`
 }
 
 type launcherAuthStatusResponse struct {
@@ -54,11 +62,16 @@ func RegisterLauncherAuthRoutes(mux *http.ServeMux, opts LauncherAuthRouteOpts) 
 		secure = middleware.DefaultLauncherDashboardSecureCookie
 	}
 	h := &launcherAuthHandlers{
-		sessionCookie: opts.SessionCookie,
-		secureCookie:  secure,
-		store:         opts.PasswordStore,
-		storeErr:      opts.StoreError,
-		loginLimit:    newLoginRateLimiter(),
+		sessionCookie:  opts.SessionCookie,
+		secureCookie:   secure,
+		store:          opts.PasswordStore,
+		storeErr:       opts.StoreError,
+		onInitialSetup: opts.OnInitialSetup,
+		setupLimit:     newLoginRateLimiter(),
+		loginLimit:     newLoginRateLimiter(),
+	}
+	if token := strings.TrimSpace(opts.SetupToken); token != "" {
+		h.setupToken.Store(&token)
 	}
 	mux.HandleFunc("POST /api/auth/login", h.handleLogin)
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
@@ -67,11 +80,15 @@ func RegisterLauncherAuthRoutes(mux *http.ServeMux, opts LauncherAuthRouteOpts) 
 }
 
 type launcherAuthHandlers struct {
-	sessionCookie string
-	secureCookie  func(*http.Request) bool
-	store         PasswordStore
-	storeErr      error // set when the store failed to open; drives recovery messages
-	loginLimit    *loginRateLimiter
+	sessionCookie  string
+	secureCookie   func(*http.Request) bool
+	store          PasswordStore
+	storeErr       error // set when the store failed to open; drives recovery messages
+	setupToken     atomic.Pointer[string]
+	onInitialSetup func()
+	setupMu        sync.Mutex
+	setupLimit     *loginRateLimiter
+	loginLimit     *loginRateLimiter
 }
 
 // isStoreInitialized safely queries the store.
@@ -104,6 +121,30 @@ func launcherSetupCrossSite(r *http.Request) bool {
 		return !sameLauncherRequestOrigin(r, referer)
 	}
 
+	return false
+}
+
+func validLauncherSetupToken(got, want string) bool {
+	got = strings.TrimSpace(got)
+	return got != "" && want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func (h *launcherAuthHandlers) validSetupToken(got string) bool {
+	want := h.setupToken.Load()
+	return want != nil && validLauncherSetupToken(got, *want)
+}
+
+func (h *launcherAuthHandlers) hasValidDashboardSession(r *http.Request) bool {
+	c, err := r.Cookie(middleware.LauncherDashboardCookieName)
+	return err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(h.sessionCookie)) == 1
+}
+
+func (h *launcherAuthHandlers) allowSetupAttempt(w http.ResponseWriter, r *http.Request) bool {
+	if h.setupLimit.allow(clientIPForLimiter(r)) {
+		return true
+	}
+	w.WriteHeader(http.StatusTooManyRequests)
+	_, _ = w.Write([]byte(`{"error":"too many setup attempts"}`))
 	return false
 }
 
@@ -247,8 +288,8 @@ func (h *launcherAuthHandlers) handleStatus(w http.ResponseWriter, r *http.Reque
 // handleSetup sets or changes the dashboard password.
 //
 // Rules:
-//   - If the store has no password yet, anyone who can reach the setup endpoint
-//     may initialize the password.
+//   - If the store has no password yet, the caller must provide the one-time
+//     bootstrap token delivered to the launcher operator.
 //   - If a password is already set, the caller must hold a valid session cookie.
 func (h *launcherAuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -269,26 +310,9 @@ func (h *launcherAuthHandlers) handleSetup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	initialized, initErr := h.isStoreInitialized(r.Context())
-	if initErr != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeErrorf(w, "%v", initErr)
-		return
-	}
-
-	// If already initialized, require an active session (change-password flow).
-	if initialized {
-		authed := false
-		if c, err := r.Cookie(middleware.LauncherDashboardCookieName); err == nil {
-			authed = subtle.ConstantTimeCompare([]byte(c.Value), []byte(h.sessionCookie)) == 1
-		}
-		if !authed {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"must be authenticated to change password"}`))
-			return
-		}
-	}
-
+	// Parse and validate the bounded body before taking the setup lock. The
+	// endpoint is public during first run, so an unauthenticated slow body must
+	// not block legitimate setup or password-change requests.
 	var body launcherAuthSetupBody
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -313,10 +337,69 @@ func (h *launcherAuthHandlers) handleSetup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Reject invalid public attempts before contending on the persistence lock.
+	// Valid bootstrap tokens and authenticated password changes bypass the
+	// limiter, so a proxy-shared bucket cannot lock out the legitimate operator.
+	initialized, initErr := h.isStoreInitialized(r.Context())
+	if initErr != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeErrorf(w, "%v", initErr)
+		return
+	}
+	if initialized {
+		if !h.hasValidDashboardSession(r) {
+			if !h.allowSetupAttempt(w, r) {
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"must be authenticated to change password"}`))
+			return
+		}
+	} else if !h.validSetupToken(body.SetupToken) {
+		if !h.allowSetupAttempt(w, r) {
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid or missing dashboard setup token"}`))
+		return
+	}
+
+	// Serialize the initialized check with the write so two concurrent requests
+	// cannot both consume the first-run grant.
+	h.setupMu.Lock()
+	defer h.setupMu.Unlock()
+
+	initialized, initErr = h.isStoreInitialized(r.Context())
+	if initErr != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeErrorf(w, "%v", initErr)
+		return
+	}
+
+	// If already initialized, require an active session (change-password flow).
+	if initialized {
+		if !h.hasValidDashboardSession(r) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"must be authenticated to change password"}`))
+			return
+		}
+	} else if !h.validSetupToken(body.SetupToken) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid or missing dashboard setup token"}`))
+		return
+	}
+
 	if err := h.store.SetPassword(r.Context(), pw); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		writeErrorf(w, "failed to save password: %v", err)
 		return
+	}
+
+	if !initialized {
+		h.setupToken.Store(nil)
+		if h.onInitialSetup != nil {
+			h.onInitialSetup()
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)

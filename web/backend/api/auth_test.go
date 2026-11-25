@@ -8,19 +8,41 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/sipeed/picoclaw/web/backend/middleware"
 )
 
+type gatedSetupBody struct {
+	entered chan<- struct{}
+	release <-chan struct{}
+	reader  *strings.Reader
+}
+
+func (b *gatedSetupBody) Read(p []byte) (int, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-b.release
+	return b.reader.Read(p)
+}
+
+func (*gatedSetupBody) Close() error { return nil }
+
 type fakePasswordStore struct {
+	mu          sync.Mutex
 	initialized bool
 	password    string
 	err         error
+	setErr      error
 }
 
 func (s *fakePasswordStore) IsInitialized(context.Context) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.err != nil {
 		return false, s.err
 	}
@@ -28,8 +50,13 @@ func (s *fakePasswordStore) IsInitialized(context.Context) (bool, error) {
 }
 
 func (s *fakePasswordStore) SetPassword(_ context.Context, plain string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
+	}
+	if s.setErr != nil {
+		return s.setErr
 	}
 	s.password = plain
 	s.initialized = true
@@ -37,6 +64,8 @@ func (s *fakePasswordStore) SetPassword(_ context.Context, plain string) error {
 }
 
 func (s *fakePasswordStore) VerifyPassword(_ context.Context, plain string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.err != nil {
 		return false, s.err
 	}
@@ -105,11 +134,13 @@ func TestLauncherAuthLoginAndStatus(t *testing.T) {
 
 func TestLauncherAuthUninitializedStoreRequiresSetup(t *testing.T) {
 	const sess = "session-cookie-value"
+	const setupToken = "bootstrap-test-token"
 	store := &fakePasswordStore{}
 	mux := http.NewServeMux()
 	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{
 		SessionCookie: sess,
 		PasswordStore: store,
+		SetupToken:    setupToken,
 	})
 
 	rec := httptest.NewRecorder()
@@ -131,6 +162,9 @@ func TestLauncherAuthUninitializedStoreRequiresSetup(t *testing.T) {
 	if body.Authenticated {
 		t.Fatalf("unexpected authenticated=true: %+v", body)
 	}
+	if strings.Contains(rec.Body.String(), "setup_token") || strings.Contains(rec.Body.String(), setupToken) {
+		t.Fatalf("status response leaked the setup token: %s", rec.Body.String())
+	}
 
 	rec = httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"not-set-yet"}`))
@@ -145,6 +179,21 @@ func TestLauncherAuthUninitializedStoreRequiresSetup(t *testing.T) {
 		http.MethodPost,
 		"/api/auth/setup",
 		strings.NewReader(`{"password":"12345678","confirm":"12345678"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("setup without token code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.initialized || store.password != "" {
+		t.Fatalf("setup without token mutated store: initialized=%v password=%q", store.initialized, store.password)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/setup",
+		strings.NewReader(`{"password":"12345678","confirm":"12345678","setup_token":"bootstrap-test-token"}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
@@ -170,7 +219,9 @@ func TestLauncherAuthSetupRequiresSessionWhenInitialized(t *testing.T) {
 		PasswordStore: store,
 	})
 
-	body := strings.NewReader(`{"password":"new-password","confirm":"new-password"}`)
+	body := strings.NewReader(
+		`{"password":"new-password","confirm":"new-password","setup_token":"not-needed-for-session"}`,
+	)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -193,7 +244,68 @@ func TestLauncherAuthSetupRequiresSessionWhenInitialized(t *testing.T) {
 	}
 }
 
-func TestLauncherAuthInitialSetupAllowsDirectSetup(t *testing.T) {
+func TestLauncherAuthInitialSetupRequiresBootstrapToken(t *testing.T) {
+	const setupToken = "bootstrap-test-token"
+	store := &fakePasswordStore{}
+	initialSetupCalls := 0
+	mux := http.NewServeMux()
+	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{
+		SessionCookie: "session-cookie-value",
+		PasswordStore: store,
+		SetupToken:    setupToken,
+		OnInitialSetup: func() {
+			initialSetupCalls++
+		},
+	})
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "missing token", body: `{"password":"12345678","confirm":"12345678"}`},
+		{name: "empty token", body: `{"password":"12345678","confirm":"12345678","setup_token":""}`},
+		{name: "wrong token", body: `{"password":"12345678","confirm":"12345678","setup_token":"wrong-token"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("setup code = %d body=%s", rec.Code, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), setupToken) {
+				t.Fatalf("rejected setup response leaked the setup token: %s", rec.Body.String())
+			}
+			if store.initialized || store.password != "" {
+				t.Fatalf("rejected setup mutated store: initialized=%v password=%q", store.initialized, store.password)
+			}
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/setup",
+		strings.NewReader(`{"password":"12345678","confirm":"12345678","setup_token":"bootstrap-test-token"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup with grant code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), setupToken) {
+		t.Fatalf("successful setup response leaked the setup token: %s", rec.Body.String())
+	}
+	if !store.initialized || store.password != "12345678" {
+		t.Fatalf("setup store: initialized=%v password=%q", store.initialized, store.password)
+	}
+	if initialSetupCalls != 1 {
+		t.Fatalf("OnInitialSetup calls = %d, want 1", initialSetupCalls)
+	}
+}
+
+func TestLauncherAuthInitialSetupFailsClosedWithoutConfiguredToken(t *testing.T) {
 	store := &fakePasswordStore{}
 	mux := http.NewServeMux()
 	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{
@@ -205,12 +317,237 @@ func TestLauncherAuthInitialSetupAllowsDirectSetup(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/auth/setup",
-		strings.NewReader(`{"password":"12345678","confirm":"12345678"}`),
+		strings.NewReader(`{"password":"12345678","confirm":"12345678","setup_token":"attacker-token"}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("setup code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.initialized {
+		t.Fatal("setup without a configured token initialized the store")
+	}
+}
+
+func TestLauncherAuthSetupTokenIsSingleUse(t *testing.T) {
+	const setupToken = "bootstrap-test-token"
+	store := &fakePasswordStore{}
+	mux := http.NewServeMux()
+	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{
+		SessionCookie: "session-cookie-value",
+		PasswordStore: store,
+		SetupToken:    setupToken,
+	})
+
+	body := `{"password":"12345678","confirm":"12345678","setup_token":"bootstrap-test-token"}`
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rec, req)
+		want := http.StatusOK
+		if i == 1 {
+			want = http.StatusUnauthorized
+		}
+		if rec.Code != want {
+			t.Fatalf("attempt %d code = %d body=%s, want %d", i+1, rec.Code, rec.Body.String(), want)
+		}
+	}
+}
+
+func TestLauncherAuthSetupTokenSurvivesPasswordWriteFailure(t *testing.T) {
+	const setupToken = "bootstrap-test-token"
+	store := &fakePasswordStore{setErr: errors.New("disk full")}
+	mux := http.NewServeMux()
+	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{
+		SessionCookie: "session-cookie-value",
+		PasswordStore: store,
+		SetupToken:    setupToken,
+	})
+
+	body := `{"password":"12345678","confirm":"12345678","setup_token":"bootstrap-test-token"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("failed setup code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.initialized {
+		t.Fatal("failed password write initialized the store")
+	}
+
+	store.setErr = nil
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("setup without grant code = %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("retry setup code = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLauncherAuthSlowSetupBodyDoesNotBlockOtherRequests(t *testing.T) {
+	const setupToken = "bootstrap-test-token"
+	store := &fakePasswordStore{}
+	mux := http.NewServeMux()
+	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{
+		SessionCookie: "session-cookie-value",
+		PasswordStore: store,
+		SetupToken:    setupToken,
+	})
+
+	body := `{"password":"12345678","confirm":"12345678","setup_token":"bootstrap-test-token"}`
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	entered := make(chan struct{}, 1)
+	firstDone := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", nil)
+		req.Body = &gatedSetupBody{
+			entered: entered,
+			release: release,
+			reader:  strings.NewReader(body),
+		}
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rec, req)
+		firstDone <- rec.Code
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first setup request did not start reading its body")
+	}
+
+	secondDone := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rec, req)
+		secondDone <- rec.Code
+	}()
+	select {
+	case code := <-secondDone:
+		if code != http.StatusOK {
+			t.Fatalf("second setup code = %d, want 200", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow setup body blocked another setup request")
+	}
+
+	close(release)
+	released = true
+	select {
+	case code := <-firstDone:
+		if code != http.StatusUnauthorized {
+			t.Fatalf("first setup code = %d, want 401 after the token was consumed", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first setup request did not finish after its body was released")
+	}
+}
+
+func TestLauncherAuthSetupRateLimit(t *testing.T) {
+	store := &fakePasswordStore{}
+	mux := http.NewServeMux()
+	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{
+		SessionCookie: "session-cookie-value",
+		PasswordStore: store,
+		SetupToken:    "bootstrap-test-token",
+	})
+
+	body := `{"password":"12345678","confirm":"12345678","setup_token":"wrong-token"}`
+	for i := 0; i < loginAttemptsPerIP; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "192.0.2.10:12345"
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d code = %d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.10:12345"
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited setup code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.initialized {
+		t.Fatal("rate-limited setup initialized the store")
+	}
+
+	validBody := `{"password":"12345678","confirm":"12345678","setup_token":"bootstrap-test-token"}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(validBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.10:12345"
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid token after rate limit code = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/setup",
+		strings.NewReader(`{"password":"new-password","confirm":"new-password"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.10:12345"
+	req.AddCookie(&http.Cookie{Name: middleware.LauncherDashboardCookieName, Value: "session-cookie-value"})
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authenticated change after rate limit code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.password != "new-password" {
+		t.Fatalf("password after authenticated change = %q", store.password)
+	}
+}
+
+func TestLauncherAuthConcurrentSetupConsumesTokenOnce(t *testing.T) {
+	const setupToken = "bootstrap-test-token"
+	store := &fakePasswordStore{}
+	mux := http.NewServeMux()
+	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{
+		SessionCookie: "session-cookie-value",
+		PasswordStore: store,
+		SetupToken:    setupToken,
+	})
+
+	start := make(chan struct{})
+	codes := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/auth/setup",
+				strings.NewReader(`{"password":"12345678","confirm":"12345678","setup_token":"bootstrap-test-token"}`),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			mux.ServeHTTP(rec, req)
+			codes <- rec.Code
+		}()
+	}
+	close(start)
+
+	got := map[int]int{}
+	for i := 0; i < 2; i++ {
+		got[<-codes]++
+	}
+	if got[http.StatusOK] != 1 || got[http.StatusUnauthorized] != 1 {
+		t.Fatalf("concurrent setup codes = %#v, want one 200 and one 401", got)
 	}
 }
 

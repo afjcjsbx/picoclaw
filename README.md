@@ -121,7 +121,7 @@ curl -fsSL https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/inst
 irm https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/scripts/install.ps1 | iex
 ```
 
-The installer detects the CPU architecture, verifies the release checksum, installs both binaries, and starts the launcher. The Web UI opens at `http://localhost:18800`; on first run, create the dashboard password in the browser.
+The installer detects the CPU architecture, verifies the release checksum, installs both binaries, and starts the launcher. The Web UI opens at `http://localhost:18800`; on first run, enter the one-time token from `~/.picoclaw/dashboard-setup-token` (or the launcher console) at `/launcher-setup`, then create the dashboard password.
 
 ### Precompiled binaries
 
@@ -202,7 +202,7 @@ picoclaw-launcher
 ```
 
 > [!TIP]
-> **Remote access / Docker / VM:** add the `-public` flag to listen on all interfaces:
+> **Remote access / Docker / VM:** add the `-public` flag to listen on all interfaces. On first run, setup still requires the one-time token from the owner-only `~/.picoclaw/dashboard-setup-token` file; complete setup before exposing the launcher:
 >
 > ```bash
 > picoclaw-launcher -public

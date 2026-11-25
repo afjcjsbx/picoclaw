@@ -3,8 +3,7 @@
  * Uses plain fetch (not launcherFetch) to avoid redirect loops on auth pages.
  */
 export type LoginResult =
-  | { ok: true }
-  | { ok: false; status: number; error: string }
+  { ok: true } | { ok: false; status: number; error: string }
 
 export async function postLauncherDashboardLogin(
   password: string,
@@ -62,6 +61,7 @@ export type SetupResult = { ok: true } | { ok: false; error: string }
 export async function postLauncherDashboardSetup(
   password: string,
   confirm: string,
+  setupToken?: string,
 ): Promise<SetupResult> {
   const res = await fetch("/api/auth/setup", {
     method: "POST",
@@ -73,6 +73,7 @@ export async function postLauncherDashboardSetup(
     body: JSON.stringify({
       password: password.trim(),
       confirm: confirm.trim(),
+      ...(setupToken ? { setup_token: setupToken.trim() } : {}),
     }),
   })
   if (res.ok) return { ok: true }

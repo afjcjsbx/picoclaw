@@ -182,7 +182,7 @@ Example clean web policy:
 
 ### Web launcher dashboard
 
-**picoclaw-launcher** serves a browser UI that requires password sign-in first. On first run, open `/launcher-setup` to create the dashboard password. Later manual sign-ins use `/launcher-login`.
+The launcher serves a browser UI that requires password sign-in first. On first run, it generates a one-time setup token in `~/.picoclaw/dashboard-setup-token` (owner-only permissions) and prints it in console mode. Open `/launcher-setup`, enter that token, and create the dashboard password. The token is never returned by the API, is single-use, and is removed after successful setup. Later manual sign-ins use `/launcher-login`.
 
 - **Config file**: Same directory as `config.json` (or the file pointed to by `PICOCLAW_CONFIG`). The launcher-specific file is `launcher-config.json`.
 - **Password storage**: On supported platforms, the password is stored as a bcrypt hash in `launcher-auth.db`. On platforms where the SQLite password store is unavailable, the bcrypt hash is stored in `launcher-config.json`.
@@ -190,7 +190,7 @@ Example clean web policy:
 - **Local auto-login**: When the launcher auto-opens a local browser after startup, it uses a one-shot loopback-only bootstrap endpoint to set the session cookie automatically.
 - **Unsupported auth paths**: URL token login (`?token=...`), `PICOCLAW_LAUNCHER_TOKEN`, and `Authorization: Bearer` dashboard auth are no longer supported.
 - **Sign-out**: Use **`POST /api/auth/logout`** with **`Content-Type: application/json`** (body may be `{}`). Do not rely on a GET URL for logout (CSRF-safe pattern).
-- **Brute-force**: **`POST /api/auth/login`** is **rate-limited per client IP per minute** (HTTP 429 when exceeded).
+- **Brute-force**: **`POST /api/auth/login`** is **rate-limited per client IP per minute** (HTTP 429 when exceeded). Failed first-run **`POST /api/auth/setup`** attempts are rate-limited the same way; a valid bootstrap token or authenticated password change is not blocked by that limiter.
 - **Session lifetime**: The HttpOnly session cookie lasts about **31 days** by default, but sessions are invalidated when the launcher process restarts.
 
 ### Skill Sources

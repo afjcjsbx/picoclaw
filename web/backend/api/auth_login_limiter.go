@@ -14,7 +14,8 @@ const (
 	logoutBodyMaxBytes = 4096
 )
 
-// loginRateLimiter limits POST /api/auth/login attempts per IP per minute.
+// loginRateLimiter limits authentication attempts per IP per minute. The
+// launcher uses separate instances for login and first-run setup.
 type loginRateLimiter struct {
 	mu   sync.Mutex
 	now  func() time.Time
