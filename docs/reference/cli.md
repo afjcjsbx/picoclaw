@@ -186,11 +186,20 @@ Manages credentials and channel QR flows. Providers and `model_list` setup are c
 | `--no-browser` | Do not auto-open a browser during OAuth login |
 | `--setup-token` | Use the setup-token flow for Anthropic (from `claude setup-token`) |
 
+`auth weixin` flags:
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--timeout` | `300` | Login timeout in seconds |
+| `--proxy` | *(none)* | HTTP proxy URL (e.g. `http://localhost:7890`) |
+| `--base-url` | `https://ilinkai.weixin.qq.com/` | iLink API base URL |
+
 ```bash
 picoclaw auth login --provider anthropic
 picoclaw auth login --provider openai --device-code
 picoclaw auth wecom
 picoclaw auth weixin --timeout 300
+picoclaw auth weixin --proxy http://localhost:7890
 ```
 
 ## Skills
