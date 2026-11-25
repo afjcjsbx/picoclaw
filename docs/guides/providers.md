@@ -505,6 +505,20 @@ With explicit `provider`, PicoClaw sends `openai/gpt-oss-20b` unchanged to the L
 
 With explicit `provider`, PicoClaw sends `model` unchanged. That means `"provider": "litellm", "model": "lite-gpt4"` sends `lite-gpt4`, while `"provider": "litellm", "model": "openai/gpt-4o"` sends `openai/gpt-4o`. The legacy compatibility forms `litellm/lite-gpt4` and `litellm/openai/gpt-4o` still resolve the same way when `provider` is omitted.
 
+**MiniMax**
+
+PicoClaw automatically injects `"reasoning_split": true` into every request body for the `minimax` provider unless you set it yourself. This field splits the response into reasoning and answer parts as required by the MiniMax API. To override it (e.g. disable it), set the field explicitly in `extra_body`:
+
+```json
+{
+  "model_name": "minimax-m3",
+  "provider": "minimax",
+  "model": "MiniMax-M3",
+  "api_keys": ["your-minimax-key"],
+  "extra_body": { "reasoning_split": false }
+}
+```
+
 **Azure OpenAI (keyless)**
 
 When `api_keys` is omitted, PicoClaw uses Azure's `DefaultAzureCredential` (Managed Identity, Workload Identity, Entra ID CLI login, etc.) — no API key needed:
