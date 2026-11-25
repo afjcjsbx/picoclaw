@@ -62,6 +62,7 @@ Sessions last about 31 days but are invalidated when the launcher restarts, so a
 | `/agent/cron` | View scheduled jobs with their last-run status and stats; trigger a job immediately, enable/disable, or remove it |
 | `/agent/mcp` | View MCP server connection status and tool lists; add, edit, enable/disable, and remove MCP servers |
 | `/config` | Edit agent defaults, self-evolution, exec/cron controls, heartbeat, device monitoring, launcher networking/autostart, and auxiliary model assignments (compaction, vision) |
+| `/config/raw` | Edit `config.json` as raw JSON in a text area; useful for settings the form UI does not expose |
 | `/logs` | Follow the in-memory Gateway log buffer and clear it |
 
 ### Voice messages
