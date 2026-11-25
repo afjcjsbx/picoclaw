@@ -1255,6 +1255,10 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 > **`llm_retry_on_empty_content`** (`agents.defaults`, default `true`): when the model returns a successful response with no text content and no tool calls, PicoClaw retries the request using the same budget as transient provider errors (see `max_llm_retries`). Responses that include tool calls are never retried on this condition; an empty text body is intentional when the model is requesting tools.
 >
 > **`llm_retry_on_finish_reasons`** (`agents.defaults`, default `["length"]`): list of `finish_reason` values that cause an otherwise-successful response to be retried. The built-in entry `"length"` also covers `"truncated"`, which some provider paths use for the same condition. Set to `[]` to disable finish-reason retries. Both fields share the same retry budget and backoff as transient provider errors.
+>
+> **`max_llm_retries`** (`agents.defaults`, default `2`, env `PICOCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES`): number of additional attempts after the first LLM call fails with a transient error (rate limit, 5xx, timeout, network issue) or with a semantic condition covered by `llm_retry_on_empty_content` or `llm_retry_on_finish_reasons`. `0` disables retries.
+>
+> **`llm_retry_backoff_secs`** (`agents.defaults`, default `2`, env `PICOCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS`): base wait in seconds between retry attempts. The actual wait before retry _n_ (0-based) is `(n + 1) × llm_retry_backoff_secs`, so with the default of `2` the waits are 2 s, 4 s, …
 
 </details>
 
