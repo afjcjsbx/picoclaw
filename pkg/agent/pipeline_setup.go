@@ -68,6 +68,8 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					"session_key": ts.sessionKey,
 					"error":       err.Error(),
 				})
+			} else {
+				p.invalidateUsageAnchor(ts)
 			}
 			ts.refreshRestorePointFromSession(ts.agent)
 			if resp, err := p.ContextManager.Assemble(ctx, &AssembleRequest{

@@ -33,12 +33,15 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 	}
 	toolTokens := EstimateToolDefsTokens(toolDefs)
 	threshold := summarizeThresholdTokens(ts.agent)
-	promptTokensNow := func() int {
+	promptTokensNow := func() (int, bool) {
+		if promptTokens, anchored := p.anchoredPromptTokens(ts, exec, toolTokens); anchored {
+			return promptTokens, true
+		}
 		total := toolTokens
 		for _, m := range exec.messages {
 			total += estimateMessageTokensForProvider(provider, m)
 		}
-		return total
+		return total, false
 	}
 
 	var health CompactionHealthReporter
@@ -60,7 +63,7 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 
 	attempted := false
 	for pass := 0; pass < maxCompactionPasses; pass++ {
-		promptTokens := promptTokensNow()
+		promptTokens, anchored := promptTokensNow()
 		// Assembly may already have evicted old items from the prompt. In that
 		// case promptTokens can be below the threshold while the stored context
 		// is still huge; compacting based only on the prompt would let the
@@ -93,6 +96,7 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 				"session_key":   ts.sessionKey,
 				"prompt_tokens": promptTokens,
 				"threshold":     threshold,
+				"usage_anchor":  anchored,
 				"pass":          pass + 1,
 			})
 		if err := p.ContextManager.Compact(ctx, &CompactRequest{
@@ -125,6 +129,10 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 			return
 		}
 		attempted = true
+		// The stored history changed: the reported prompt no longer describes
+		// the next prompt, so it must be measured from scratch until the next
+		// call reports real usage.
+		p.invalidateUsageAnchor(ts)
 
 		rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerThresholdRebuild)
 		if !rebuilt.assembled {
@@ -135,7 +143,7 @@ func (p *Pipeline) CompactBeforeLLM(ctx context.Context, ts *turnState, exec *tu
 		exec.currentTurnStart = len(exec.messages) - len(rebuilt.protected) - len(exec.loopWarnings)
 	}
 	if attempted {
-		finalTokens := promptTokensNow()
+		finalTokens, _ := promptTokensNow()
 		reportHealth(true, finalTokens < threshold, finalTokens)
 		if finalTokens >= threshold {
 			logger.WarnCF("agent", "Context still above summarize threshold after compaction", map[string]any{

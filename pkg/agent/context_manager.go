@@ -92,7 +92,9 @@ type CompactRequest struct {
 
 // ContextTokenReporter is an optional extension implemented by context managers
 // that can report the token size of their stored context independently of the
-// currently assembled prompt.
+// currently assembled prompt. Implementations should calibrate the count to
+// real-token units when they can (seahorse does), so it is comparable with the
+// threshold and with the provider-reported prompt size.
 type ContextTokenReporter interface {
 	ContextTokens(ctx context.Context, sessionKey string) (int, error)
 }

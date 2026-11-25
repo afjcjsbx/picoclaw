@@ -53,6 +53,9 @@ type AgentLoop struct {
 	stopCh         chan struct{}
 	stopOnce       sync.Once
 	contextManager ContextManager
+	// usageAnchors keeps the last provider-reported prompt size per session so
+	// compaction can use real usage instead of re-estimating history.
+	usageAnchors   *usageAnchorStore
 	fallback       *providers.FallbackChain
 	channelManager interfaces.ChannelManager
 	mediaStore     media.MediaStore
