@@ -972,6 +972,8 @@ Opt-in example:
 | `channel_list.<name>.settings.streaming.min_growth_chars` | int | Pico default after enabling: `1` | Minimum character growth before sending an intermediate update; final content is always flushed |
 | `model_list[].streaming.enabled` | bool | `false` | Allows this model entry to try provider streaming requests |
 
+> **Per-model sampling parameters**: each `model_list` entry also accepts `max_tokens`, `temperature`, and `context_window`, which override the matching `agents.defaults` values for requests routed to that entry. See [Providers & Model Configuration](providers.md) for the full field reference and override semantics.
+
 Legacy Telegram environment variables remain compatible: `PICOCLAW_CHANNELS_TELEGRAM_STREAMING_ENABLED`, `PICOCLAW_CHANNELS_TELEGRAM_STREAMING_THROTTLE_SECONDS`, and `PICOCLAW_CHANNELS_TELEGRAM_STREAMING_MIN_GROWTH_CHARS`. They only apply to Telegram settings and do not enable or modify Pico `settings.streaming`.
 
 Failure behavior is intentionally conservative: if streaming fails before any visible chunk is sent, PicoClaw retries once through the normal `Chat()` path. If a chunk has already been shown to the user, PicoClaw does not send a second non-streaming answer, because that would duplicate visible output.
