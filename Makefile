@@ -1,4 +1,4 @@
-.PHONY: all build install uninstall clean help test integration-test build-all lint-docs
+.PHONY: all build install uninstall clean help test integration-test build-all build-target lint-docs
 
 # Build variables
 BINARY_NAME=picoclaw
@@ -36,19 +36,29 @@ GO?=go
 WEB_GO?=$(GO)
 CGO_ENABLED?=0
 GO_BUILD_TAGS?=goolm,stdjson
-GOFLAGS?=-v -tags $(GO_BUILD_TAGS)
+GOFLAGS?=-tags $(GO_BUILD_TAGS)
+# Local builds keep the module and build caches inside the repo (gitignored) so
+# `make build` does not pollute $HOME. In CI we must NOT do that: overriding
+# GOCACHE/GOMODCACHE moves them away from the directories actions/setup-go
+# restores and saves, so every run starts from a cold cache and recompiles the
+# whole dependency graph for each target. Leaving them unset lets Go use its
+# defaults, which setup-go already caches.
+ifneq ($(CI),)
+# CI is set (GitHub Actions sets CI=true): leave GOCACHE/GOMODCACHE alone.
+else
 GOCACHE?=$(CURDIR)/.cache/go-build
 GOMODCACHE?=$(CURDIR)/.cache/go-mod
-GOTOOLCHAIN?=local
-export CGO_ENABLED
 export GOCACHE
 export GOMODCACHE
+endif
+GOTOOLCHAIN?=local
+export CGO_ENABLED
 export GOTOOLCHAIN
 comma:=,
 empty:=
 space:=$(empty) $(empty)
 GO_BUILD_TAGS_NO_GOOLM:=$(subst $(space),$(comma),$(strip $(filter-out goolm,$(subst $(comma),$(space),$(GO_BUILD_TAGS)))))
-GOFLAGS_NO_GOOLM?=-v -tags $(GO_BUILD_TAGS_NO_GOOLM)
+GOFLAGS_NO_GOOLM?=-tags $(GO_BUILD_TAGS_NO_GOOLM)
 
 # Patch MIPS LE ELF e_flags (offset 36) for NaN2008-only kernels (e.g. Ingenic X2600).
 #
@@ -325,12 +335,37 @@ build-all: generate
 	GOOS=linux GOARCH=riscv64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-riscv64 ./$(CMD_DIR)
 	GOOS=linux GOARCH=mipsle GOMIPS=softfloat $(GO) build $(GOFLAGS_NO_GOOLM) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle ./$(CMD_DIR)
 	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle)
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-armv7 ./$(CMD_DIR)
 	GOOS=darwin GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./$(CMD_DIR)
 	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./$(CMD_DIR)
 	GOOS=netbsd GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-netbsd-amd64 ./$(CMD_DIR)
 	GOOS=netbsd GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-netbsd-arm64 ./$(CMD_DIR)
 	@echo "Core builds complete"
+
+## build-target: Build the core binary for a single platform, for CI matrices
+# Usage: make build-target TARGET=linux/arm64
+#        make build-target TARGET=linux/arm GOARM=7
+#        make build-target TARGET=linux/mipsle GOMIPS=softfloat
+# Produces build/$(BINARY_NAME)-<goos>-<goarch>[.exe], the same layout build-all uses.
+TARGET_GOOS=$(word 1,$(subst /, ,$(TARGET)))
+TARGET_GOARCH=$(word 2,$(subst /, ,$(TARGET)))
+ifeq ($(TARGET_GOOS),windows)
+TARGET_EXT=.exe
+endif
+build-target: generate
+	@test -n "$(TARGET_GOOS)" || { echo "Error: TARGET must be <goos>/<goarch>, e.g. TARGET=linux/arm64"; exit 1; }
+	@test -n "$(TARGET_GOARCH)" || { echo "Error: TARGET must be <goos>/<goarch>, e.g. TARGET=linux/arm64"; exit 1; }
+	@mkdir -p $(BUILD_DIR)
+	@echo "Building $(TARGET_GOOS)/$(TARGET_GOARCH)..."
+ifeq ($(TARGET_GOARCH),loong64)
+	@$(PTY_PATCH_LOONG64)
+endif
+ifeq ($(TARGET_GOARCH),mipsle)
+	GOOS=$(TARGET_GOOS) GOARCH=$(TARGET_GOARCH) GOMIPS=$(GOMIPS) $(GO) build $(GOFLAGS_NO_GOOLM) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-$(TARGET_GOOS)-$(TARGET_GOARCH) ./$(CMD_DIR)
+	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-$(TARGET_GOOS)-$(TARGET_GOARCH))
+else
+	GOOS=$(TARGET_GOOS) GOARCH=$(TARGET_GOARCH) GOARM=$(GOARM) $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-$(TARGET_GOOS)-$(TARGET_GOARCH)$(TARGET_EXT) ./$(CMD_DIR)
+endif
+	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)-$(TARGET_GOOS)-$(TARGET_GOARCH)$(TARGET_EXT)"
 
 ## install: Install picoclaw to system and copy builtin skills
 install: build

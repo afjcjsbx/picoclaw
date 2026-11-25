@@ -58,6 +58,15 @@ func (p *CodexCliProvider) Chat(
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	// Pass only the variables the codex CLI needs: auth, proxy, and TLS certs.
+	// Unrelated credentials are excluded when isolation is enabled.
+	cmd.Env = isolation.InheritedEnv(
+		"OPENAI_*", "CODEX_*",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+		"http_proxy", "https_proxy", "no_proxy",
+		"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS",
+	)
+
 	// Execute the CLI through the shared isolation wrapper so external provider
 	// processes honor the configured isolation policy.
 	err := isolation.Run(cmd)

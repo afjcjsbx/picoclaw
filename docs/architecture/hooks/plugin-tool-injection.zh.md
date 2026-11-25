@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "本文档展示如何利用 PicoClaw 的 hook 系统实现外部插件工具注入，让 LLM 能调用由外部 hook 进程实现的工具。通过 hook 系统的 respond action，外部 hook 可以：."
+---
 # 插件工具注入示例
 
 本文档展示如何利用 PicoClaw 的 hook 系统实现外部插件工具注入，让 LLM 能调用由外部 hook 进程实现的工具。

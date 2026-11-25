@@ -1,13 +1,16 @@
+---
+description: "Task-oriented PicoClaw guides: Docker and quick start, Web UI, configuration, providers, chat apps, hardware compatibility, background tasks."
+---
 # Guides
 
 Task-oriented guides for setup, configuration, and common PicoClaw workflows.
 
 - [Docker & Quick Start Guide](docker.md): install and run PicoClaw with Docker or the launcher.
 - [Web UI & Launcher Guide](webui.md): use the browser dashboard for configuration and chat, first-run setup, remote access, tray, and logs.
-- [Android Termux Guide](android-termux.md): run the PicoClaw terminal binary on an ARM64 Android phone.
 - [Configuration Guide](configuration.md): environment variables, workspace layout, routing, and sandbox settings.
 - [Plugin Installation](plugins.md): install and activate Agent Plugin packages with skills and MCP servers.
 - [Skills Authoring Guide](skills-authoring.md): write `SKILL.md` skills from scratch, bundle resources, and share them.
+- [Custom Prompt Commands](custom-commands.md): turn Markdown files into reusable slash commands with prompt arguments.
 - [Writing a Plugin](writing-a-plugin.md): scaffold, validate, test, and share an Agent Plugin package.
 - [Session Guide](session-guide.md): how session scope affects memory sharing, summaries, and isolation.
 - [Routing Guide](routing-guide.md): agent dispatch, session overrides, and light-model routing.

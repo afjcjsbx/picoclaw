@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "PicoClaw provides QQ support via the official Bot API from the QQ Open Platform."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # QQ
 
@@ -14,7 +17,15 @@ PicoClaw provides QQ support via the official Bot API from the QQ Open Platform.
       "type": "qq",
       "app_id": "YOUR_APP_ID",
       "app_secret": "YOUR_APP_SECRET",
-      "allow_from": []
+      "allow_from": [],
+      "placeholder": { "enabled": true, "text": ["Thinking..."] },
+      "group_trigger": { "mention_only": false },
+      "reasoning_channel_id": "",
+      "settings": {
+        "max_message_length": 0,
+        "max_base64_file_size_mib": 0,
+        "send_markdown": false
+      }
     }
   }
 }
@@ -26,6 +37,12 @@ PicoClaw provides QQ support via the official Bot API from the QQ Open Platform.
 | app_id     | string | Yes      | App ID of the QQ bot application                         |
 | app_secret | string | Yes      | App Secret of the QQ bot application                     |
 | allow_from | array  | No       | Allowlist of user IDs; empty means all users are allowed |
+| placeholder | object | No      | Placeholder message shown while the agent is working     |
+| group_trigger | object | No    | Group trigger settings (e.g. `{ "mention_only": true }`) |
+| reasoning_channel_id | string | No | Optional channel ID to route reasoning output to a separate chat |
+| max_message_length | int | No | Maximum characters per outbound message before splitting. `0` uses the platform default. Env: `PICOCLAW_CHANNELS_QQ_MAX_MESSAGE_LENGTH` |
+| max_base64_file_size_mib | int | No | Maximum file size in MiB to send inline as base64. Files above this limit are skipped. `0` uses the platform default. Env: `PICOCLAW_CHANNELS_QQ_MAX_BASE64_FILE_SIZE_MIB` |
+| send_markdown | bool | No | When `true`, send messages using QQ's Markdown message format. Env: `PICOCLAW_CHANNELS_QQ_SEND_MARKDOWN` |
 
 ## Setup
 

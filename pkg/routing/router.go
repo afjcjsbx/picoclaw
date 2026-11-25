@@ -9,6 +9,13 @@ import (
 // or an attachment) before the heavy model is chosen.
 const defaultThreshold = 0.35
 
+// Default light-to-primary escalation guards. They keep a cheap model from
+// spinning through a tool-heavy turn or a growing context forever.
+const (
+	defaultEscalationPromptTokens   = 32768
+	defaultEscalationToolIterations = 3
+)
+
 // RouterConfig holds the validated model routing settings.
 // It mirrors config.RoutingConfig but lives in pkg/routing to keep the
 // dependency graph simple: pkg/agent resolves config → routing, not the reverse.
@@ -20,6 +27,15 @@ type RouterConfig struct {
 	// score >= Threshold → primary (heavy) model.
 	// score <  Threshold → light model.
 	Threshold float64
+
+	// EscalationPromptTokens is the prompt-token count above which the rest of
+	// the turn is sent to the primary model. Zero uses a safe default.
+	EscalationPromptTokens int
+
+	// EscalationToolIterations is the number of consecutive tool-calling
+	// responses after which the rest of the turn is sent to the primary model.
+	// Zero uses a safe default.
+	EscalationToolIterations int
 }
 
 // Router selects the appropriate model tier for each incoming message.
@@ -34,6 +50,12 @@ type Router struct {
 func New(cfg RouterConfig) *Router {
 	if cfg.Threshold <= 0 {
 		cfg.Threshold = defaultThreshold
+	}
+	if cfg.EscalationPromptTokens <= 0 {
+		cfg.EscalationPromptTokens = defaultEscalationPromptTokens
+	}
+	if cfg.EscalationToolIterations <= 0 {
+		cfg.EscalationToolIterations = defaultEscalationToolIterations
 	}
 	return &Router{
 		cfg:        cfg,
@@ -111,4 +133,16 @@ func (r *Router) LightModel() string {
 // Threshold returns the complexity threshold in use.
 func (r *Router) Threshold() float64 {
 	return r.cfg.Threshold
+}
+
+// EscalationPromptTokens returns the prompt-token guard used for mid-turn
+// escalation from the light tier to the primary tier.
+func (r *Router) EscalationPromptTokens() int {
+	return r.cfg.EscalationPromptTokens
+}
+
+// EscalationToolIterations returns the consecutive-tool-response guard used
+// for mid-turn escalation from the light tier to the primary tier.
+func (r *Router) EscalationToolIterations() int {
+	return r.cfg.EscalationToolIterations
 }

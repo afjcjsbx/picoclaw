@@ -1,6 +1,10 @@
+---
+lang: zh
+description: "在 PicoClaw 里，“路由系统”不是单一判断。 它实际上是组合起来的一条运行时决策链，负责决定：Pkg/routing 及其在 pkg/agent 中的集成方式。 它不讨论 web/ 目录下 launcher 的 HTTP ServeMux 路由，也不讨论前端 TanStack Router 文件路由。"
+---
 # 路由系统
 
-> 返回 [README](../README.md)
+> 返回 [README](../)
 
 在 PicoClaw 里，“路由系统”不是单一判断。
 它实际上是组合起来的一条运行时决策链，负责决定：
@@ -187,7 +191,9 @@ type SessionPolicy struct {
   "routing": {
     "enabled": true,
     "light_model": "gemini-2.0-flash",
-    "threshold": 0.35
+    "threshold": 0.35,
+    "escalation_prompt_tokens": 32768,
+    "escalation_tool_iterations": 3
   }
 }
 ```
@@ -200,6 +206,12 @@ type SessionPolicy struct {
 
 当分数低于阈值时，走轻量模型；否则仍使用 agent 的主模型。
 但在运行时，只有当 agent 实际配置了 light-model candidates 时，这个判断才会产生效果；否则仍会停留在主模型候选集上。
+
+一个轻量模型 turn 可以在中途升级到主模型：当最近一次响应的 prompt tokens
+超过 `escalation_prompt_tokens`（默认 `32768`），或轻量模型连续
+`escalation_tool_iterations`（默认 `3`）次请求工具时触发。每个 turn 最多升级
+一次，只影响剩余迭代。若所有轻量模型候选都失败，turn 会回退到主模型候选集，
+而不是直接报错。
 
 ## 复杂度特征
 

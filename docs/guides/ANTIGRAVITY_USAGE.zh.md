@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "本指南介绍如何在 PicoClaw 中设置和使用 Antigravity（Google Cloud Code Assist）提供商。要使用 Antigravity 进行身份验证，请运行以下命令：."
+---
 > 返回 [README](../project/README.zh.md)
 
 # 在 PicoClaw 中使用 Antigravity 提供商

@@ -136,6 +136,68 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 	}
 }
 
+func TestResolveModelCandidatesDropsFallbackWithoutConfiguredProvider(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{Provider: "openai"}},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "gemini-primary",
+			Provider:  "gemini",
+			Model:     "gemini-3.5-flash",
+			APIKeys:   config.SimpleSecureStrings("test-key"),
+		}},
+	}
+
+	candidates := resolveModelCandidates(cfg, "openai", "gemini-primary", []string{"gemini-3.5-flash"})
+	if len(candidates) != 1 {
+		t.Fatalf("len(candidates) = %d, want 1: %#v", len(candidates), candidates)
+	}
+	if candidates[0].Provider != "gemini" {
+		t.Fatalf("primary provider = %q, want gemini", candidates[0].Provider)
+	}
+}
+
+func TestResolveModelCandidatesKeepsSameProviderBareFallback(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{Provider: "openai"}},
+	}
+
+	candidates := resolveModelCandidates(cfg, "openai", "openai/gpt-4o", []string{"o3-mini"})
+	if len(candidates) != 2 {
+		t.Fatalf("len(candidates) = %d, want 2: %#v", len(candidates), candidates)
+	}
+	if candidates[1].Provider != "openai" || candidates[1].Model != "o3-mini" {
+		t.Fatalf("fallback = %s/%s, want openai/o3-mini", candidates[1].Provider, candidates[1].Model)
+	}
+}
+
+func TestResolveModelCandidatesKeepsFallbackResolvedByProviderTemplate(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{Provider: "openai"}},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "gemini-primary",
+				Provider:  "gemini",
+				Model:     "gemini-3.5-flash",
+				APIKeys:   config.SimpleSecureStrings("gemini-key"),
+			},
+			{
+				ModelName: "openai-template",
+				Provider:  "openai",
+				Model:     "gpt-4o",
+				APIKeys:   config.SimpleSecureStrings("openai-key"),
+			},
+		},
+	}
+
+	candidates := resolveModelCandidates(cfg, "openai", "gemini-primary", []string{"gpt-4o-mini"})
+	if len(candidates) != 2 {
+		t.Fatalf("len(candidates) = %d, want 2: %#v", len(candidates), candidates)
+	}
+	if candidates[1].Provider != "openai" || candidates[1].Model != "gpt-4o-mini" {
+		t.Fatalf("fallback = %s/%s, want openai/gpt-4o-mini", candidates[1].Provider, candidates[1].Model)
+	}
+}
+
 func TestResolveActiveModelConfig_DoesNotFallbackToOpenAIForDefaultProviderCandidate(t *testing.T) {
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
@@ -161,5 +223,40 @@ func TestResolveActiveModelConfig_DoesNotFallbackToOpenAIForDefaultProviderCandi
 
 	if got != nil {
 		t.Fatalf("resolveActiveModelConfig() = %#v, want nil for non-active provider config", got)
+	}
+}
+
+// An entry whose model_name differs from its upstream model ID must still be
+// found after the startup path has swapped in the name CreateProvider returned:
+// otherwise the agent resolves the bare ID under the default provider and
+// ignores the entry's per-model settings.
+func TestActiveModelConfigSurvivesProviderCreationWithAlias(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = "glm"
+	entry := &config.ModelConfig{
+		ModelName: "glm",
+		Provider:  "opencode-go",
+		Model:     "glm-5.3-flash",
+		Streaming: config.ModelStreamingConfig{Enabled: true},
+	}
+	entry.SetAPIKey("fake-key")
+	cfg.ModelList = []*config.ModelConfig{entry}
+
+	_, modelID, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatalf("CreateProvider() error = %v", err)
+	}
+	if modelID != "glm-5.3-flash" {
+		t.Fatalf("CreateProvider() model ID = %q, want the upstream ID", modelID)
+	}
+	cfg.Agents.Defaults.ModelName = providers.DefaultModelRef(cfg, modelID)
+
+	candidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, cfg.Agents.Defaults.ModelName, nil)
+	if len(candidates) != 1 || candidates[0].Provider != "opencode-go" {
+		t.Fatalf("candidates = %+v, want one opencode-go candidate", candidates)
+	}
+	got := resolveActiveModelConfig(cfg, "/workspace", candidates, candidates[0].Model, cfg.Agents.Defaults.Provider)
+	if got == nil || !got.Streaming.Enabled {
+		t.Fatalf("resolveActiveModelConfig() = %+v, want the glm entry with streaming enabled", got)
 	}
 }

@@ -51,6 +51,16 @@ func (p *ClaudeCliProvider) Chat(
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	// Pass only the variables the claude CLI needs: auth, proxy, and TLS certs.
+	// Unrelated credentials (e.g. OPENAI_API_KEY) are excluded when isolation
+	// is enabled; when disabled, full parent environment is preserved as today.
+	cmd.Env = isolation.InheritedEnv(
+		"ANTHROPIC_*", "CLAUDE_*",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+		"http_proxy", "https_proxy", "no_proxy",
+		"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS",
+	)
+
 	// Execute the CLI through the shared isolation wrapper so external provider
 	// processes honor the configured isolation policy.
 	if err := isolation.Run(cmd); err != nil {
@@ -139,11 +149,12 @@ func (p *ClaudeCliProvider) parseClaudeCliResponse(output string) (*LLMResponse,
 	}
 
 	var usage *UsageInfo
-	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 || resp.TotalCostUSD > 0 {
 		usage = &UsageInfo{
 			PromptTokens:     resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.OutputTokens,
+			CostUSD:          resp.TotalCostUSD,
 		}
 	}
 

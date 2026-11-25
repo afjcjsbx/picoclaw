@@ -269,3 +269,26 @@ func TestCreateProviderReturnsCodexProviderForOpenAIOAuth(t *testing.T) {
 	// which is not yet implemented in the new factory_provider.go
 	t.Skip("OpenAI OAuth via model_list not yet implemented")
 }
+
+func TestDefaultModelRef(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{{ModelName: "glm", Provider: "opencode-go", Model: "glm-5.3-flash"}, nil}
+
+	for _, tc := range []struct{ name, current, modelID, want string }{
+		{"alias is kept", "glm", "glm-5.3-flash", "glm"},
+		{"alias with surrounding whitespace is kept trimmed", "  glm\t", "glm-5.3-flash", "glm"},
+		{"raw reference is replaced by the model ID", "openrouter/deepseek/deepseek-v3.2", "deepseek/deepseek-v3.2", "deepseek/deepseek-v3.2"},
+		{"empty model ID leaves the name alone", "glm", "", "glm"},
+		{"empty model ID trims the name", "  glm  ", "", "glm"},
+		{"empty model ID and name stay empty", "", "", ""},
+		{"whitespace-only name becomes empty", "  \t ", "", ""},
+		{"empty name takes the model ID", "", "glm-5.3-flash", "glm-5.3-flash"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg.Agents.Defaults.ModelName = tc.current
+			if got := DefaultModelRef(cfg, tc.modelID); got != tc.want {
+				t.Fatalf("DefaultModelRef() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

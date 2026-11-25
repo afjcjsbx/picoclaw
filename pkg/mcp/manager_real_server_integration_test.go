@@ -64,7 +64,7 @@ func TestIntegration_RealConfiguredServer(t *testing.T) {
 		}
 	}()
 
-	tools := mgr.GetAllTools()["real"]
+	tools := allTools(mgr)["real"]
 	if len(tools) == 0 {
 		t.Fatal("expected at least one discovered tool from real MCP server")
 	}

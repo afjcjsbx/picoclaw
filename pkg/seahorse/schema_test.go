@@ -3,6 +3,8 @@ package seahorse
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,7 +21,11 @@ func openTestDB(t *testing.T) *sql.DB {
 	testName := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
 	// Use a shared in-memory database so concurrent goroutines/connections in tests
 	// observe the same schema/data.
-	dsn := fmt.Sprintf("file:seahorse_test_%s_%d?mode=memory&cache=shared", testName, n)
+	dsn := fmt.Sprintf(
+		"file:seahorse_test_%s_%d?mode=memory&cache=shared&_txlock=immediate&_busy_timeout=5000",
+		testName,
+		n,
+	)
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -27,6 +33,46 @@ func openTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func TestBackupBeforeMigrationIncludesWAL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seahorse.db")
+	db, err := sql.Open("sqlite", sqliteDSN(path))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if _, err = db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		t.Fatalf("enable WAL: %v", err)
+	}
+	if _, err = db.Exec("PRAGMA wal_autocheckpoint = 0"); err != nil {
+		t.Fatalf("disable autocheckpoint: %v", err)
+	}
+	if _, err = db.Exec("CREATE TABLE marker (value TEXT)"); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err = db.Exec("INSERT INTO marker (value) VALUES ('committed in WAL')"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	_ = os.Remove(path + ".bak")
+
+	if err = backupBeforeMigration(db, path); err != nil {
+		t.Fatalf("backupBeforeMigration: %v", err)
+	}
+	backup, openErr := sql.Open("sqlite", path+".bak")
+	if openErr != nil {
+		t.Fatalf("open backup: %v", openErr)
+	}
+	defer backup.Close()
+	var value string
+	if err := backup.QueryRow("SELECT value FROM marker").Scan(&value); err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	if value != "committed in WAL" {
+		t.Fatalf("backup value = %q, want %q", value, "committed in WAL")
+	}
 }
 
 func TestRunMigrations(t *testing.T) {
@@ -312,12 +358,11 @@ func TestTriggerMigration(t *testing.T) {
 		t.Fatalf("insert summary: %v", err)
 	}
 
-	// The old trigger body is wrong for normal FTS5 — DELETE should fail.
-	_, err = db.Exec(`DELETE FROM summaries WHERE summary_id = 'old-sum'`)
-	if err == nil {
-		t.Error("expected error from old buggy trigger, but DELETE succeeded")
-	} else {
-		t.Logf("old trigger correctly causes error: %v", err)
+	// The old trigger body may be accepted by the external-content table (the
+	// delete command is valid when all indexed columns are supplied), but the
+	// migration must still leave a correct trigger in place.
+	if _, deleteErr := db.Exec(`DELETE FROM summaries WHERE summary_id = 'old-sum'`); deleteErr != nil {
+		t.Logf("old trigger delete returned: %v", deleteErr)
 	}
 
 	// Now runSchema again — this drops and recreates the triggers with correct bodies.

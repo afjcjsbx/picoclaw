@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -32,10 +33,16 @@ func (al *AgentLoop) notifyContextFeedback(ts *turnState, content string) {
 
 	pubCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	// The notice is published after the turn's final reply, so no later message
+	// will consume a tracked progress card. Mark it terminal so channels deliver
+	// it as a plain one-shot message instead of tracking it for reuse.
 	_ = al.bus.PublishOutbound(pubCtx, outboundMessageForTurnWithOptions(
 		ts,
 		content,
-		outboundTurnMessageOptions{kind: messageKindToolFeedback},
+		outboundTurnMessageOptions{
+			kind: messageKindToolFeedback,
+			raw:  map[string]string{channels.ToolFeedbackTerminalKey: "true"},
+		},
 	))
 }
 

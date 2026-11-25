@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,9 +14,11 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // ---------------------------------------------------------------------------
@@ -337,16 +340,18 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 		t.Fatalf("expected compressed history, got %d messages (was %d)", len(newHistory), len(history))
 	}
 
-	// Summary should contain compression note
+	// Overflow recovery should summarize before it drops anything.
 	summary, err := defaultAgent.Sessions.GetSummary(context.Background(), "session-overflow")
 	if err != nil {
 		t.Fatalf("GetSummary: %v", err)
 	}
-	if !strings.Contains(summary, "Emergency compression") {
-		t.Fatalf("expected compression note in summary, got %q", summary)
+	if summary == "" {
+		t.Fatal("expected a summary after overflow recovery")
+	}
+	if strings.Contains(summary, "Emergency compression") {
+		t.Fatalf("overflow recovery dropped turns even though summarization was possible: %q", summary)
 	}
 
-	// Event should carry the proactive reason
 	events := collectRuntimeEventStream(runtimeCh)
 	compressEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentContextCompress)
 	if !ok {
@@ -358,6 +363,16 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 	}
 	if payload.Reason != ContextCompressReasonRetry {
 		t.Fatalf("expected retry reason, got %q", payload.Reason)
+	}
+	if payload.DroppedMessages != 0 || payload.Fallback {
+		t.Fatalf("expected a non-destructive recovery, got dropped=%d fallback=%v",
+			payload.DroppedMessages, payload.Fallback)
+	}
+	if payload.SummarizedMessages == 0 {
+		t.Fatal("expected summarized_messages > 0")
+	}
+	if payload.Attempts < 2 {
+		t.Fatalf("attempts = %d, want at least 2 (prune then summarize)", payload.Attempts)
 	}
 }
 
@@ -380,7 +395,10 @@ func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
 		t.Fatalf("SetHistory: %v", err)
 	}
 
-	result, ok := al.contextManager.(*legacyContextManager).forceCompression("session-prune-tools")
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression(
+		context.Background(),
+		"session-prune-tools",
+	)
 	if !ok {
 		t.Fatal("expected old tool output to be pruned")
 	}
@@ -391,8 +409,9 @@ func TestLegacyCompact_PrunesOldToolResultsBeforeDroppingTurns(t *testing.T) {
 	if len(got) != len(history) || result.DroppedMessages != 0 {
 		t.Fatalf("pruning dropped messages: got %d messages, dropped %d", len(got), result.DroppedMessages)
 	}
-	if got[2].Content != "[Old tool output cleared to save context space]" || got[2].ToolCallID != "old-call" {
-		t.Fatalf("old tool result not safely pruned: %+v", got[2])
+	data := readArchivedToolResult(t, got[2].Content)
+	if string(data) != largeOutput || got[2].ToolCallID != "old-call" {
+		t.Fatalf("old tool result not safely archived: %+v", got[2])
 	}
 	if got[6].Content != "recent output" {
 		t.Fatalf("recent tool result should remain intact: %+v", got[6])
@@ -440,6 +459,9 @@ func TestLegacyCompact_Overflow_ProactiveReason(t *testing.T) {
 	if !ok {
 		t.Fatal("expected context compress event")
 	}
+	if compressEvt.Scope.AgentID != defaultAgent.ID {
+		t.Fatalf("event agent = %q, want %q", compressEvt.Scope.AgentID, defaultAgent.ID)
+	}
 	payload, ok := compressEvt.Payload.(ContextCompressPayload)
 	if !ok {
 		t.Fatalf("expected ContextCompressPayload, got %T", compressEvt.Payload)
@@ -483,11 +505,191 @@ func TestLegacyCompact_Overflow_TooShortToCompress(t *testing.T) {
 	}
 }
 
+func TestLegacyCompact_Overflow_ArchivesTranscriptBeforeFallback(t *testing.T) {
+	cfg := testConfig(t)
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "latest question"},
+	}
+	const sessionKey = "session-archive-fallback"
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression(context.Background(), sessionKey)
+	if !ok {
+		t.Fatal("expected the drop fallback to run")
+	}
+	if !result.Fallback || result.DroppedMessages == 0 {
+		t.Fatalf("expected a destructive fallback, got %+v", result)
+	}
+	if result.ArchivedPath == "" {
+		t.Fatal("expected the pre-compression transcript archive path")
+	}
+	if result.Attempts < 3 {
+		t.Fatalf("attempts = %d, want at least 3 (prune, summarize, drop)", result.Attempts)
+	}
+
+	data, err := os.ReadFile(result.ArchivedPath)
+	if err != nil {
+		t.Fatalf("read transcript archive: %v", err)
+	}
+	var archived overflowArchive
+	if decodeErr := json.Unmarshal(data, &archived); decodeErr != nil {
+		t.Fatalf("decode transcript archive: %v", decodeErr)
+	}
+	if archived.SessionKey != sessionKey {
+		t.Fatalf("archived session = %q, want %q", archived.SessionKey, sessionKey)
+	}
+	if len(archived.Messages) != len(history) {
+		t.Fatalf("archived messages = %d, want %d", len(archived.Messages), len(history))
+	}
+	if archived.Messages[0].Content != "first question" {
+		t.Fatalf("archived first message = %q", archived.Messages[0].Content)
+	}
+
+	summary, err := agent.Sessions.GetSummary(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
+	if !strings.Contains(summary, "archived at "+result.ArchivedPath) {
+		t.Fatalf("summary does not point at the archive: %q", summary)
+	}
+
+	kept, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(kept) != 1 || kept[0].Content != "latest question" {
+		t.Fatalf("kept history = %+v, want only the latest user message", kept)
+	}
+}
+
+func TestLegacyCompact_Overflow_CanceledTurnDoesNotDrop(t *testing.T) {
+	cfg := testConfig(t)
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "latest question"},
+	}
+	const sessionKey = "session-canceled-overflow"
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := al.contextManager.(*legacyContextManager).forceCompression(ctx, sessionKey); ok {
+		t.Fatal("expected a canceled turn to keep the transcript intact")
+	}
+
+	kept, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(kept) != len(history) {
+		t.Fatalf("history changed after cancellation: got %d messages, want %d", len(kept), len(history))
+	}
+}
+
+func TestLegacyCompact_Overflow_RefusesDropWhenArchiveFails(t *testing.T) {
+	cfg := testConfig(t)
+	al := newCMTestAgentLoop(cfg)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	// An empty workspace cannot hold the archive, so the destructive fallback
+	// must refuse rather than lose the transcript.
+	agent.Workspace = ""
+
+	history := []providers.Message{
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "user", Content: "latest question"},
+	}
+	const sessionKey = "session-archive-unavailable"
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	if _, ok := al.contextManager.(*legacyContextManager).forceCompression(context.Background(), sessionKey); ok {
+		t.Fatal("expected the fallback to be refused without a transcript archive")
+	}
+
+	kept, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(kept) != len(history) {
+		t.Fatalf("history changed without an archive: got %d messages, want %d", len(kept), len(history))
+	}
+}
+
+// The emergency prune must use the active-turn boundary and keep the turn's
+// persisted-message record in sync, otherwise the retry rebuild protects only
+// the unpruned tail and can later trim messages of the turn in progress.
+func TestLegacyCompact_Overflow_PruneKeepsActiveTurnSnapshot(t *testing.T) {
+	al, agent, ts, turn := activeTurnFixture(t, 4)
+	prior := []providers.Message{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer"},
+	}
+	const sessionKey = "active-turn"
+	history := append(append([]providers.Message(nil), prior...), turn...)
+	if err := agent.Sessions.SetHistory(context.Background(), sessionKey, history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	result, ok := al.contextManager.(*legacyContextManager).forceCompression(
+		withTurnState(context.Background(), ts),
+		sessionKey,
+	)
+	if !ok {
+		t.Fatal("expected old tool outputs to be pruned")
+	}
+	if result.DroppedMessages != 0 || result.Fallback {
+		t.Fatalf("pruning must not drop messages, got %+v", result)
+	}
+
+	stored, err := agent.Sessions.GetHistory(context.Background(), sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	persisted := ts.persistedMessagesSnapshot()
+	if got := matchingTurnMessageTail(stored, persisted); got != len(persisted) {
+		t.Fatalf("turn snapshot stale after emergency prune: matched %d of %d", got, len(persisted))
+	}
+	// The two newest rounds stay verbatim; the older ones become stubs.
+	if !strings.HasPrefix(stored[8].Content, "round-3 ") {
+		t.Fatalf("newest round 3 was pruned: %q", stored[8].Content)
+	}
+	if !strings.HasPrefix(stored[10].Content, "round-4 ") {
+		t.Fatalf("newest round 4 was pruned: %q", stored[10].Content)
+	}
+	if strings.HasPrefix(stored[4].Content, "round-1 ") {
+		t.Fatalf("old round 1 was not pruned: %q", stored[4].Content)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Legacy Compact post-turn tests
 // ---------------------------------------------------------------------------
 
-func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
+func TestLegacyCompact_Threshold_NothingToSummarize(t *testing.T) {
 	cfg := testConfig(t)
 	al := newCMTestAgentLoop(cfg)
 
@@ -496,7 +698,6 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	// Small history, below summarization thresholds
 	history := []providers.Message{
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
@@ -507,13 +708,12 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-small",
-		Reason:     ContextCompressReasonSummarize,
+		Reason:     ContextCompressReasonThreshold,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("err = %v, want ErrNothingToCompact", err)
 	}
 
-	// History should remain unchanged
 	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-small")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
@@ -523,67 +723,658 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 	}
 }
 
-func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
+func newSummarizeThresholdAgentLoop(t *testing.T, contextWindow int) *AgentLoop {
+	t.Helper()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:                 t.TempDir(),
-				ModelName:                 "test-model",
-				MaxTokens:                 4096,
-				MaxToolIterations:         10,
-				ContextWindow:             8000,
-				SummarizeMessageThreshold: 2,
-				SummarizeTokenPercent:     75,
+				Workspace:             t.TempDir(),
+				ModelName:             "test-model",
+				MaxTokens:             4096,
+				MaxToolIterations:     10,
+				ContextWindow:         contextWindow,
+				SummarizeTokenPercent: 75,
 			},
 		},
 	}
-	msgBus := bus.NewMessageBus()
-	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "summary"})
+	legacyProtectionOff(&cfg.Agents.Defaults)
+	return NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProvider{response: "summary"})
+}
 
+func alternatingHistory(turns int, content string) []providers.Message {
+	history := make([]providers.Message, 0, turns*2)
+	for i := 0; i < turns; i++ {
+		history = append(history,
+			providers.Message{Role: "user", Content: content},
+			providers.Message{Role: "assistant", Content: content},
+		)
+	}
+	return history
+}
+
+func TestLegacyCompact_Threshold_SummarizesSynchronously(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
 
-	// 6 messages > threshold of 2
-	history := []providers.Message{
-		{Role: "user", Content: "q1"},
-		{Role: "assistant", Content: "a1"},
-		{Role: "user", Content: "q2"},
-		{Role: "assistant", Content: "a2"},
-		{Role: "user", Content: "q3"},
-		{Role: "assistant", Content: "a3"},
-	}
+	history := alternatingHistory(3, strings.Repeat("x", 2000))
 	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-threshold", history); err != nil {
 		t.Fatalf("SetHistory: %v", err)
 	}
 
-	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
-		t,
-		al,
-		16,
-		runtimeevents.KindAgentSessionSummarize,
-	)
-	defer closeRuntimeEvents()
-
 	err := al.contextManager.Compact(context.Background(), &CompactRequest{
 		SessionKey: "session-threshold",
-		Reason:     ContextCompressReasonSummarize,
+		Reason:     ContextCompressReasonThreshold,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	waitForRuntimeEvent(t, runtimeCh, 5*time.Second, func(evt runtimeevents.Event) bool {
-		return evt.Kind == runtimeevents.KindAgentSessionSummarize
-	})
-
+	// No waiting: the session is already compacted when Compact returns.
 	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-threshold")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected summarization to reduce history from %d messages, got %d", len(history), len(newHistory))
+	}
+	summary, err := defaultAgent.Sessions.GetSummary(context.Background(), "session-threshold")
+	if err != nil {
+		t.Fatalf("GetSummary: %v", err)
+	}
+	if summary != "summary" {
+		t.Fatalf("summary = %q, want %q", summary, "summary")
+	}
+}
+
+// readArchivedToolResult returns the file an archive stub points at.
+func readArchivedToolResult(t *testing.T, stub string) []byte {
+	t.Helper()
+	rest, ok := strings.CutPrefix(stub, archivedToolResultPrefix)
+	if !ok {
+		t.Fatalf("content = %q, want an archive stub", stub)
+	}
+	path, _, _ := strings.Cut(rest, ";")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("archived output unreadable: %v", err)
+	}
+	return data
+}
+
+// Evicted tool outputs are archived under the workspace and the stub fits the
+// prune limit, so a later pass leaves it alone instead of archiving it again.
+func TestPruneToolResultsArchivesBeforeEviction(t *testing.T) {
+	workspace := t.TempDir()
+	bulky := strings.Repeat("z", 500)
+	history := []providers.Message{
+		{Role: "tool", Content: bulky},
+		{Role: "tool", Content: "short"},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the bulky result to be evicted")
+	}
+	if got := readArchivedToolResult(t, history[0].Content); string(got) != bulky {
+		t.Fatalf("archived output = %q, want the original", got)
+	}
+	if len(history[0].Content) >= len(bulky) {
+		t.Fatalf("stub is %d chars, want it shorter than the %d chars it replaces", len(history[0].Content), len(bulky))
+	}
+	if history[1].Content != "short" {
+		t.Fatalf("short result changed: %q", history[1].Content)
+	}
+	if pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("a stub must not be archived again")
+	}
+	files, _ := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if len(files) != 1 {
+		t.Fatalf("archive files = %d, want 1", len(files))
+	}
+}
+
+// A stub longer than the output it replaces would grow the context, so a result
+// barely over the prune limit is cleared instead and leaves no file behind.
+func TestPruneToolResultsSkipsArchiveWhenStubIsLonger(t *testing.T) {
+	workspace := t.TempDir()
+	history := []providers.Message{{Role: "tool", Content: strings.Repeat("z", minToolResultChars+1)}}
+	workspace = filepath.Join(workspace, strings.Repeat("d", 200)) // deep path: the stub outgrows the output
+	if !pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("expected eviction")
+	}
+	if history[0].Content != prunedToolResult {
+		t.Fatalf("content = %q, want %q", history[0].Content, prunedToolResult)
+	}
+	files, _ := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if len(files) != 0 {
+		t.Fatalf("archive files = %d, want 0", len(files))
+	}
+}
+
+// Without a usable archive the eviction stays lossy but still frees the context.
+func TestPruneToolResultsFallsBackWhenArchiveFails(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, workspace := range []string{"", blocked} { // no workspace; .artifacts under a regular file
+		history := []providers.Message{{Role: "tool", Content: strings.Repeat("z", 500)}}
+		if !pruneToolResultsBefore(history, 1, workspace) {
+			t.Fatalf("workspace %q: expected eviction", workspace)
+		}
+		if history[0].Content != prunedToolResult {
+			t.Fatalf("workspace %q: content = %q, want %q", workspace, history[0].Content, prunedToolResult)
+		}
+	}
+}
+
+// The archive stub carries the tool that produced the output and its key
+// details, so the model can decide whether to read the archive or re-run it.
+func TestPruneToolResultStubCarriesToolDetails(t *testing.T) {
+	workspace := t.TempDir()
+	original := "[exec] {\"exitCode\":2,\"timedOut\":false,\"totalBytes\":2500}\n" +
+		strings.Repeat("FAIL ", 500)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "exec", Arguments: `{"command":"go test ./..."}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "c1", Content: original},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the bulky result to be evicted")
+	}
+	stub := history[1].Content
+	if !strings.HasPrefix(stub, archivedToolResultPrefix) {
+		t.Fatalf("stub = %q, want an archive stub", stub)
+	}
+	for _, want := range []string{"exec", "go test ./...", "exit=2", "KB"} {
+		if !strings.Contains(stub, want) {
+			t.Fatalf("stub %q missing %q", stub, want)
+		}
+	}
+	if data := readArchivedToolResult(t, stub); string(data) != original {
+		t.Fatalf("archived output = %q, want the original", data)
+	}
+}
+
+// ContentForLLM appends the artifact note with a single newline. The parser
+// must recognize that exact suffix, not only a double-newline variant.
+func TestExistingArtifactPathReadsRuntimeArtifactNote(t *testing.T) {
+	workspace := t.TempDir()
+	spill := filepath.Join(workspace, ".artifacts", "tool", "full.log")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(spill, []byte("full payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	content := (&toolshared.ToolResult{
+		ForLLM:       `{"url":"https://example.test","text":"preview"}`,
+		ArtifactTags: []string{"[file:" + spill + "]"},
+	}).ContentForLLM()
+	if !strings.Contains(content, "\nLocal artifact paths: ") {
+		t.Fatalf("content = %q, want the runtime note", content)
+	}
+	if got := existingArtifactPath("web_fetch", content); got != spill {
+		t.Fatalf("existingArtifactPath = %q, want %q", got, spill)
+	}
+
+	// A note in the middle of the body is not the runtime suffix.
+	middle := "body\n\nLocal artifact paths: [file:" + spill + "]\n" +
+		toolshared.ArtifactPathsLLMNote + "\nmore body"
+	if got := existingArtifactPath("web_fetch", middle); got != "" {
+		t.Fatalf("existingArtifactPath(middle note) = %q, want no reuse", got)
+	}
+
+	// Only exec may use the exec status header.
+	fakeExec := fmt.Sprintf("[exec] {\"artifactPath\":%q}\nbody", spill)
+	if got := existingArtifactPath("read_file", fakeExec); got != "" {
+		t.Fatalf("existingArtifactPath(non-exec header) = %q, want no reuse", got)
+	}
+	if got := existingArtifactPath("exec", fakeExec); got != spill {
+		t.Fatalf("existingArtifactPath(exec header) = %q, want %q", got, spill)
+	}
+}
+
+// The tool batch appends budget notices after the runtime artifact note, so the
+// note is still last but no longer the literal end of the result.
+func TestExistingArtifactPathIgnoresTrailingBudgetNotices(t *testing.T) {
+	workspace := t.TempDir()
+	spill := filepath.Join(workspace, ".artifacts", "tool", "full.log")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(spill, []byte("full payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content := (&toolshared.ToolResult{
+		ForLLM:       `{"url":"https://example.test","text":"preview"}`,
+		ArtifactTags: []string{"[file:" + spill + "]"},
+	}).ContentForLLM()
+	iterationNotice := "\n\n" + fmt.Sprintf(iterationBudgetWarningTemplate, 3, 10)
+
+	for name, trailing := range map[string]string{
+		"iteration": iterationNotice,
+		"run":       "\n\n" + runBudgetNotice,
+		"both":      iterationNotice + "\n\n" + runBudgetNotice,
+	} {
+		if got := existingArtifactPath("web_fetch", content+trailing); got != spill {
+			t.Fatalf("%s notice: existingArtifactPath = %q, want %q", name, got, spill)
+		}
+	}
+}
+
+// A non-exec result that already spilled its full payload keeps the runtime
+// note pointer instead of writing a second bounded copy under .artifacts/evicted.
+func TestPruneToolResultReusesRuntimeArtifactNote(t *testing.T) {
+	workspace := t.TempDir()
+	spill := filepath.Join(workspace, ".artifacts", "tool", "full.log")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	full := strings.Repeat("full output line\n", 100)
+	if err := os.WriteFile(spill, []byte(full), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := (&toolshared.ToolResult{
+		ForLLM:       `{"url":"https://example.test","status":200,"text":"` + strings.Repeat("preview line ", 30) + `"}`,
+		ArtifactTags: []string{"[file:" + spill + "]"},
+	}).ContentForLLM()
+	if !strings.Contains(original, "\nLocal artifact paths: ") {
+		t.Fatalf("content = %q, want the runtime note", original)
+	}
+	if strings.Contains(original, "\n\nLocal artifact paths: ") {
+		t.Fatalf("content = %q, want the single-newline runtime note", original)
+	}
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "web_fetch", Arguments: `{"url":"https://example.test"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "c1", Content: original},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the result to be evicted")
+	}
+	stub := history[1].Content
+	if !strings.Contains(stub, spill) {
+		t.Fatalf("stub = %q, want the existing spill path %q", stub, spill)
+	}
+	if !strings.Contains(stub, "web_fetch") || !strings.Contains(stub, "example.test") {
+		t.Fatalf("stub = %q, want the tool and URL details", stub)
+	}
+	if data := readArchivedToolResult(t, stub); string(data) != full {
+		t.Fatalf("spill content = %q, want the full output", data)
+	}
+	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("archive dir: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("evicted archive files = %d, want 0 (reused spill)", len(files))
+	}
+}
+
+// The exec status header is a separate reuse path: it carries artifactPath
+// without the runtime note, and only exec results may use it.
+func TestPruneToolResultReusesExecArtifactHeader(t *testing.T) {
+	workspace := t.TempDir()
+	spill := filepath.Join(workspace, ".artifacts", "tool", "full.log")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	full := strings.Repeat("full output line\n", 100)
+	if err := os.WriteFile(spill, []byte(full), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := fmt.Sprintf("[exec] {\"exitCode\":0,\"artifactPath\":%q}\n%s",
+		spill, strings.Repeat("preview line\n", 30))
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "exec", Arguments: `{"command":"cat full.log"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "c1", Content: original},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the result to be evicted")
+	}
+	stub := history[1].Content
+	if !strings.Contains(stub, spill) || !strings.Contains(stub, "exit=0") {
+		t.Fatalf("stub = %q, want the exec spill path and status", stub)
+	}
+	if data := readArchivedToolResult(t, stub); string(data) != full {
+		t.Fatalf("spill content = %q, want the full output", data)
+	}
+	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("archive dir: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("evicted archive files = %d, want 0 (reused spill)", len(files))
+	}
+}
+
+// Providers may reuse a tool-call id across turns (for example "call_0").
+// The stub must describe the call in the same turn, not the newest call with
+// that id.
+func TestPruneToolResultStubResolvesReusedCallIDs(t *testing.T) {
+	workspace := t.TempDir()
+	first := strings.Repeat("first output ", 60)
+	second := strings.Repeat("second output ", 60)
+	history := []providers.Message{
+		{Role: "user", Content: "run the first command"},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "call_0",
+				Function: &providers.FunctionCall{Name: "exec", Arguments: `{"command":"first-command"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call_0", Content: first},
+		{Role: "user", Content: "read the second file"},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "call_0",
+				Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"second.txt"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call_0", Content: second},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected both results to be evicted")
+	}
+	if !strings.Contains(history[2].Content, "first-command") {
+		t.Fatalf("first stub = %q, want the first command", history[2].Content)
+	}
+	if !strings.Contains(history[5].Content, "second.txt") {
+		t.Fatalf("second stub = %q, want the second path", history[5].Content)
+	}
+}
+
+// Identical old outputs are collapsed into a back-reference instead of being
+// archived once per copy. The newest copy keeps the archive pointer.
+func TestPruneToolResultsDedupesIdenticalOutputs(t *testing.T) {
+	workspace := t.TempDir()
+	bulky := strings.Repeat("same output ", 100)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "old",
+				Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"a.txt"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "old", Content: bulky},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "new",
+				Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"a.txt"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "new", Content: bulky},
+	}
+	if !pruneToolResultsBefore(history, len(history), workspace) {
+		t.Fatal("expected the duplicates to be pruned")
+	}
+	if !strings.HasPrefix(history[1].Content, duplicateToolResultPrefix) {
+		t.Fatalf("older duplicate = %q, want a duplicate stub", history[1].Content)
+	}
+	if !strings.Contains(history[1].Content, "archived") {
+		t.Fatalf("older duplicate = %q, want the archive pointer", history[1].Content)
+	}
+	if !strings.HasPrefix(history[3].Content, archivedToolResultPrefix) {
+		t.Fatalf("newest copy = %q, want an archive stub", history[3].Content)
+	}
+	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if err != nil {
+		t.Fatalf("archive dir: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("archive files = %d, want 1", len(files))
+	}
+	if data := readArchivedToolResult(t, history[3].Content); string(data) != bulky {
+		t.Fatalf("archived output = %q, want the original", data)
+	}
+}
+
+// A copy in the protected tail is not a durable dedupe target: it may be
+// summarized away later. The older copy is archived instead, so its stub has
+// a path of its own.
+func TestPruneToolResultsArchivesDuplicateBeforeProtectedTail(t *testing.T) {
+	workspace := t.TempDir()
+	bulky := strings.Repeat("same output ", 100)
+	history := []providers.Message{
+		{Role: "tool", Content: bulky},
+		{Role: "assistant", Content: "boundary"},
+		{Role: "tool", Content: bulky},
+	}
+	if !pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("expected the older duplicate to be pruned")
+	}
+	if !strings.HasPrefix(history[0].Content, archivedToolResultPrefix) {
+		t.Fatalf("older duplicate = %q, want an archive stub", history[0].Content)
+	}
+	if history[2].Content != bulky {
+		t.Fatalf("protected copy changed: %q", history[2].Content)
+	}
+	files, err := os.ReadDir(filepath.Join(workspace, ".artifacts", "evicted"))
+	if err != nil {
+		t.Fatalf("archive dir: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("archive files = %d, want 1", len(files))
+	}
+	if data := readArchivedToolResult(t, history[0].Content); string(data) != bulky {
+		t.Fatalf("archived output = %q, want the original", data)
+	}
+}
+
+// Oversized tool-call arguments are archived and replaced by a compact, valid
+// JSON object that still carries the original key names and an archive pointer.
+func TestPruneToolCallArgumentsArchivesOversizedArgs(t *testing.T) {
+	workspace := t.TempDir()
+	content := strings.Repeat("a", maxToolCallArgsChars+100)
+	argsBytes, err := json.Marshal(map[string]any{"path": "big.txt", "content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(argsBytes)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "write_file", Arguments: args},
+			}},
+		},
+	}
+	if !pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("expected the oversized arguments to be compacted")
+	}
+	compact := history[0].ToolCalls[0].Function.Arguments
+	if len(compact) >= len(args) {
+		t.Fatalf("compact arguments = %d chars, want fewer than %d", len(compact), len(args))
+	}
+	var parsed map[string]any
+	if unmarshalErr := json.Unmarshal([]byte(compact), &parsed); unmarshalErr != nil {
+		t.Fatalf("compact arguments are not valid JSON: %v", unmarshalErr)
+	}
+	if parsed["path"] != "big.txt" {
+		t.Fatalf("compact arguments lost path: %+v", parsed)
+	}
+	archivePath, ok := parsed[archivedArgsKey].(string)
+	if !ok || archivePath == "" {
+		t.Fatalf("compact arguments lack %s: %+v", archivedArgsKey, parsed)
+	}
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read archived arguments: %v", err)
+	}
+	if string(data) != args {
+		t.Fatalf("archived arguments = %q, want the original", data)
+	}
+	value, ok := parsed["content"].(string)
+	if !ok || len(value) > maxToolArgValueChars+len("...") {
+		t.Fatalf("content value was not compacted: %q", value)
+	}
+}
+
+// A tool round whose result sits at the prune boundary is still unread: its
+// arguments must not be rewritten.
+func TestPruneToolCallArgumentsKeepsBoundaryToolRound(t *testing.T) {
+	workspace := t.TempDir()
+	content := strings.Repeat("a", maxToolCallArgsChars+100)
+	argsBytes, err := json.Marshal(map[string]any{"path": "big.txt", "content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(argsBytes)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "write_file", Arguments: args},
+			}},
+		},
+		{Role: "tool", ToolCallID: "c1", Content: "short result"},
+	}
+	if pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("boundary tool round must not be pruned")
+	}
+	if got := history[0].ToolCalls[0].Function.Arguments; got != args {
+		t.Fatalf("boundary arguments changed: %q", got)
+	}
+}
+
+// Invalid JSON cannot be rewritten without breaking the provider payload, so
+// the arguments stay byte-exact.
+func TestPruneToolCallArgumentsLeavesInvalidJSON(t *testing.T) {
+	workspace := t.TempDir()
+	args := `{"content":"` + strings.Repeat("a", maxToolCallArgsChars+100)
+	history := []providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID:       "c1",
+				Function: &providers.FunctionCall{Name: "write_file", Arguments: args},
+			}},
+		},
+	}
+	if pruneToolResultsBefore(history, 1, workspace) {
+		t.Fatal("invalid JSON arguments must not be pruned")
+	}
+	if got := history[0].ToolCalls[0].Function.Arguments; got != args {
+		t.Fatalf("arguments changed: %q", got)
+	}
+}
+
+// With nothing older than the active turn to summarize, the threshold path
+// clears old tool outputs instead, and reports a clean session as nothing to do.
+func TestLegacyCompact_Threshold_PrunesToolOutputsOfSingleTurn(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	bulky := strings.Repeat("z", 500)
+	recent := strings.Repeat("y", 500)
+	newest := strings.Repeat("x", 500)
+	history := []providers.Message{
+		{Role: "user", Content: "do the thing"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c1", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c1", Content: bulky},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c2", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c2", Content: recent},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "c3", Name: "t"}}},
+		{Role: "tool", ToolCallID: "c3", Content: newest},
+	}
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-single-turn", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	req := &CompactRequest{SessionKey: "session-single-turn", Reason: ContextCompressReasonThreshold}
+	if err := al.contextManager.Compact(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-single-turn")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(got) != len(history) {
+		t.Fatalf("messages = %d, want %d (pruning must not drop messages)", len(got), len(history))
+	}
+	if data := readArchivedToolResult(t, got[2].Content); string(data) != bulky {
+		t.Fatalf("archived output = %q, want the original", data)
+	}
+	if got[6].Content != newest {
+		t.Fatalf("recent tool output must be kept, got %q", got[6].Content)
+	}
+
+	if err := al.contextManager.Compact(context.Background(), req); !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("second compaction err = %v, want ErrNothingToCompact", err)
+	}
+}
+
+// Legacy no longer summarizes after the turn: the post-turn call is a no-op and
+// the work happens synchronously before the next LLM call.
+func TestLegacyCompact_PostTurnSummarizeIsNoOp(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := alternatingHistory(3, strings.Repeat("x", 2000))
+	if err := defaultAgent.Sessions.SetHistory(context.Background(), "session-post-turn", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-post-turn",
+		Reason:     ContextCompressReasonSummarize,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	newHistory, err := defaultAgent.Sessions.GetHistory(context.Background(), "session-post-turn")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(newHistory) != len(history) {
+		t.Fatalf("expected history unchanged, got %d messages (was %d)", len(newHistory), len(history))
+	}
+}
+
+func TestComputeContextUsage_SummarizeAtIsPercentOfUsableWindow(t *testing.T) {
+	al := newSummarizeThresholdAgentLoop(t, 8000)
+	usage := computeContextUsage(al.registry.GetDefaultAgent(), "session-usage")
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if usage.CompressAtTokens != 8000-4096 {
+		t.Fatalf("CompressAtTokens = %d, want %d", usage.CompressAtTokens, 8000-4096)
+	}
+	if want := usage.CompressAtTokens * 75 / 100; usage.SummarizeAtTokens != want {
+		t.Fatalf("SummarizeAtTokens = %d, want %d", usage.SummarizeAtTokens, want)
 	}
 }
 
@@ -927,9 +1718,20 @@ func resetCMRegistry() func() {
 	}
 }
 
+// legacyProtectionOff reproduces the pre-head/tail-protection behavior for
+// tests that exercise compaction mechanics rather than the protection policy:
+// no head, exactly four trailing messages, no token budget or user guarantee.
+func legacyProtectionOff(d *config.AgentDefaults) {
+	zero, four := 0, 4
+	d.ProtectFirstN = &zero
+	d.ProtectLastN = &four
+	d.MinTailUserMessages = &zero
+	d.TailTokenBudget = &zero
+}
+
 func testConfig(t *testing.T) *config.Config {
 	t.Helper()
-	return &config.Config{
+	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         t.TempDir(),
@@ -939,6 +1741,8 @@ func testConfig(t *testing.T) *config.Config {
 			},
 		},
 	}
+	legacyProtectionOff(&cfg.Agents.Defaults)
+	return cfg
 }
 
 func newCMTestAgentLoop(cfg *config.Config) *AgentLoop {
@@ -963,6 +1767,12 @@ func TestContextFeedback_PublishedWhenToolFeedbackEnabled(t *testing.T) {
 		}
 		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
 			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
+		}
+		if out.Context.Raw[channels.ToolFeedbackTerminalKey] != "true" {
+			t.Fatalf(
+				"terminal flag = %q, want true: context notices must not seed reusable progress cards",
+				out.Context.Raw[channels.ToolFeedbackTerminalKey],
+			)
 		}
 		if out.Content != "notice" {
 			t.Fatalf("content = %q, want %q", out.Content, "notice")
@@ -1053,11 +1863,11 @@ func TestLegacyCompact_PublishesFeedbackWhenToolFeedbackEnabled(t *testing.T) {
 		if out.Context.Raw[metadataKeyMessageKind] != messageKindToolFeedback {
 			t.Fatalf("kind = %q, want %q", out.Context.Raw[metadataKeyMessageKind], messageKindToolFeedback)
 		}
-		if !strings.Contains(out.Content, contextFeedbackToolCompact) {
-			t.Fatalf("content = %q, want compaction notice", out.Content)
+		if !strings.Contains(out.Content, contextFeedbackToolSummarize) {
+			t.Fatalf("content = %q, want summarization notice", out.Content)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected compaction feedback outbound")
+		t.Fatal("expected summarization feedback outbound")
 	}
 }
 
@@ -1201,7 +2011,7 @@ func TestProcessMessage_CompactCommand(t *testing.T) {
 		t.Fatalf("SetHistory: %v", err)
 	}
 	resp, err := al.processMessage(context.Background(), msg)
-	if err != nil || resp != "Nothing to compact yet." {
+	if err != nil || resp != "No compactable history was found." {
 		t.Fatalf("short history: resp=%q err=%v", resp, err)
 	}
 	if len(provider.prompts) != 0 {
@@ -1221,7 +2031,7 @@ func TestProcessMessage_CompactCommand(t *testing.T) {
 		t.Fatalf("SetHistory: %v", err)
 	}
 	resp, err = al.processMessage(context.Background(), msg)
-	if err != nil || resp != "Context compacted." {
+	if err != nil || !strings.HasPrefix(resp, "Context compacted") {
 		t.Fatalf("long history: resp=%q err=%v", resp, err)
 	}
 	if len(provider.prompts) == 0 || !strings.Contains(provider.prompts[0], "focus on database migration") {

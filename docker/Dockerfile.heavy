@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: Build the picoclaw binary
 # ============================================================
-FROM golang:1.27.3-alpine AS builder
+FROM golang:1.27.4-alpine AS builder
 
 RUN apk add --no-cache git make
 
@@ -28,12 +28,6 @@ RUN apk add --no-cache \
   py3-pip \
   chromium \
   jq
-
-# Install Playwright browsers for agent-browser
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN npm install -g agent-browser && \
-    npx playwright install chromium && \
-    chmod -R o+rx $PLAYWRIGHT_BROWSERS_PATH
 
 # Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \

@@ -17,18 +17,35 @@
       "context_window": 131072,
       "temperature": 0.7,
       "max_tool_iterations": 20,
+      "max_tool_budget_warning_ratio": 0.75,
       "max_parallel_turns": 5,
+      "max_parallel_tool_calls": 4,
+      "max_bootstrap_chars": 20000,
+      "max_bootstrap_total_chars": 24000,
       "subturn": {
         "max_depth": 3,
         "max_concurrent": 3
       },
+      "memory": {
+        "memory_enabled": true,
+        "memory_char_limit": 2200,
+        "user_char_limit": 1375,
+        "daily_notes_enabled": true,
+        "recent_daily_notes_count": 3,
+        "daily_notes_char_limit": 1000
+      },
       "vision_max_image_dimension": 1568,
       "vision_jpeg_quality": 85,
-      "summarize_message_threshold": 20,
       "summarize_token_percent": 75,
+      "protect_first_n": 1,
+      "protect_last_n": 4,
+      "min_tail_user_messages": 1,
+      "tail_token_budget": null,
       "split_on_marker": false,
       "max_llm_retries": 2,
       "llm_retry_backoff_secs": 2,
+      "llm_retry_on_empty_content": true,
+      "llm_retry_on_finish_reasons": ["length"],
       "tool_feedback": {
         "enabled": false,
         "max_args_length": 300,
@@ -514,6 +531,10 @@
     "exec": {
       "enabled": true,
       "enable_deny_patterns": true,
+      "risk_threshold": "medium",
+      "unknown_command_policy": "ask",
+      "approval_timeout_seconds": 300,
+      "allow_remote": false,
       "custom_deny_patterns": null,
       "custom_allow_patterns": null
     },
@@ -582,9 +603,12 @@
     "message": {
       "enabled": true
     },
+    "reaction": {
+      "enabled": false
+    },
     "read_file": {
       "enabled": true,
-      "mode": "bytes"
+      "mode": "auto"
     },
     "serial": {
       "enabled": false
@@ -593,7 +617,7 @@
       "enabled": false
     },
     "todo": {
-      "enabled": true
+      "enabled": false
     },
     "spawn": {
       "enabled": true

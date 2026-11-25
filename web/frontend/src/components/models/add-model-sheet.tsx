@@ -13,6 +13,7 @@ import {
   setDefaultModel,
 } from "@/api/models"
 import { ConfigChangeNotice } from "@/components/config-change-notice"
+import { SessionHeaderField } from "@/components/models/session-header-field"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
 import {
   AdvancedSection,
@@ -41,6 +42,7 @@ import {
   getSubmittedAPIBase,
   normalizeApiBase,
 } from "./model-provider-form-shared"
+import { validateModelSampling } from "./model-sampling"
 import { type FieldValidation, validateModelField } from "./model-validation"
 import { ProviderCombobox } from "./provider-combobox"
 import {
@@ -66,12 +68,17 @@ interface AddForm {
   workspace: string
   rpm: string
   maxTokensField: string
+  maxTokens: string
+  temperature: string
+  contextWindow: string
   requestTimeout: string
+  providerSort: string
   thinkingLevel: string
   toolSchemaTransform: string
   streamingEnabled: boolean
   extraBody: string
   customHeaders: string
+  sessionHeader: string
 }
 
 const EMPTY_ADD_FORM: AddForm = {
@@ -86,12 +93,17 @@ const EMPTY_ADD_FORM: AddForm = {
   workspace: "",
   rpm: "",
   maxTokensField: "",
+  maxTokens: "",
+  temperature: "",
+  contextWindow: "",
   requestTimeout: "",
+  providerSort: "",
   thinkingLevel: "",
   toolSchemaTransform: "",
   streamingEnabled: false,
   extraBody: "",
   customHeaders: "",
+  sessionHeader: "",
 }
 
 interface AddModelSheetProps {
@@ -196,7 +208,7 @@ export function AddModelSheet({
     if (modelValidation?.level === "error") {
       errors.model = t(
         modelValidation.messageKey,
-        modelValidation.messageParams,
+        modelValidation.messageParams ?? {},
       )
     }
     setFieldErrors(errors)
@@ -380,6 +392,16 @@ export function AddModelSheet({
       return
     }
 
+    const sampling = validateModelSampling(form)
+    if (!sampling.ok) {
+      setServerError(
+        t(`models.field.${sampling.field}`) +
+          ": " +
+          t(`models.field.samplingError.${sampling.reason}`),
+      )
+      return
+    }
+
     onMutationStarted?.()
     setSaving(true)
     setServerError("")
@@ -401,14 +423,19 @@ export function AddModelSheet({
         workspace: form.workspace.trim() || undefined,
         rpm: form.rpm ? Number(form.rpm) : undefined,
         max_tokens_field: form.maxTokensField.trim() || undefined,
+        max_tokens: sampling.payload.max_tokens,
+        temperature: sampling.payload.temperature,
+        context_window: sampling.payload.context_window,
         request_timeout: form.requestTimeout
           ? Number(form.requestTimeout)
           : undefined,
+        provider_sort: form.providerSort.trim().toLowerCase() || undefined,
         thinking_level: form.thinkingLevel.trim() || undefined,
         tool_schema_transform: form.toolSchemaTransform.trim() || undefined,
         streaming: form.streamingEnabled ? { enabled: true } : undefined,
         extra_body: extraBody,
         custom_headers: customHeaders,
+        session_header: form.sessionHeader.trim() || undefined,
       })
       if (setAsDefault) {
         await setDefaultModel(modelName)
@@ -514,7 +541,7 @@ export function AddModelSheet({
                     <span>
                       {t(
                         modelValidation.messageKey,
-                        modelValidation.messageParams,
+                        modelValidation.messageParams ?? {},
                       )}
                     </span>
                     {modelValidation.fix && (
@@ -707,6 +734,17 @@ export function AddModelSheet({
                 </Field>
 
                 <Field
+                  label={t("models.field.providerSort")}
+                  hint={t("models.field.providerSortHint")}
+                >
+                  <Input
+                    value={form.providerSort}
+                    onChange={setField("providerSort")}
+                    placeholder={t("models.field.providerDefault")}
+                  />
+                </Field>
+
+                <Field
                   label={t("models.field.rpm")}
                   hint={t("models.field.rpmHint")}
                 >
@@ -738,6 +776,48 @@ export function AddModelSheet({
                     value={form.maxTokensField}
                     onChange={setField("maxTokensField")}
                     placeholder="max_completion_tokens"
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.maxTokens")}
+                  hint={t("models.field.maxTokensHint")}
+                >
+                  <Input
+                    value={form.maxTokens}
+                    onChange={setField("maxTokens")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={1}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.temperature")}
+                  hint={t("models.field.temperatureHint")}
+                >
+                  <Input
+                    value={form.temperature}
+                    onChange={setField("temperature")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={0.1}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.contextWindow")}
+                  hint={t("models.field.contextWindowHint")}
+                >
+                  <Input
+                    value={form.contextWindow}
+                    onChange={setField("contextWindow")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={1}
                   />
                 </Field>
 
@@ -785,6 +865,15 @@ export function AddModelSheet({
                     rows={3}
                   />
                 </Field>
+
+                <SessionHeaderField
+                  label={t("models.field.sessionHeader")}
+                  hint={t("models.field.sessionHeaderHint")}
+                  value={form.sessionHeader}
+                  onChange={(value) =>
+                    setForm((f) => ({ ...f, sessionHeader: value }))
+                  }
+                />
               </AdvancedSection>
 
               {serverError && (

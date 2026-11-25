@@ -44,18 +44,91 @@ type AssembleResponse struct {
 	Summary string              // conversation summary embedded into system prompt by BuildMessages
 }
 
+// CompactReason explains the outcome of a manual compaction request.
+type CompactReason string
+
+const (
+	CompactReasonCompacted    CompactReason = "compacted"
+	CompactReasonBelowTarget  CompactReason = "below_target"
+	CompactReasonTooShort     CompactReason = "too_short"
+	CompactReasonNoCandidates CompactReason = "no_candidates"
+	CompactReasonInProgress   CompactReason = "in_progress"
+)
+
+// CompactOutcome reports what a manual compaction did, including why it did
+// nothing. TokensBefore and TokensAfter are the assembled history token counts,
+// so they use the same scale as /context. Target is the history-only compaction
+// budget; zero means the request forced compaction and ignored the target.
+type CompactOutcome struct {
+	Compacted          bool
+	Reason             CompactReason
+	TokensBefore       int
+	TokensAfter        int
+	Target             int
+	LeafSummaries      int
+	CondensedSummaries int
+}
+
 // CompactRequest is the input to Compact.
 type CompactRequest struct {
 	SessionKey string                // session identifier
 	Reason     ContextCompressReason // proactive_budget | llm_retry | summarize | manual
 	Budget     int                   // context window budget (used for retry aggressive compaction)
+	// ActiveTurnMessages is the number of trailing messages persisted by the
+	// turn in progress. Compaction must never fold these messages into a
+	// summary; it is zero when no turn is active (for example post-turn
+	// compaction).
+	ActiveTurnMessages int
 	// Instructions optionally steers what the summary should focus on (manual only).
 	Instructions string
+	// Force makes a manual request ignore the budget target and compact until
+	// no further progress is possible (manual only).
+	Force bool
+	// Outcome is optionally filled by Compact for manual requests with the
+	// no-op reason, target, and created-summary counts. The command adapter
+	// fills TokensBefore and TokensAfter from the assembled context.
+	Outcome *CompactOutcome
+}
+
+// ContextTokenReporter is an optional extension implemented by context managers
+// that can report the token size of their stored context independently of the
+// currently assembled prompt. Implementations should calibrate the count to
+// real-token units when they can (seahorse does), so it is comparable with the
+// threshold and with the provider-reported prompt size.
+type ContextTokenReporter interface {
+	ContextTokens(ctx context.Context, sessionKey string) (int, error)
 }
 
 // ErrNothingToCompact is returned by Compact for a manual request when the
 // history is too short (or already compacted) for anything to be summarized.
 var ErrNothingToCompact = errors.New("nothing to compact")
+
+// ErrCompactionInProgress is returned when another compaction already owns the
+// session. Callers must treat it as transient, not as a failed attempt.
+var ErrCompactionInProgress = errors.New("a summarization is already in progress")
+
+// ErrCompactionThrottled is returned when automatic compaction is skipped
+// because an earlier attempt failed or did not reduce the context below the
+// threshold. Manual compaction bypasses the throttle.
+var ErrCompactionThrottled = errors.New("compaction throttled")
+
+// CompactionHealthOutcome describes one automatic compaction check.
+// Attempted is false when the prompt was already below the threshold; Effective
+// then tells the manager that any stale backoff state can be cleared.
+type CompactionHealthOutcome struct {
+	// AgentID scopes the health state to the agent that owns the session.
+	AgentID      string
+	Attempted    bool
+	Effective    bool
+	PromptTokens int
+	Threshold    int
+}
+
+// CompactionHealthReporter is an optional extension implemented by context
+// managers that throttle repeated ineffective or failing automatic compactions.
+type CompactionHealthReporter interface {
+	RecordCompactionHealth(ctx context.Context, sessionKey string, outcome CompactionHealthOutcome)
+}
 
 // IngestRequest is the input to Ingest.
 type IngestRequest struct {

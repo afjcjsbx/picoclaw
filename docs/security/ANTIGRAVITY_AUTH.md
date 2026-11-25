@@ -1,3 +1,6 @@
+---
+description: "Antigravity uses OAuth 2.0 with PKCE (Proof Key for Code Exchange) for secure authentication."
+---
 # Antigravity Authentication & Integration Guide
 
 ## Overview
@@ -438,7 +441,7 @@ type ProviderAuthResult = {
 
 ### 1. Required Environment/Dependencies
 
-- Go ≥ 1.27.1
+- Go ≥ 1.27.4
 - PicoClaw codebase (`pkg/providers/` and `pkg/auth/`)
 - `crypto` and `net/http` standard library packages
 

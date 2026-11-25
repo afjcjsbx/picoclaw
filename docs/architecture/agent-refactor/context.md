@@ -1,3 +1,6 @@
+---
+description: "This document makes explicit the boundaries of context management in the agent loop."
+---
 # Context
 
 ## What this document covers
@@ -83,40 +86,78 @@ Turn is the atomic unit for compression. Cutting inside a Turn can orphan tool-c
 
 Three automatic compression paths exist, in order of preference. A fourth, user-triggered path (`/compact`) is described after them.
 
-### 1. Async summarization
+### 1. Threshold compaction (synchronous, before every LLM call)
 
-`maybeSummarize` runs after each Turn completes.
+`Pipeline.CompactBeforeLLM` runs before each LLM call of a turn, so it covers both the start of a turn and the middle of a tool loop. It only runs for turns with history and `EnableSummary` (not heartbeat, background or sub-turns).
 
-Triggers when message count exceeds a threshold, or when estimated history tokens exceed a percentage of `ContextWindow`. If triggered, a background goroutine calls the LLM to produce a summary of the oldest messages. The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt on the next call.
+It estimates the prompt about to be sent (`exec.messages` plus tool definitions) and compares it with `summarize_token_percent` of the usable window, i.e. `(ContextWindow - MaxTokens) * summarize_token_percent / 100`. This is the same budget the proactive check enforces, so the soft threshold always sits at or below the hard one. Message count is not a trigger (`summarize_message_threshold` is deprecated and ignored). The same value is reported as `SummarizeAtTokens` in `/context` and the UI.
 
-Cut point uses `findSafeBoundary` so no Turn is split.
+When the provider reported `prompt_tokens` on an earlier call in the session, the prompt size comes from the session's [usage anchor](#usage-anchor-provider-reported-prompt-size) plus the messages appended since, not from the full heuristic. The heuristic remains the fallback: first call of a session, a changed model, a rebuilt prompt, or a report that cannot describe the full prompt.
+
+When the threshold is reached it calls `ContextManager.Compact` with `Reason: ContextCompressReasonThreshold`, **blocking the turn** until it returns. If the session changed, it re-reads history and summary through `Assemble` and rebuilds `exec.messages` around the active turn (the same rebuild as the context-error retry, via `reassembleActiveTurn`; the active turn's messages are never dropped). The turn then carries on from the compacted context. `ErrNothingToCompact` means nothing changed and the prompt is kept. Compaction is best effort: any failure leaves the prompt as is, and the hard checks below remain the safety net.
+
+- **legacy**: compaction runs synchronously on the turn's context, so a hard abort cancels it and a canceled summarization is never applied. It works in this order, stopping at the first step that changes the session:
+  1. `summarizeSession` summarizes the **middle** between the protected head and tail. The cut point is a Turn boundary (`findSafeBoundary`), so the active turn stays whole. The head is kept verbatim (see [Head and tail protection](#head-and-tail-protection-legacy)); the tail is selected by token budget and message/user-message floors, not by a fixed four-message count.
+  2. `summarizeActiveTurn` summarizes the **middle of the active turn**. The turn's opening user message and its newest two tool rounds (an assistant message plus its tool results, never split) stay verbatim; the rounds in between, with their tool calls and bounded tool outputs, are folded into the session summary on top of the existing one. The newest round is never summarized because the model has not seen its results yet. It is skipped when the middle would reclaim less than a tenth of the threshold, so an LLM call is never spent on a few hundred tokens.
+  3. Old tool outputs are archived (`pruneSessionToolResults`) when neither step applies. The configurable head/tail bounds replace the fixed four-message tail. Each evicted result points at the tool's existing spill artifact when it has one, or is written under `<workspace>/.artifacts/evicted`; it is then replaced by a per-tool stub that names the command/path/query, the size and the file. Identical outputs are deduplicated against their archived copy: the newest archived copy stays canonical, and older copies point at its archive path. A copy still in the protected tail is not used as a dedupe target because it may be summarized later. Oversized historical tool-call arguments outside the protected region are archived and replaced by a compact, valid JSON object with a recovery pointer. If the protected tail itself exceeds `tail_token_budget`, its old tool outputs are archived too, as far as pruning can help: only tool results large enough to be prune candidates are evicted, so a tail made of user/assistant messages can stay above the budget. The head is never touched. If no archive can be written (empty workspace, write failure, or a stub that would not be shorter), the old placeholder is used.
+
+  `CompactBeforeLLM` chains up to three passes per LLM call, so one call can both summarize earlier Turns and the turn's own middle. The turn then continues with the kept rounds, the summary in the system prompt, and its original user message first. The post-turn `Compact(summarize)` is a no-op for legacy: the work moved here, and being synchronous it can no longer race with messages appended while the summary is generated.
+
+  Automatic threshold compaction is throttled per session. A failed attempt (an error or no progress) arms an escalating cooldown (1m, 5m, then 15m). Two consecutive attempts that leave the prompt at or above the threshold disable automatic threshold compaction for that session. Manual `/compact` bypasses both and resets the state; `/clear` and a naturally below-threshold prompt also clear it. The state is scoped to the turn that produced it: the first threshold check of a new turn clears the cooldown and the breaker, because the previous turn's protected tail is ordinary history by then and can be summarized. The turn ID is the signal, so compaction shrinking the active-turn message count within one turn does not reset the state. A successful hard-budget recovery clears only the failure cooldown, leaving the ineffective breaker for the next threshold measurement. The proactive and context-error retry paths bypass the throttle because they are the hard safety net.
+- **seahorse**: unchanged policy. A leaf compaction pass runs through `Engine.Compact`; if it creates no summary, `ErrNothingToCompact` is returned. Seahorse still compacts after the turn as before.
+
+#### Head and tail protection (legacy)
+
+The legacy manager never summarizes the first configured messages or the newest tail. The policy is resolved per agent at construction time from `agents.defaults`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `protect_first_n` | `1` | Leading conversation messages kept verbatim (system prompt excluded). `0` disables. |
+| `protect_last_n` | `4` | Minimum trailing messages kept verbatim. The token budget can keep more. `0` disables the count floor. |
+| `min_tail_user_messages` | `1` | Minimum real `user` messages guaranteed in the tail. `0` disables. |
+| `tail_token_budget` | auto | Tokens walked backwards from the newest message. Auto is 10% of the usable window (`ContextWindow - MaxTokens`), clamped to 2,000-32,000 and to half the window. `0` disables the token budget. |
+
+The tail is the union of the three minimums: the manager walks backwards accumulating `estimateMessageTokensForProvider` until the token budget is met, then keeps extending until the user-message guarantee is met. `protect_last_n` is a floor, not a cap. The resulting cut is snapped back to the nearest Turn boundary so a tool-call sequence is never split; the protected head is aligned forward over tool results for the same reason. When the only safe Turn boundary is later than the token/message target, the cut follows that boundary, so the kept tail can be shorter than the configured floor.
+
+The tail is resolved against the full history, then capped at the active-turn boundary. A long active turn therefore does not cause older turns to be over-protected just because they fall inside the last N messages: the active turn is already protected whole.
+
+The same bounds drive tool-output pruning. Outputs outside the head and tail are archived under `<workspace>/.artifacts/evicted/` and replaced by a stub pointing at the file. If the protected tail itself exceeds `tail_token_budget`, its old tool outputs are archived too, as far as pruning can help: the tail may stay above the budget when it is made of user/assistant messages or of results too small to be prune candidates. The head is never touched. This keeps one huge tool result from making `forceCompression` drop half the conversation.
+
+Emergency compression (`forceCompression`) keeps the protected head and the newest half where possible, dropping the middle; it falls back to dropping the head only when there is no room for a middle.
+
+The summary is stored via `SetSummary`; `BuildMessages` injects it into the system prompt.
+
+Summarization requests (legacy and seahorse) retry transient failures (rate limits, 5xx, timeouts, network errors: the `transientLLMRetryReason` classification the main loop uses) with the same `max_llm_retries` and `llm_retry_backoff_secs` backoff, and stop waiting when the turn is canceled. Other failures are not retried this way: legacy keeps its short retries and then falls back to a truncated transcript, and a failed seahorse pass leaves the turn to continue uncompacted.
 
 ### 2. Proactive budget check
 
 `isOverContextBudget` runs before each LLM call.
 
-Uses the full budget formula: `message_tokens + tool_def_tokens + MaxTokens > ContextWindow`. If over budget, triggers `forceCompression` and rebuilds messages before calling the LLM.
+Uses the full budget formula: `message_tokens + tool_def_tokens + MaxTokens > ContextWindow`. If over budget, triggers `forceCompression` and rebuilds messages before calling the LLM. The proactive path uses the same least-destructive recovery as the reactive one, so it can also prune and summarize (including a summarizer LLM call) before dropping turns.
 
 This prevents wasted (and billed) LLM calls that would otherwise fail with a context-window error.
 
 ### 3. Emergency compression (reactive)
 
-`forceCompression` runs when the LLM returns a context-window error despite the proactive check.
+`forceCompression` runs from the proactive budget check or when the LLM returns a context-window error despite it. It reduces the context least destructively first, and counts the bounded attempts it makes:
 
-Drops the oldest ~50% of Turns. If the history is a single Turn with no safe split point (e.g. one user message followed by a massive tool response), falls back to keeping only the most recent user message — breaking Turn atomicity as a last resort to avoid a context-exceeded loop.
+1. `pruneSessionToolResults` applies the same active-turn-aware pruning as threshold compaction: it keeps the turn's newest tool rounds verbatim and keeps the turn's persisted-message record in sync with the session, so the retry rebuild and later summarization see the same active-turn boundary. It archives old tool outputs and replaces them with per-tool stubs; no LLM call and no message loss.
+2. `summarizeSession` summarizes earlier Turns at a Turn boundary.
+3. `summarizeActiveTurn` summarizes the middle of the Turn in progress, keeping its opening user message and newest tool rounds.
+4. Only when neither summarization can make progress does it drop turns. Before dropping, it writes the full pre-compression transcript to `<workspace>/.artifacts/context/session_overflow_*.json` and puts that path in the session summary. If the archive cannot be written, it refuses to drop and leaves the transcript intact. Cancellation is re-checked immediately before each mutation. A failed summary write also keeps the transcript, and a failed history write rolls the summary back, so the archive pointer cannot outlive a drop that never happened, and the summary cannot announce one. It then keeps the protected head and the newest ~50% of Turns where possible, dropping the middle rather than the opening instruction. The cut is capped at the active-turn boundary so older history is dropped instead of splitting the turn in progress. If there is no room for a middle it drops the head. If the history is a single Turn with no safe split point (e.g. one user message followed by a massive tool response), it falls back to keeping only the most recent user message — breaking Turn atomicity as a last resort to avoid a context-exceeded loop.
 
-Stores a compression note in the session summary (not in history messages) so `BuildMessages` can include it in the next system prompt.
+The summary note (not a history message) records how many messages were dropped and where the original transcript was archived, so `BuildMessages` can include it in the next system prompt and the model can read the archive with `read_file`.
 
-This is the fallback for when the token estimate undershoots reality.
+This is the fallback for when the token estimate undershoots reality. The `agent.context.compress` event carries `summarized_messages`, `attempts`, `fallback`, and `archived_path` alongside the existing drop/remaining counts.
 
 ### 4. Manual compaction (`/compact`)
 
-`/compact [focus]` calls `ContextManager.Compact` with `Reason: ContextCompressReasonManual`. Unlike the automatic paths it runs synchronously inside the command turn, so the reply can report the outcome. The optional `focus` text travels in `CompactRequest.Instructions` and is added to the summarizer prompts as a priority hint.
+`/compact [--force] [focus]` calls `ContextManager.Compact` with `Reason: ContextCompressReasonManual`. Unlike the automatic paths it runs synchronously inside the command turn, so the reply can report the outcome. The optional `focus` text travels in `CompactRequest.Instructions` and is added to the summarizer prompts as a priority hint. `--force` sets `CompactRequest.Force`, which makes Seahorse ignore its budget target and run the condensed loop until no further progress is possible.
 
-When nothing was summarized (history too short, or already compacted), `Compact` returns `ErrNothingToCompact` and the command replies "Nothing to compact yet." Other errors are reported as "Failed to compact context: ...".
+Manual requests receive a `CompactOutcome` with a reason (`compacted`, `below_target`, `too_short`, `no_candidates`, `in_progress`), before/after history tokens, the target, and created summary counts. When nothing was summarized, the command explains the specific reason and the measured tokens; it suggests `/compact --force` for an already-fitting session instead of replying with a generic "Nothing to compact yet." Other errors are reported as "Failed to compact context: ...".
 
-- **legacy**: runs `summarizeSession` directly, so the cut point, the last-four-messages tail and the `agent.session.summarize` event match the async path. It takes the same per-session dedup key as `maybeSummarize`; if an async summarization is in flight the command fails with "a summarization is already in progress" instead of racing it.
-- **seahorse**: calls `Engine.CompactNow`, which runs one leaf pass followed by the condensed loop synchronously (the automatic path runs the condensed loop in a background goroutine). The fresh tail stays protected. It shares the `condensing` dedup map with the async loop.
+- **legacy**: runs `summarizeSession` directly, so the cut point, the configurable protected head/tail and the `agent.session.summarize` event match threshold compaction. It takes the same per-session dedup key; if a summarization is already in flight the command fails with "a summarization is already in progress" instead of racing it.
+- **seahorse**: calls `Engine.CompactNowWithBudget` by default, or `Engine.CompactNow` with `--force`, which runs one leaf pass followed by the condensed loop synchronously (the automatic path runs the condensed loop in a background goroutine). The fresh tail stays protected. It shares the `condensing` dedup map with the async loop and reports `in_progress` when that slot is busy.
 
 Both implementations leave the automatic prompts unchanged when no focus is given.
 
@@ -139,6 +180,21 @@ Estimation uses a heuristic of ~2.5 characters per token (`chars * 2 / 5`).
 
 These are deliberately heuristic. The proactive check handles the common case; the reactive path catches estimation errors.
 
+### Usage anchor (provider-reported prompt size)
+
+The heuristic is reasonable for prose but undershoots code, JSON, tool output and images, where the real tokenizer can use far more tokens per character. Most providers already report the true prompt size as `prompt_tokens`, which `turnState.AddUsage` exposes as `turnUsage.ContextTokens`. The agent stores that value as a per-session **usage anchor** (`pkg/agent/context_usage_anchor.go`) the first time a call reports it.
+
+- The anchor records the reported `prompt_tokens`, the number of messages in that prompt, a cheap fingerprint of the non-system prefix, the heuristic size of the system/tool envelope, and the heuristic size of the non-system messages.
+- On the next `CompactBeforeLLM`, the prompt is estimated as `anchor.prompt_tokens - anchor.overhead_tokens + current_overhead + delta_tokens`, where `delta_tokens` covers only the messages appended after the anchored prompt. The delta carries the session's observed real/heuristic ratio, so a large JSON or code tool result is not counted at prose density.
+- The prefix fingerprint only reads roles and sizes (never message content), so validating an anchor over a large history stays cheap. The system message is excluded because its dynamic sections (time, session, summary) change every turn; its size is adjusted separately instead.
+- The anchor is ignored, and the full heuristic is used, when there is no report yet, the model changed (different tokenizer), the prompt no longer starts with the anchored messages (compaction, eviction, pruning, steering), or the report is at or below the estimated non-history overhead.
+- The store is memory-only, bounded to 64 sessions with LRU eviction, and stores no message content. After a restart the first call per session falls back to the heuristic and rebuilds the anchor from real usage.
+- Compaction invalidates the reported prompt baseline (the old prompt no longer describes the stored context) but keeps the observed real/heuristic ratio for seahorse calibration. `/clear` drops the entry entirely.
+
+Seahorse uses the anchor's real/heuristic ratio to calibrate its own heuristic accounting (`ContextTokenReporter.ContextTokens`) and to convert real-token assembly/compaction budgets into its heuristic units. Sessions heavy in code, JSON or images therefore compact at the right time instead of after the heuristic has undershot the window.
+
+`/context` and the usage metadata attached to outbound messages estimate the prompt returned by `ContextManager.Assemble`, not the raw session store. This matters for seahorse: compaction folds old messages into summaries in its SQLite context while the JSONL history stays untouched, so reading the session store directly would keep reporting the pre-compaction size. If assembly fails, the estimate falls back to session history.
+
 ---
 
 ## Interface boundaries
@@ -159,11 +215,13 @@ budget check --> compression decision --> mutate session --> BuildMessages reads
 
 These are recognized limitations in the current implementation, documented here for visibility:
 
-- **Summarization trigger does not use the full budget formula.** `maybeSummarize` compares estimated history tokens against a percentage of `ContextWindow`. It does not account for system prompt size, tool definition overhead, or `MaxTokens` reserve. The proactive check covers the critical path (preventing 400 errors), but the summarization trigger could be aligned with the same budget model for more accurate early compression.
+- **The newest tool rounds are never summarized.** A turn whose last two rounds alone exceed the threshold stays over it until those rounds age out; the context-error retry remains the safety net. Summarizing a turn needs more than two rounds.
 
-- **Token estimation is heuristic.** It does not account for provider-specific tokenization, exact system prompt size (assembled separately), or variable image token costs. The two-path design (proactive + reactive) is intended to tolerate this imprecision.
+- **Token estimation is heuristic until the provider reports usage.** The usage anchor corrects the prompt size for sessions whose provider returns `prompt_tokens`, but the first call of a session, providers that omit usage, and the image estimate (a flat 256 tokens per item) still use the `chars * 2 / 5` fallback. The two-path design (proactive + reactive) tolerates the remaining imprecision.
 
 - **Reactive retry does not preserve media.** When the reactive path rebuilds context after compression, it currently passes empty values for media references. This is a pre-existing issue in the main loop, not introduced by the budget system.
+
+- **Evicted outputs are retained, not permanent.** Archived tool outputs live under `.artifacts/evicted`, reused spills live under the tool's artifact directory (for example `.artifacts/tool` or `.artifacts/mcp`), and the emergency drop fallback archives the full pre-compression transcript under `.artifacts/context`. All are bounded by the artifact retention policy; a spill capped by the tool is not a complete copy, and the context archive is a recovery aid, not a permanent backup. Normal summarization still replaces old turns with a summary rather than archiving the originals. Outputs dropped together with their messages by summarization or forced compression are not archived.
 
 ---
 

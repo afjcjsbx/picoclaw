@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 )
 
-var audioExtensions = []string{".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma"}
+var audioExtensions = []string{".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma", ".webm"}
 
 func AudioFormat(path string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
@@ -65,10 +64,13 @@ func SanitizeFilename(filename string) string {
 
 // DownloadOptions holds optional parameters for downloading files
 type DownloadOptions struct {
-	Timeout             time.Duration
-	ExtraHeaders        map[string]string
-	LoggerPrefix        string
-	ProxyURL            string
+	Timeout      time.Duration
+	ExtraHeaders map[string]string
+	LoggerPrefix string
+	ProxyURL     string
+	// BlockPrivateTargets enables SSRF hardening (scheme/host checks + safe dial
+	// + redirect re-check). Inbound channel attachment downloads should set this
+	// so a crafted media URL cannot reach loopback/link-local/RFC1918.
 	BlockPrivateTargets bool
 }
 
@@ -118,19 +120,12 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 			return ""
 		}
 	} else {
-		client = &http.Client{Timeout: opts.Timeout}
-		if opts.ProxyURL != "" {
-			proxyURL, parseErr := url.Parse(opts.ProxyURL)
-			if parseErr != nil {
-				logger.ErrorCF(opts.LoggerPrefix, "Invalid proxy URL for download", map[string]any{
-					"error": parseErr.Error(),
-					"proxy": opts.ProxyURL,
-				})
-				return ""
-			}
-			client.Transport = &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			}
+		client, err = CreateHTTPClient(opts.ProxyURL, opts.Timeout)
+		if err != nil {
+			logger.ErrorCF(opts.LoggerPrefix, "Failed to create download client", map[string]any{
+				"error": err.Error(),
+			})
+			return ""
 		}
 	}
 

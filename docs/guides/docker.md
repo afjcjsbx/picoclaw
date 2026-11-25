@@ -1,6 +1,10 @@
+---
+description: "Run PicoClaw with Docker Compose or the launcher: image tags, volumes, workspace layout, and a first working configuration."
+title: "Docker & Quick Start Guide"
+---
 # 🐳 Docker & Quick Start Guide
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ## 🐳 Docker Compose
 
@@ -147,7 +151,7 @@ picoclaw onboard
 }
 ```
 
-> **New**: The `model_list` configuration format allows zero-code provider addition. See [Model Configuration](#model-configuration-model_list) for details.
+> **New**: The `model_list` configuration format allows zero-code provider addition. See [Model Configuration](providers.md#model-configuration-model_list) for details.
 > `request_timeout` is optional and uses seconds. If omitted or set to `<= 0`, PicoClaw uses the default timeout (120s).
 
 **3. Get API Keys**

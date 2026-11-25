@@ -1,3 +1,6 @@
+---
+description: "PicoClaw documentation is organized by document type first and language second."
+---
 # PicoClaw Documentation
 
 PicoClaw documentation is organized by document type first and language second.
@@ -11,14 +14,15 @@ These conventions are intended as contributor guidance for new or moved docs. Ex
 If you are browsing docs rather than reorganizing them, start with these directory indexes:
 
 - [Documentation Home](index.md): user-facing landing page with quick start and reading paths.
-- [Guides](guides/README.md): setup, configuration, provider, and workflow guides.
-- [Reference](reference/README.md): precise configuration and behavior reference.
-- [Operations](operations/README.md): debugging and troubleshooting material.
-- [Security](security/README.md): security-focused guides and controls.
-- [Architecture](architecture/README.md): implementation notes and internal design docs.
-- [Tools](tools/README.md): tool-specific deep dives.
-- [Design Notes](design/README.md): proposals and investigations.
-- [Migration](migration/README.md): upgrade and migration notes.
+- [Guides](guides/): setup, configuration, provider, and workflow guides.
+- [Reference](reference/): precise configuration and behavior reference.
+- [Operations](operations/): debugging and troubleshooting material.
+- [Security](security/): security-focused guides and controls.
+- [Architecture](architecture/): implementation notes and internal design docs.
+- [Tools](tools/): tool-specific deep dives.
+- [Design Notes](design/): proposals and investigations.
+- [Migration](migration/): upgrade and migration notes.
+- [Maintenance status](project/maintenance-status.md): upstream vs fork release dates and the migration path.
 
 For channel-specific setup, start with [Chat Apps Configuration](guides/chat-apps.md) and then drill into `docs/channels/<name>/README.md` as needed.
 
@@ -27,8 +31,8 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
 - Choose the document type directory first. Do not create language buckets such as `docs/zh/` or `docs/fr/`.
 - Keep each translated document next to its English source document.
 - Use English as the base filename with no locale suffix.
-- Use lowercase locale suffixes for translations, for example `configuration.zh.md` or `README.pt-br.md`.
-- Keep the main documentation set in English and Chinese. README-style entry documents may keep translations in additional languages.
+- Use lowercase locale suffixes for translations, for example `configuration.zh.md` or `README.zh.md`.
+- Keep the documentation set in English and Chinese. README translations are limited to Chinese.
 - Keep module-specific docs next to the code they describe instead of moving them into `docs/`.
 
 ## Recommended Directories
@@ -54,7 +58,7 @@ For channel-specific setup, start with [Chat Apps Configuration](guides/chat-app
 - Translations use `.<locale>.md`:
   - `README.zh.md`
   - `configuration.zh.md`
-  - `README.pt-br.md`
+  - `pkg/channels/README.zh.md`
 - Code-adjacent translated READMEs follow the same rule:
   - `pkg/audio/asr/README.zh.md`
   - `pkg/isolation/README.zh.md`
@@ -101,6 +105,17 @@ These files still follow the same translation naming rules.
 3. Add translated siblings after the English source exists when that source is part of the same docs set.
 4. Update links from existing docs when the new doc becomes a navigation target.
 5. Run `make lint-docs` locally when adding or moving docs.
+
+## Documentation Site
+
+The site at <https://afjcjsbx.github.io/picoclaw/> is built with Docusaurus from `website/` and reads this directory unchanged. Preview it with `cd website && npm install && npm start`; `.github/workflows/docs.yml` builds it on every docs change and deploys `main`.
+
+- The sidebar is the explicit list in `website/sidebars.js`. A new page is published and searchable without it, but only appears in the sidebar once you add it there.
+- Section indexes are `README.md` files and become the directory page. Directory links such as `../channels/telegram/` are rewritten to the index file at build time.
+- A `.zh.md` file is published in the 简体中文 locale when its English source exists; untranslated pages fall back to English there. `website/scripts/sync-i18n.mjs` does the copy, so there is no pairing file to maintain.
+- GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!WARNING]`) render as admonitions.
+- Old Jekyll URLs (`/guides/providers.html`) redirect to the new ones (`/docs/guides/providers/`).
+- Submit `https://afjcjsbx.github.io/picoclaw/sitemap.xml` directly in Google Search Console and Bing Webmaster Tools: crawlers only read `robots.txt` at the host root, not at the project path.
 
 ## Examples
 

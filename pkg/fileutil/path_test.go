@@ -17,6 +17,7 @@ func TestExpandHome(t *testing.T) {
 		{"~other", "~other"},
 		{"~", home},
 		{"~/folder", home + "/folder"},
+		{`~\folder`, home + "/folder"},
 	} {
 		if got := ExpandHome(tt.path); got != tt.want {
 			t.Errorf("ExpandHome(%q) = %q, want %q", tt.path, got, tt.want)

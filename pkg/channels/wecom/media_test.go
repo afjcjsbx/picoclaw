@@ -6,11 +6,15 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	basechannels "github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 func TestStoreRemoteMedia_DetectsJPEGContentTypeFromBody(t *testing.T) {
@@ -177,4 +181,46 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestStoreRemoteMedia_BlocksPrivateRedirect(t *testing.T) {
+	t.Parallel()
+
+	var privateHit atomic.Bool
+	private := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		privateHit.Store(true)
+		_, _ = w.Write([]byte("SECRET"))
+	}))
+	t.Cleanup(private.Close)
+
+	public := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, private.URL+"/secret", http.StatusFound)
+	}))
+	t.Cleanup(public.Close)
+
+	client, err := utils.CreateSafeHTTPClient(utils.SafeHTTPClientOptions{
+		Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("CreateSafeHTTPClient: %v", err)
+	}
+
+	store := media.NewFileMediaStore()
+	ch := &WeComChannel{
+		BaseChannel: basechannels.NewBaseChannel("wecom", nil, nil, nil),
+		mediaClient: client,
+	}
+	ch.SetMediaStore(store)
+
+	_, err = ch.storeRemoteMedia(context.Background(), "test-scope", "msg-ssrf", public.URL, "", "")
+	if err == nil {
+		t.Fatal("expected storeRemoteMedia to reject redirect to private host")
+	}
+	if privateHit.Load() {
+		t.Fatal("private target was reached via redirect")
+	}
+	if !strings.Contains(err.Error(), "private or local") &&
+		!strings.Contains(err.Error(), "blocked private") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }

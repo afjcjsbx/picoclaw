@@ -1,6 +1,9 @@
+---
+description: "Configure PicoClaw routing for real deployments: rule matching, model selection, fallbacks, and how the two user-facing routing layers interact."
+---
 # Routing Guide
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 In PicoClaw, routing has two user-facing parts:
 
@@ -231,11 +234,15 @@ agents.defaults.routing
 
 Current fields:
 
-| Field | Meaning |
-| --- | --- |
-| `enabled` | Turn model routing on or off |
-| `light_model` | `model_name` from `model_list` used for simple turns |
-| `threshold` | Complexity cutoff in `[0, 1]` |
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Turn model routing on or off |
+| `light_model` | — | `model_name` from `model_list` used for simple turns |
+| `threshold` | `0.35` | Complexity cutoff in `[0, 1]`; scores at or above this go to the primary model |
+| `escalation_prompt_tokens` | `32768` | Move the rest of the turn to the primary model after a light-model response reports more prompt tokens than this. Zero uses the default. |
+| `escalation_tool_iterations` | `3` | Move the rest of the turn to the primary model after this many consecutive light-model responses requested tools. Zero uses the default. |
+
+Escalation happens at most once per turn. After escalation, the remaining tool calls and the final LLM call all use the primary model.
 
 Important behavior:
 

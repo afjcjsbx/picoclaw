@@ -387,12 +387,28 @@ func enforceDBSize(
 func reclaim(ctx context.Context, eng Engine, cfg config.SessionPruneConfig, force bool) {
 	if cfg.VacuumEnabled() && (force || worthVacuum(ctx, eng)) {
 		if err := eng.Vacuum(ctx); err != nil {
-			logger.WarnCF("session-prune", "VACUUM failed", map[string]any{"error": err.Error()})
+			logger.WarnCF(
+				"session-prune",
+				"VACUUM failed, falling back to checkpoint",
+				map[string]any{"error": err.Error()},
+			)
+		} else {
+			if optimizer, ok := eng.(interface {
+				Optimize(ctx context.Context) error
+			}); ok {
+				if err := optimizer.Optimize(ctx); err != nil {
+					logger.WarnCF("session-prune", "PRAGMA optimize failed", map[string]any{"error": err.Error()})
+				}
+			}
+			return
 		}
-		return
 	}
 	if err := eng.Checkpoint(ctx, true); err != nil {
-		logger.WarnCF("session-prune", "WAL checkpoint failed", map[string]any{"error": err.Error()})
+		logger.WarnCF(
+			"session-prune",
+			"WAL checkpoint failed",
+			map[string]any{"error": err.Error()},
+		)
 	}
 }
 
@@ -413,7 +429,11 @@ func worthVacuum(ctx context.Context, eng Engine) bool {
 func collectInfos(ctx context.Context, eng Engine, idx owners) []Info {
 	statuses, err := eng.SessionStatuses(ctx)
 	if err != nil {
-		logger.WarnCF("session-prune", "Failed to list seahorse sessions", map[string]any{"error": err.Error()})
+		logger.WarnCF(
+			"session-prune",
+			"Failed to list seahorse sessions",
+			map[string]any{"error": err.Error()},
+		)
 	}
 
 	infos := make([]Info, 0, len(statuses))

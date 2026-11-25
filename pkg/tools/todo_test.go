@@ -19,6 +19,26 @@ func todoArgs(content string) map[string]any {
 	return map[string]any{"action": "write", "todos": []any{map[string]any{"id": "step-1", "content": content}}}
 }
 
+func TestTodoTool_ParametersOmitKeysRejectedByGemini(t *testing.T) {
+	var walk func(any)
+	walk = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			if _, found := node["additionalProperties"]; found {
+				t.Fatal("todo schema contains additionalProperties, which the native Gemini API rejects")
+			}
+			for _, child := range node {
+				walk(child)
+			}
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(NewTodoTool().Parameters())
+}
+
 func readTodo(t *testing.T, tool *TodoTool, ctx context.Context) []TodoItem {
 	t.Helper()
 	result := tool.Execute(ctx, map[string]any{"action": "read"})

@@ -1,3 +1,6 @@
+---
+description: "Build PicoClaw yourself: channel selection tags, the seahorse and sqlite build options, and the measured binary size for each configuration."
+---
 # Custom Builds
 
 PicoClaw's standard builds include the built-in channel set except opt-in
@@ -8,6 +11,20 @@ context manager you will use.
 These tags affect the executable being built. They do not remove packages from
 the source tree or from `go.mod`, and they do not change other binaries such as
 `cmd/membench`.
+
+## The `goolm` and `stdjson` Tags
+
+These two tags appear in every Makefile example. They are pass-through tags for
+dependencies, not for PicoClaw's own packages:
+
+| Tag | Dependency | Effect |
+| --- | --- | --- |
+| `goolm` | `maunium.net/go/mautrix` (Matrix) | Selects the pure-Go olm cryptography implementation instead of the system `libolm` C library. Required for `CGO_ENABLED=0` builds. Without it, Matrix E2EE falls back to `libolm` which needs CGO. |
+| `stdjson` | `github.com/bytedance/sonic` | Disables sonic's SIMD-accelerated JSON parser and falls back to stdlib `encoding/json`. Required on architectures where sonic's native implementation is unavailable (mipsle, s390x, loong64, riscv64). |
+
+Omit `goolm` only if you are building with CGO enabled and have `libolm` installed
+on the target system. Omit `stdjson` only on amd64 or arm64 targets where sonic
+runs. For any other target or a fully static build, keep both.
 
 ## Default Build
 
@@ -44,6 +61,7 @@ Available channel tags:
 
 | Tag | Channel |
 | --- | --- |
+| `channel_a2a` | A2A (Agent-to-Agent) |
 | `channel_deltachat` | Delta Chat |
 | `channel_dingtalk` | DingTalk |
 | `channel_discord` | Discord |
@@ -95,8 +113,10 @@ Seahorse is PicoClaw's built-in memory system. The `seahorse` context manager
 (enabled with `context_manager: seahorse` in the agent defaults) keeps a local
 SQLite database, `sessions/seahorse.db`, with an FTS5 index over the session
 history, so the agent can retrieve and compact older context. See
+[Seahorse Memory](../architecture/seahorse-memory.md) for how the index,
+compaction, and retrieval work, and
 [Session Startup Cost and Automatic Pruning](../architecture/session-startup-and-pruning.md)
-for how that index is built and maintained.
+for startup cost and pruning operations.
 
 The `no_seahorse` tag excludes the Seahorse context manager from the main
 `picoclaw` executable. This also removes the `pkg/seahorse` import and its
@@ -154,19 +174,19 @@ declares SQLite because the default build and other repository targets need it.
 
 ## Measured Binary Sizes
 
-These reference measurements use Go 1.27.1 on macOS ARM64, with
+These reference measurements use Go 1.27.3 on macOS ARM64, with
 `CGO_ENABLED=0` and linker flags `-s -w` to strip symbols and DWARF debug data.
 All builds used the same target and linker settings:
 
 | Profile | Build tags | Size |
 | --- | --- | ---: |
-| Full default channels and Seahorse | `goolm,stdjson` | 37,078,802 bytes (35.36 MiB) |
-| Telegram only, with Seahorse | `goolm,stdjson,custom_channels,channel_telegram` | 28,806,514 bytes (27.47 MiB) |
-| Telegram only, without Seahorse | `goolm,stdjson,custom_channels,channel_telegram,no_seahorse` | 24,692,146 bytes (23.55 MiB) |
+| Full default channels and Seahorse | `goolm,stdjson` | 50,442,210 bytes (48.11 MiB) |
+| Telegram only, with Seahorse | `goolm,stdjson,custom_channels,channel_telegram` | 41,954,818 bytes (40.01 MiB) |
+| Telegram only, without Seahorse | `goolm,stdjson,custom_channels,channel_telegram,no_seahorse` | 37,757,298 bytes (36.01 MiB) |
 
-In this measurement, selecting Telegram alone reduced the binary by 7.89 MiB
-(22.3%). Omitting Seahorse from that profile saved a further 3.92 MiB (14.3%).
-The final profile was 11.81 MiB (33.4%) smaller than the full default build.
+In this measurement, selecting Telegram alone reduced the binary by 8.09 MiB
+(16.8%). Omitting Seahorse from that profile saved a further 4.00 MiB (10.0%).
+The final profile was 12.10 MiB (25.1%) smaller than the full default build.
 
 Sizes vary with Go version, operating system, architecture, linker settings,
 and selected features. Use these figures as a reproducible reference, not as a

@@ -1,3 +1,6 @@
+---
+description: "PicoClaw uses a schema versioning system for config.json to ensure smooth upgrades as the configuration format evolves."
+---
 # Config Schema Versioning Guide
 
 ## Overview

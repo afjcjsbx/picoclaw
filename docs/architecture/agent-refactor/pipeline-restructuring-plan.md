@@ -1,4 +1,9 @@
+---
+description: "Split agent/pipeline.go (~1400 lines) into multiple logical files, organizing code by responsibility."
+---
 # Pipeline Restructuring Plan
+
+> **Status: fully implemented.** `pipeline.go`, `pipeline_setup.go`, `pipeline_llm.go`, `pipeline_execute.go`, and `pipeline_finalize.go` all exist in `pkg/agent/`. The verification results at the bottom of this document confirm a passing build and test run. Nothing in this plan is pending.
 
 ## Goal
 

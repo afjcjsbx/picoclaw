@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "OneBot 是一个面向 QQ 机器人的开放协议标准，为多种 QQ 机器人实现（例如 go-cqhttp、Mirai）提供了统一的接口。它使用 WebSocket 进行通信。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # OneBot

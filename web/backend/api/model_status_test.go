@@ -99,6 +99,82 @@ func TestModelProbeAPIBase_GPT4FreeDefault(t *testing.T) {
 	}
 }
 
+func TestProbeLocalModelAvailability_AnthropicUsesTCPProbe(t *testing.T) {
+	originalTCPProbe := probeTCPServiceFunc
+	originalOpenAIProbe := probeOpenAICompatibleModelFunc
+	defer func() {
+		probeTCPServiceFunc = originalTCPProbe
+		probeOpenAICompatibleModelFunc = originalOpenAIProbe
+	}()
+
+	const apiBase = "http://127.0.0.1:18099"
+	tcpCalled := false
+	openAICalled := false
+	probeTCPServiceFunc = func(got string) bool {
+		tcpCalled = true
+		if got != apiBase {
+			t.Fatalf("TCP probe apiBase = %q, want %q", got, apiBase)
+		}
+		return true
+	}
+	probeOpenAICompatibleModelFunc = func(string, string, string) bool {
+		openAICalled = true
+		return true
+	}
+
+	model := &config.ModelConfig{
+		ModelName: "local-claude-5",
+		Model:     "anthropic-messages/claude-sonnet-5-5",
+		APIBase:   apiBase,
+	}
+	model.SetAPIKey("test-key")
+
+	if !probeLocalModelAvailability(model) {
+		t.Fatal("probeLocalModelAvailability(anthropic-messages) = false, want true")
+	}
+	if !tcpCalled {
+		t.Fatal("TCP probe was not called for a local Anthropic endpoint")
+	}
+	if openAICalled {
+		t.Fatal("OpenAI /models probe must not be used for a local Anthropic endpoint")
+	}
+}
+
+func TestProbeModelConnectivity_AnthropicUsesNativeHeaders(t *testing.T) {
+	const apiKey = "test-key"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1/models")
+		}
+		if got := r.URL.Query().Get("limit"); got != "1000" {
+			t.Fatalf("limit = %q, want %q", got, "1000")
+		}
+		if got := r.Header.Get("X-Api-Key"); got != apiKey {
+			t.Fatalf("X-Api-Key = %q, want %q", got, apiKey)
+		}
+		if got := r.Header.Get("Anthropic-Version"); got != anthropicAPIVersion {
+			t.Fatalf("Anthropic-Version = %q, want %q", got, anthropicAPIVersion)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q, want empty", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"claude-sonnet-5-5"}]}`)
+	}))
+	defer srv.Close()
+
+	model := &config.ModelConfig{
+		ModelName: "anthropic-5",
+		Model:     "anthropic-messages/claude-sonnet-5-5",
+		APIBase:   srv.URL,
+	}
+	model.SetAPIKey(apiKey)
+
+	if !probeModelConnectivity(model) {
+		t.Fatal("probeModelConnectivity(anthropic) = false, want true")
+	}
+}
+
 func TestProbeLocalModelAvailability_LMStudioUsesOpenAICompatibleProbe(t *testing.T) {
 	originalProbe := probeOpenAICompatibleModelFunc
 	defer func() { probeOpenAICompatibleModelFunc = originalProbe }()
@@ -456,5 +532,90 @@ func TestOllamaModelMatches_WithTagRequiresExactTag(t *testing.T) {
 	}
 	if !ollamaModelMatches("llama3", "llama3") {
 		t.Fatal("ollamaModelMatches() = false, want true when both candidate and request omit tag (latest)")
+	}
+}
+
+func TestProbeGeminiModel_HeaderAuth(t *testing.T) {
+	const apiKey = "test-gemini-key"
+	called := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called++
+		if r.URL.Path != "/v1beta/models" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1beta/models")
+		}
+		if got := r.Header.Get("X-Goog-Api-Key"); got != apiKey {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(
+			`{"models":[{"name":"models/gemini-3-flash-preview"},{"name":"models/gemini-2.5-flash"}]}`,
+		))
+	}))
+	defer srv.Close()
+
+	got := probeGeminiModel(srv.URL+"/v1beta", "gemini-3-flash-preview", apiKey)
+	if !got {
+		t.Fatal("probeGeminiModel() = false, want true with valid x-goog-api-key header")
+	}
+	if called != 1 {
+		t.Fatalf("handler called %d times, want 1", called)
+	}
+}
+
+func TestProbeGeminiModel_QueryParamAuth(t *testing.T) {
+	const apiKey = "test-gemini-key"
+	called := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called++
+		if r.URL.Path != "/v1beta/models" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1beta/models")
+		}
+		// First call: header auth (no key header) -> 401
+		// Second call: query param auth -> success
+		if r.Header.Get("X-Goog-Api-Key") != "" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		if got := r.URL.Query().Get("key"); got != apiKey {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-3.5-flash-lite"}]}`))
+	}))
+	defer srv.Close()
+
+	got := probeGeminiModel(srv.URL+"/v1beta", "gemini-3.5-flash-lite", apiKey)
+	if !got {
+		t.Fatal("probeGeminiModel() = false, want true with valid key query param")
+	}
+	if called != 2 {
+		t.Fatalf("handler called %d times, want 2 (header auth fails, then query param succeeds)", called)
+	}
+}
+
+func TestProbeGeminiModel_WithModelsPrefix(t *testing.T) {
+	const apiKey = "test-gemini-key"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-3.1-flash-lite"}]}`))
+	}))
+	defer srv.Close()
+
+	// Should match with models/ prefix stripped
+	got := probeGeminiModel(srv.URL+"/v1beta", "gemini-3.1-flash-lite", apiKey)
+	if !got {
+		t.Fatal("probeGeminiModel() = false, want true when API returns models/ prefix")
+	}
+}
+
+func TestProbeGeminiModel_EmptyKeyFails(t *testing.T) {
+	got := probeGeminiModel("https://generativelanguage.googleapis.com/v1beta", "gemini-3-flash-preview", "")
+	if got {
+		t.Fatal("probeGeminiModel() = true, want false when api key is empty")
 	}
 }

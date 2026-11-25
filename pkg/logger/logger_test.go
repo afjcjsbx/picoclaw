@@ -390,6 +390,25 @@ func TestDisableConsole(t *testing.T) {
 	Info("this should go to nowhere")
 }
 
+func TestRedirectConsoleWritesToGivenWriter(t *testing.T) {
+	initialLevel := GetLevel()
+	defer SetLevel(initialLevel)
+	SetLevel(INFO)
+
+	var buf bytes.Buffer
+	EnableConsole()
+	RedirectConsole(&buf)
+	defer func() {
+		consoleWriter.Out = os.Stdout
+		EnableConsole()
+	}()
+
+	Info("redirected line")
+	if !bytes.Contains(buf.Bytes(), []byte("redirected line")) {
+		t.Fatalf("redirected console output = %q, want the log line", buf.String())
+	}
+}
+
 func TestConfigureFromEnv(t *testing.T) {
 	home := os.Getenv("HOME")
 	if home == "" {

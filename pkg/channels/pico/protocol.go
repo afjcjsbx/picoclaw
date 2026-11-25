@@ -13,14 +13,15 @@ const (
 	TypePing        = "ping"
 
 	// TypeMessageCreate is sent from server to client.
-	TypeMessageCreate = "message.create"
-	TypeMessageUpdate = "message.update"
-	TypeMessageDelete = "message.delete"
-	TypeMediaCreate   = "media.create"
-	TypeTypingStart   = "typing.start"
-	TypeTypingStop    = "typing.stop"
-	TypeError         = "error"
-	TypePong          = "pong"
+	TypeMessageCreate   = "message.create"
+	TypeMessageUpdate   = "message.update"
+	TypeMessageDelete   = "message.delete"
+	TypeMediaCreate     = "media.create"
+	TypeTypingStart     = "typing.start"
+	TypeTypingStop      = "typing.stop"
+	TypeSessionActivity = "session.activity"
+	TypeError           = "error"
+	TypePong            = "pong"
 
 	PayloadKeyContent     = "content"
 	PayloadKeyThought     = "thought"
@@ -29,9 +30,18 @@ const (
 	PayloadKeyToolCalls   = "tool_calls"
 	PayloadKeyModelName   = "model_name"
 	PayloadKeyUsage       = "usage"
+	PayloadKeyEvent       = "event"
+	PayloadKeyFinal       = "final"
+	PayloadKeyApproval    = "approval"
 
 	MessageKindThought   = "thought"
 	MessageKindToolCalls = "tool_calls"
+	MessageKindApproval  = "approval"
+
+	ApprovalKeyToken     = "token"
+	ApprovalKeyCommand   = "command"
+	ApprovalKeyReason    = "reason"
+	ApprovalKeyExpiresAt = "expires_at"
 )
 
 // PicoMessage is the wire format for all Pico Protocol messages.

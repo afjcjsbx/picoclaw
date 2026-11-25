@@ -19,6 +19,12 @@ type SubTurnSpawner interface {
 	SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error)
 }
 
+// SubTurnSlotWaiter lets the spawn tool reserve a concurrency slot before it
+// acknowledges a background spawn. The returned release function is idempotent.
+type SubTurnSlotWaiter interface {
+	WaitForSubTurnSlot(ctx context.Context) (release func(), err error)
+}
+
 // SubTurnConfig holds configuration for spawning a sub-turn.
 type SubTurnConfig struct {
 	Model              string
@@ -34,6 +40,11 @@ type SubTurnConfig struct {
 	InitialMessages    []providers.Message
 	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
 	TargetAgentID      string        // If set, run as this agent (its workspace, model, tools)
+
+	// SlotHeld means the caller already reserved a concurrency slot through
+	// SubTurnSlotWaiter. SlotRelease releases it exactly once.
+	SlotHeld    bool
+	SlotRelease func()
 }
 
 type SubagentTask struct {
@@ -343,6 +354,19 @@ func (sm *SubagentManager) ListTaskCopies() []SubagentTask {
 	return copies
 }
 
+// stringArg reads a string tool argument, returning "" when it is absent.
+func stringArg(args map[string]any, name string) string {
+	value, _ := args[name].(string)
+	return value
+}
+
+// subagentSystemPrompt renders the system prompt shared by the spawning tools:
+// the subagent's role, the one-sentence instruction and the task itself. The
+// label, when present, is part of the role.
+func subagentSystemPrompt(role, instruction, task string) string {
+	return fmt.Sprintf("%s. %s\n\nTask: %s", role, instruction, task)
+}
+
 // SubagentTool executes a subagent task synchronously and returns the result.
 // It directly calls SubTurnSpawner with Async=false for synchronous execution.
 type SubagentTool struct {
@@ -399,28 +423,18 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("task is required").WithError(fmt.Errorf("task parameter is required"))
 	}
 
-	label, ok := args["label"].(string)
-	if !ok {
-		label = ""
-	}
+	label := stringArg(args, "label")
 
 	// Build system prompt for subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a subagent. Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
+	role := "You are a subagent"
+	if label != "" {
+		role = fmt.Sprintf("You are a subagent labeled %q", label)
+	}
+	systemPrompt := subagentSystemPrompt(
+		role,
+		"Complete the given task independently and provide a clear, concise result.",
 		task,
 	)
-
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a subagent labeled "%s". Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
 
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {

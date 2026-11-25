@@ -1543,6 +1543,41 @@ func TestConcurrencySemaphore_Timeout(t *testing.T) {
 	}
 }
 
+// TestSubTurnCanceledParentStillUsesFreeSlot covers the race where an async
+// spawn's goroutine starts only after the parent turn has finished. The parent
+// context is already canceled at that point, but a concurrency slot is free and
+// the tool call was acknowledged, so the SubTurn must still run instead of
+// failing with context.Canceled.
+func TestSubTurnCanceledParentStillUsesFreeSlot(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ModelName = "gpt-4o-mini"
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+
+	parent := &turnState{
+		ctx:            parentCtx,
+		turnID:         "parent-canceled",
+		depth:          0,
+		session:        newEphemeralSession(nil),
+		pendingResults: make(chan *tools.ToolResult, 16),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+	}
+
+	result, err := spawnSubTurn(parentCtx, al, parent, SubTurnConfig{Model: "gpt-4o-mini"})
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("free slot rejected because parent context was canceled: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("spawnSubTurn: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+}
+
 // TestEphemeralSession_AutoTruncate verifies that ephemeral sessions automatically
 // truncate their history to prevent memory accumulation.
 func TestEphemeralSession_AutoTruncate(t *testing.T) {
@@ -2496,5 +2531,51 @@ func TestGetSubTurnConfig_MaxConcurrent(t *testing.T) {
 				t.Fatalf("maxConcurrent = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSpawnSubTurn_SuppressesToolFeedback verifies that a child turn inherits the
+// parent's chat context but never publishes its own tool feedback to that chat.
+func TestSpawnSubTurn_SuppressesToolFeedback(t *testing.T) {
+	probe := &turnStateProbeProvider{response: "ok"}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "gpt-4o-mini",
+				Provider:          "mock",
+				MaxTokens:         1024,
+				MaxToolIterations: 2,
+			},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), probe)
+	parent := &turnState{
+		ctx:            context.Background(),
+		turnID:         "parent-feedback",
+		pendingResults: make(chan *tools.ToolResult, 10),
+		session:        &ephemeralSessionStore{},
+		agent:          al.registry.GetDefaultAgent(),
+		opts: processOptions{Dispatch: DispatchRequest{
+			InboundContext: &bus.InboundContext{Channel: "telegram", ChatID: "42"},
+		}},
+	}
+
+	if _, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{Model: "gpt-4o-mini"}); err != nil {
+		t.Fatalf("spawnSubTurn() error = %v", err)
+	}
+
+	child := probe.turnState()
+	if child == nil {
+		t.Fatal("provider did not observe a turn state in context")
+	}
+	if child.channel != "telegram" {
+		t.Fatalf("child channel = %q, want inherited %q", child.channel, "telegram")
+	}
+	if !child.opts.SuppressToolFeedback {
+		t.Error("child turn must suppress tool feedback")
+	}
+	if shouldPublishToolFeedback(cfg, child) {
+		t.Error("shouldPublishToolFeedback() = true for child turn")
 	}
 }

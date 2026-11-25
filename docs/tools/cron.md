@@ -1,3 +1,6 @@
+---
+description: "The cron tool lets the agent schedule jobs. A job fires as a reminder, as a full agent turn, or, when it carries a command, as a shell command."
+---
 # Cron tool
 
 The `cron` tool lets the agent schedule jobs. A job fires as a reminder, as a full agent turn, or — when it carries a `command` — as a shell command. Jobs are stored in the current workspace; see [Scheduled tasks and cron jobs](../reference/cron.md) for schedule types, time zone handling, execution modes, and storage.
@@ -6,20 +9,20 @@ The `cron` tool lets the agent schedule jobs. A job fires as a reminder, as a fu
 |--------|------|---------|-------------|
 | `tools.cron.enabled` | bool | `true` | Enable the agent-facing `cron` tool |
 | `tools.cron.allow_command` | bool | `true` | Allow command jobs; when `false`, scheduling one still works if the call passes `command_confirm=true` |
-| `tools.cron.command_allowed_remotes` | string[] | `[]` | Remote channels (or `channel:chat_id` values) allowed to schedule command jobs; `*` allows every remote channel |
+| `tools.cron.command_allowed_remotes` | string[] | `[]` | Remote channels (or `channel:chat_id` values) allowed to schedule and run command jobs, independent of `tools.exec.allow_remote`; `*` allows every remote channel |
 | `tools.cron.exec_timeout_minutes` | int | `5` | Execution timeout in minutes for command jobs; `0` means no timeout |
 
 Environment overrides use the `PICOCLAW_TOOLS_CRON_` prefix, for example `PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10`.
 
-Command jobs must also pass the exec guards: they are rejected when `tools.exec.enabled` is `false`, and scheduling them is restricted to internal channels (`cli`, `system`, `subagent`) or channels listed in `command_allowed_remotes`. Non-command reminders remain available on every channel.
+Command jobs must also pass the exec guards: they are rejected when `tools.exec.enabled` is `false`, and scheduling them is restricted to internal channels (`cli`, `system`, `subagent`) or channels listed in `command_allowed_remotes`. The cron allowlist is independent of `tools.exec.allow_remote`, which only controls direct exec calls; PicoClaw re-checks the allowlist when the job fires. Non-command reminders remain available on every channel.
 
 ## Tool arguments
 
 | Argument | Type | Required for | Description |
 |----------|------|--------------|-------------|
-| `action` | string | every call | `add`, `list`, `get`, `update`, `remove`, `enable`, or `disable` |
+| `action` | string | every call | `add`, `list`, `get`, `update`, `remove`, `enable`, `disable`, or `run` |
 | `message` | string | `add` | Reminder/task message shown when the job fires; with `command`, it describes what the command does |
-| `job_id` | string | `get`, `update`, `remove`, `enable`, `disable` | Identifier of the target job |
+| `job_id` | string | `get`, `update`, `remove`, `enable`, `disable`, `run` | Identifier of the target job |
 | `name` | string | — | Optional job display name (used by `add` and `update`) |
 | `at_seconds` | int | one-time | Fire once, this many seconds from now (`600` = 10 minutes); the job is removed after it runs |
 | `every_seconds` | int | recurring | Recurring interval in seconds (`7200` = every 2 hours) |
@@ -27,7 +30,7 @@ Command jobs must also pass the exec guards: they are rejected when `tools.exec.
 | `command` | string | — | Shell command to execute instead of just showing the message (for example `df -h`) |
 | `command_confirm` | bool | — | Explicit confirmation for scheduling or modifying a command job; required when `tools.cron.allow_command` is `false` |
 
-Schedule fields are mutually exclusive and at least one is required for `add`; if several are supplied, priority is `at_seconds` > `every_seconds` > `cron_expr`. Use `get` before editing and `update` to change a job without losing its payload. On remote channels the tool can only list, get, update, run, remove, enable, and disable jobs bound to the current channel/chat. The Pico WebUI channel is single-owner — one shared token and the fixed `pico-user` sender — so its jobs are scoped to the whole channel: a job created in one WebUI conversation remains visible and manageable from every other conversation. Command jobs still require the channel to be allowed by `tools.cron.command_allowed_remotes`.
+Schedule fields are mutually exclusive and at least one is required for `add`; if several are supplied, priority is `at_seconds` > `every_seconds` > `cron_expr`. Use `get` before editing and `update` to change a job without losing its payload. `run` triggers a job on demand without waiting: execution is asynchronous (same path as the scheduler), the service guarantees it cannot overlap a concurrent scheduled run, and output is delivered to the job's own channel/chat. On remote channels the tool can only list, get, update, run, remove, enable, and disable jobs bound to the current channel/chat. The Pico WebUI channel is single-owner — one shared token and the fixed `pico-user` sender — so its jobs are scoped to the whole channel: a job created in one WebUI conversation remains visible and manageable from every other conversation. Command jobs still require the channel to be allowed by `tools.cron.command_allowed_remotes`.
 
 ## Examples
 

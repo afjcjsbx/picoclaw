@@ -144,6 +144,45 @@ func TestBuildCodexParams_StoreIsFalse(t *testing.T) {
 	}
 }
 
+func TestCodexProvider_SupportsThinking(t *testing.T) {
+	p := NewCodexProvider("test-token", "")
+	if !p.SupportsThinking() {
+		t.Fatal("CodexProvider.SupportsThinking() = false, want true")
+	}
+}
+
+func TestBuildCodexParams_ThinkingLevel(t *testing.T) {
+	tests := []struct {
+		name       string
+		level      string
+		wantEffort string
+	}{
+		{name: "unset", level: "", wantEffort: ""},
+		{name: "off", level: "off", wantEffort: ""},
+		{name: "adaptive", level: "adaptive", wantEffort: ""},
+		{name: "low", level: "low", wantEffort: "low"},
+		{name: "medium", level: "medium", wantEffort: "medium"},
+		{name: "high", level: "high", wantEffort: "high"},
+		{name: "xhigh", level: "xhigh", wantEffort: "xhigh"},
+		{name: "mixed case", level: " HIGH ", wantEffort: "high"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := buildCodexParams(
+				[]Message{{Role: "user", Content: "Hi"}},
+				nil,
+				"gpt-6.1-terra",
+				map[string]any{"thinking_level": tt.level},
+				false,
+			)
+			if got := string(params.Reasoning.Effort); got != tt.wantEffort {
+				t.Fatalf("reasoning effort = %q, want %q", got, tt.wantEffort)
+			}
+		})
+	}
+}
+
 func TestBuildCodexParams_DefaultWebSearchEnabled(t *testing.T) {
 	params := buildCodexParams([]Message{{Role: "user", Content: "Hi"}}, nil, "gpt-4o", map[string]any{}, true)
 	if len(params.Tools) != 1 {
@@ -371,6 +410,72 @@ func TestCodexProvider_ChatRoundTrip(t *testing.T) {
 	}
 	if resp.Usage.TotalTokens != 18 {
 		t.Errorf("TotalTokens = %d, want 18", resp.Usage.TotalTokens)
+	}
+}
+
+func TestCodexProvider_ChatRoundTrip_ThinkingLevel(t *testing.T) {
+	var gotReasoning map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "not found: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+
+		var reqBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		if _, ok := reqBody["thinking_level"]; ok {
+			http.Error(w, "thinking_level must not be sent to the provider", http.StatusBadRequest)
+			return
+		}
+		gotReasoning, _ = reqBody["reasoning"].(map[string]any)
+		if gotReasoning["effort"] != "high" {
+			http.Error(w, "missing reasoning effort", http.StatusBadRequest)
+			return
+		}
+		if reqBody["model"] != "gpt-6.1-terra" {
+			http.Error(w, "unexpected model", http.StatusBadRequest)
+			return
+		}
+
+		resp := map[string]any{
+			"id":     "resp_test",
+			"object": "response",
+			"status": "completed",
+			"output": []map[string]any{
+				{
+					"id":     "msg_1",
+					"type":   "message",
+					"role":   "assistant",
+					"status": "completed",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
+		}
+		writeCompletedSSE(w, resp)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+
+	_, err := provider.Chat(
+		t.Context(),
+		[]Message{{Role: "user", Content: "Hello"}},
+		nil,
+		"gpt-6.1-terra",
+		map[string]any{"thinking_level": "high"},
+	)
+	if err != nil {
+		t.Fatalf("Chat() error: %v", err)
+	}
+	if gotReasoning["effort"] != "high" {
+		t.Fatalf("reasoning = %#v, want effort high", gotReasoning)
 	}
 }
 

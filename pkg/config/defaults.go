@@ -31,10 +31,15 @@ func DefaultConfig() *Config {
 				MaxTokens:                 32768,
 				Temperature:               nil, // nil means use provider default
 				MaxToolIterations:         50,
+				MaxToolBudgetWarningRatio: DefaultMaxToolBudgetWarningRatio,
+				RunBudgetWarningThreshold: DefaultRunBudgetWarningThreshold,
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
 				SteeringMode:              "one-at-a-time",
 				MaxParallelTurns:          5,
+				MaxParallelToolCalls:      4,
+				MaxBootstrapChars:         DefaultMaxBootstrapChars,
+				MaxBootstrapTotalChars:    DefaultMaxBootstrapTotalChars,
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:          false,
 					MaxArgsLength:    300,
@@ -46,9 +51,19 @@ func DefaultConfig() *Config {
 					CriticalThreshold: DefaultLoopDetectionCriticalThreshold,
 					WindowSize:        DefaultLoopDetectionWindowSize,
 				},
-				SplitOnMarker:       false,
-				MaxLLMRetries:       2,
-				LLMRetryBackoffSecs: 2,
+				Memory: MemoryConfig{
+					Enabled:               true,
+					MemoryCharLimit:       DefaultMemoryCharLimit,
+					UserCharLimit:         DefaultUserCharLimit,
+					DailyNotesEnabled:     true,
+					RecentDailyNotesCount: DefaultRecentDailyNotesCount,
+					DailyNotesCharLimit:   DefaultDailyNotesCharLimit,
+				},
+				SplitOnMarker:           false,
+				MaxLLMRetries:           2,
+				LLMRetryBackoffSecs:     2,
+				LLMRetryOnEmptyContent:  true,
+				LLMRetryOnFinishReasons: []string{"length"},
 			},
 		},
 		Session: SessionConfig{
@@ -333,6 +348,8 @@ func DefaultConfig() *Config {
 			FilterSensitiveData:  true,
 			FilterMinLength:      8,
 			MaxInlineResultChars: DefaultMaxInlineResultChars,
+			ArtifactMaxFiles:     DefaultArtifactMaxFiles,
+			ArtifactMaxAgeHours:  DefaultArtifactMaxAgeHours,
 			MediaCleanup: MediaCleanupConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
@@ -412,10 +429,13 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				EnableDenyPatterns: true,
-				AllowRemote:        true,
-				TimeoutSeconds:     60,
-				MaxOutputChars:     DefaultExecMaxOutputChars,
+				EnableDenyPatterns:     true,
+				RiskThreshold:          "medium",
+				UnknownCommandPolicy:   ExecUnknownCommandAsk,
+				AllowRemote:            false,
+				TimeoutSeconds:         DefaultExecTimeoutSeconds,
+				MaxOutputChars:         DefaultExecMaxOutputChars,
+				ApprovalTimeoutSeconds: DefaultExecApprovalTimeoutSeconds,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{
@@ -488,9 +508,12 @@ func DefaultConfig() *Config {
 				},
 				MediaEnabled: false,
 			},
+			Reaction: ToolConfig{
+				Enabled: false,
+			},
 			ReadFile: ReadFileToolConfig{
 				Enabled:         true,
-				Mode:            ReadFileModeBytes,
+				Mode:            ReadFileModeAuto,
 				MaxReadFileSize: 64 * 1024, // 64KB
 				MaxLines:        DefaultReadFileMaxLines,
 				MaxLineLength:   DefaultReadFileMaxLineLength,
@@ -502,7 +525,7 @@ func DefaultConfig() *Config {
 			Spawn: ToolConfig{
 				Enabled: true,
 			},
-			Todo: ToolConfig{Enabled: true},
+			Todo: ToolConfig{Enabled: false},
 			SpawnStatus: ToolConfig{
 				Enabled: false,
 			},
@@ -620,6 +643,21 @@ func defaultChannels() ChannelsConfig {
 				"read_timeout":    60,
 				"max_connections": 100,
 				"streaming":       map[string]any{"enabled": true},
+			},
+		},
+		"a2a": map[string]any{
+			"settings": map[string]any{
+				"host":                  "127.0.0.1",
+				"port":                  9900,
+				"name":                  "PicoClaw",
+				"description":           "",
+				"max_body_bytes":        1 << 20,
+				"rate_limit_per_minute": 60,
+				"max_tasks":             256,
+				"max_concurrent":        4,
+				"task_timeout_seconds":  300,
+				"push_allow_private":    false,
+				"streaming":             map[string]any{"enabled": false},
 			},
 		},
 		"irc": map[string]any{

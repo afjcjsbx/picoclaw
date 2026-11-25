@@ -26,6 +26,7 @@ func subagentsCommand() Definition {
 		Name:        "subagents",
 		Description: "Show running tasks and subagents in this chat",
 		Usage:       "/subagents",
+		ReadOnly:    true,
 		Handler: func(_ context.Context, req Request, rt *Runtime) error {
 			if rt == nil || rt.GetActiveTurnTree == nil {
 				return req.Reply(unavailableMsg)
@@ -112,7 +113,7 @@ func subagentCountLabel(n int) string {
 func phaseLabel(phase string) string {
 	switch phase {
 	case "setup":
-		return "starting"
+		return "active"
 	case "running":
 		return "thinking"
 	case "tools":

@@ -12,6 +12,11 @@ type ClaudeProvider struct {
 	delegate *anthropicprovider.Provider
 }
 
+// SupportsThinking implements providers.ThinkingCapable (implicitly satisfied).
+func (p *ClaudeProvider) SupportsThinking() bool {
+	return p.delegate.SupportsThinking()
+}
+
 func NewClaudeProvider(token string) *ClaudeProvider {
 	return &ClaudeProvider{
 		delegate: anthropicprovider.NewProvider(token),

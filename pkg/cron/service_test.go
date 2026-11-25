@@ -42,17 +42,22 @@ func int64Ptr(v int64) *int64 {
 	return &v
 }
 
-func setupService(handler JobHandler) (*CronService, string) {
-	tmpFile := fmt.Sprintf("test_cron_%d.json", time.Now().UnixNano())
+func setupService(t *testing.T, handler JobHandler) (*CronService, string) {
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("test_cron_%d.json", time.Now().UnixNano()))
 	cs := NewCronService(tmpFile, handler)
+	// Stop the scheduler and drain in-flight handlers before t.TempDir removes
+	// the directory: a run that persists its state afterwards recreates the
+	// store file and makes the cleanup fail with "directory not empty".
+	t.Cleanup(func() {
+		cs.Stop()
+		waitAllIdle(t, cs)
+	})
 	return cs, tmpFile
 }
 
 func TestCronService_CRUD(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
-
-	// Test AddJob
+	cs, _ := setupService(t, nil)
 	at := time.Now().Add(time.Hour).UnixMilli()
 	job, err := cs.AddJob("Task1", CronSchedule{Kind: "at", AtMS: &at}, "msg", "ch", "to")
 	if err != nil || job.ID == "" {
@@ -85,8 +90,7 @@ func TestCronService_CRUD(t *testing.T) {
 }
 
 func TestCronService_GetJobReturnsCopy(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	everyMS := int64(60_000)
 	job, err := cs.AddJob("Task1", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "ch", "to")
@@ -127,8 +131,7 @@ func TestCronService_GetJobReturnsCopy(t *testing.T) {
 }
 
 func TestCronService_UpdateJobRecomputesNextRunOnScheduleOrEnabledChange(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	at := time.Now().Add(time.Hour).UnixMilli()
 	job, err := cs.AddJob("Task1", CronSchedule{Kind: "at", AtMS: &at}, "msg", "ch", "to")
@@ -177,8 +180,7 @@ func TestCronService_UpdateJobRecomputesNextRunOnScheduleOrEnabledChange(t *test
 }
 
 func TestCronService_UpdateJobPreservesRunStateOnPayloadOnlyChange(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	everyMS := int64(60_000)
 	job, err := cs.AddJob("Task1", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "ch", "to")
@@ -216,8 +218,7 @@ func TestCronService_UpdateJobPreservesRunStateOnPayloadOnlyChange(t *testing.T)
 
 // 2. Test Cron Expression Calculation Logic
 func TestCronService_ComputeNextRun(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).UnixMilli()
 
@@ -244,8 +245,7 @@ func TestCronService_ComputeNextRun(t *testing.T) {
 }
 
 func TestCronService_AdvanceNextRunAnchorsToScheduledTime(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	now := time.Now().UnixMilli()
 	every := int64(1000)
@@ -271,8 +271,7 @@ func TestCronService_AdvanceNextRunAnchorsToScheduledTime(t *testing.T) {
 }
 
 func TestCronService_AdvanceNextRunReanchorsAfterGap(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	now := time.Now().UnixMilli()
 	every := int64(1000)
@@ -294,8 +293,7 @@ func TestCronService_AdvanceNextRunReanchorsAfterGap(t *testing.T) {
 }
 
 func TestCronService_ComputeNextRunTimezone(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).UnixMilli()
 
@@ -328,8 +326,7 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 		return "ok", nil
 	}
 
-	cs, path := setupService(handler)
-	defer os.Remove(path)
+	cs, _ := setupService(t, handler)
 
 	// Start the service
 	if err := cs.Start(); err != nil {
@@ -366,8 +363,7 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 }
 
 func TestCronService_NilHandlerMarksJobsSkipped(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -401,8 +397,9 @@ func TestCronService_NilHandlerMarksJobsSkipped(t *testing.T) {
 }
 
 func TestCronService_PersistenceIntegrity(t *testing.T) {
-	tmpFile := "persist_test.json"
-	defer os.Remove(tmpFile)
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "persist_test.json")
+	// defer os.Remove(tmpFile) - handled by t.TempDir()
 
 	// write a job and persist
 	cs1 := NewCronService(tmpFile, nil)
@@ -470,8 +467,7 @@ func TestCronService_SlowHandlerDoesNotBlockScheduler(t *testing.T) {
 		return "ok", nil
 	}
 
-	cs, path := setupService(handler)
-	defer os.Remove(path)
+	cs, _ := setupService(t, handler)
 
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -523,8 +519,7 @@ func TestCronService_HandlerPanicKeepsScheduleAlive(t *testing.T) {
 		panic("boom")
 	}
 
-	cs, path := setupService(handler)
-	defer os.Remove(path)
+	cs, _ := setupService(t, handler)
 
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -544,6 +539,8 @@ func TestCronService_HandlerPanicKeepsScheduleAlive(t *testing.T) {
 			if current.State.NextRunAtMS == nil {
 				t.Fatal("panic left recurring job with nil next run")
 			}
+			cs.Stop()
+			waitIdle(t, cs, job.ID)
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -552,8 +549,7 @@ func TestCronService_HandlerPanicKeepsScheduleAlive(t *testing.T) {
 }
 
 func TestCronService_SetOnJobConcurrentWithExecution(t *testing.T) {
-	cs, path := setupService(func(job *CronJob) (string, error) { return "", nil })
-	defer os.Remove(path)
+	cs, _ := setupService(t, func(job *CronJob) (string, error) { return "", nil })
 
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -578,8 +574,7 @@ func TestCronService_SetOnJobConcurrentWithExecution(t *testing.T) {
 }
 
 func TestCronService_StartupFinalizesExpiredOneTimeJobs(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	now := time.Now().UnixMilli()
 	past := now - 3_600_000
@@ -613,8 +608,7 @@ func TestCronService_StartupFinalizesExpiredOneTimeJobs(t *testing.T) {
 }
 
 func TestCronService_ListJobsReturnsCopies(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	every := int64(60_000)
 	cs.AddJob("a", CronSchedule{Kind: "every", EveryMS: &every}, "m", "cli", "d")
@@ -645,8 +639,7 @@ func TestCronService_ListJobsReturnsCopies(t *testing.T) {
 }
 
 func TestCronService_EnableJobReturnsCopy(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	every := int64(60_000)
 	j, err := cs.AddJob("orig", CronSchedule{Kind: "every", EveryMS: &every}, "m", "cli", "d")
@@ -670,8 +663,7 @@ func TestCronService_EnableJobReturnsCopy(t *testing.T) {
 }
 
 func TestCronService_NotifyNotLostWithoutReceiver(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	// No scheduler loop is running, so notify's send must be buffered rather
 	// than silently dropped.
@@ -685,8 +677,7 @@ func TestCronService_NotifyNotLostWithoutReceiver(t *testing.T) {
 }
 
 func TestCronService_ConcurrentAccess(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 
 	cs.Start()
 	defer cs.Stop()
@@ -734,15 +725,16 @@ func newBlockingService(t *testing.T) (cs *CronService, calls *atomic.Int32, sta
 	started = make(chan struct{}, 16)
 	gate := make(chan struct{})
 	release = sync.OnceFunc(func() { close(gate) })
-	t.Cleanup(release) // never leave handlers blocked if the test fails early
 
-	cs, path := setupService(func(job *CronJob) (string, error) {
+	cs, _ = setupService(t, func(job *CronJob) (string, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		<-gate
 		return "ok", nil
 	})
-	t.Cleanup(func() { os.Remove(path) })
+	// Registered after setupService so it runs before the service's cleanup,
+	// which waits for in-flight handlers to drain.
+	t.Cleanup(release) // never leave handlers blocked if the test fails early
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -756,6 +748,23 @@ func waitStarted(t *testing.T, started <-chan struct{}) {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("handler never started")
+	}
+}
+
+func waitAllIdle(t *testing.T, cs *CronService) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		cs.mu.RLock()
+		busy := len(cs.inFlight)
+		cs.mu.RUnlock()
+		if busy == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d job handler(s) still running after Stop", busy)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -774,13 +783,99 @@ func waitIdle(t *testing.T, cs *CronService, jobID string) {
 	t.Fatal("job never finished")
 }
 
+func TestCronService_RunJobRecordsHistory(t *testing.T) {
+	cs, _ := setupService(t, func(job *CronJob) (string, error) {
+		return "ok", nil
+	})
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	everyMS := time.Hour.Milliseconds()
+	job, err := cs.AddJob(
+		"History",
+		CronSchedule{Kind: "every", EveryMS: &everyMS},
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	for range cronRunHistoryLimit + 2 {
+		if err := cs.RunJob(job.ID); err != nil {
+			t.Fatalf("RunJob failed: %v", err)
+		}
+		waitIdle(t, cs, job.ID)
+	}
+
+	got, ok := cs.GetJob(job.ID)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if len(got.State.RunHistory) != cronRunHistoryLimit {
+		t.Fatalf("history length = %d, want %d", len(got.State.RunHistory), cronRunHistoryLimit)
+	}
+	for i, record := range got.State.RunHistory {
+		if record.Status != "ok" {
+			t.Fatalf("history[%d].status = %q, want ok", i, record.Status)
+		}
+		if record.RunAtMS <= 0 {
+			t.Fatalf("history[%d].runAtMs = %d, want positive", i, record.RunAtMS)
+		}
+		if record.DurationMS < 0 {
+			t.Fatalf("history[%d].durationMs = %d, want non-negative", i, record.DurationMS)
+		}
+	}
+}
+
+func TestCronService_RunJobRecordsErrorHistory(t *testing.T) {
+	cs, _ := setupService(t, func(job *CronJob) (string, error) {
+		return "", errors.New("boom")
+	})
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cs.Stop()
+
+	everyMS := time.Hour.Milliseconds()
+	job, err := cs.AddJob(
+		"Failing",
+		CronSchedule{Kind: "every", EveryMS: &everyMS},
+		"msg",
+		"cli",
+		"direct",
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+
+	if err := cs.RunJob(job.ID); err != nil {
+		t.Fatalf("RunJob failed: %v", err)
+	}
+	waitIdle(t, cs, job.ID)
+
+	got, ok := cs.GetJob(job.ID)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if len(got.State.RunHistory) != 1 {
+		t.Fatalf("history length = %d, want 1", len(got.State.RunHistory))
+	}
+	record := got.State.RunHistory[0]
+	if record.Status != "error" || record.Error != "boom" {
+		t.Fatalf("history record = %+v, want error/boom", record)
+	}
+}
+
 func TestCronService_RunJobExecutesWithoutTouchingSchedule(t *testing.T) {
 	ran := make(chan string, 1)
-	cs, path := setupService(func(job *CronJob) (string, error) {
+	cs, _ := setupService(t, func(job *CronJob) (string, error) {
 		ran <- job.ID
 		return "ok", nil
 	})
-	defer os.Remove(path)
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -837,8 +932,7 @@ func TestCronService_RunJobRunsDisabledJob(t *testing.T) {
 }
 
 func TestCronService_RunJobErrors(t *testing.T) {
-	cs, path := setupService(nil)
-	defer os.Remove(path)
+	cs, _ := setupService(t, nil)
 	everyMS := time.Hour.Milliseconds()
 	job, _ := cs.AddJob("Idle", CronSchedule{Kind: "every", EveryMS: &everyMS}, "msg", "cli", "direct")
 
@@ -936,7 +1030,7 @@ func TestCronService_RunJobRejectedWhileScheduledRunInFlight(t *testing.T) {
 // never observe two overlapping executions of the same job.
 func TestCronService_ManualAndScheduledRunsNeverOverlap(t *testing.T) {
 	var active, maxActive, total atomic.Int32
-	cs, path := setupService(func(job *CronJob) (string, error) {
+	cs, _ := setupService(t, func(job *CronJob) (string, error) {
 		n := active.Add(1)
 		for {
 			m := maxActive.Load()
@@ -949,7 +1043,6 @@ func TestCronService_ManualAndScheduledRunsNeverOverlap(t *testing.T) {
 		active.Add(-1)
 		return "ok", nil
 	})
-	defer os.Remove(path)
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}

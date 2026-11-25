@@ -4,7 +4,8 @@
 .gitignore
 build/
 .picoclaw/
-config/
+config/config.json
+config/config.json.bak
 .env
 .env.example
 *.md

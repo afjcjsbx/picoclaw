@@ -1,3 +1,6 @@
+---
+description: "PicoClaw runtime events are the read-only observation surface for agent, channel, gateway, message bus, and MCP activity."
+---
 # Runtime Events And Event Logging
 
 PicoClaw runtime events are the read-only observation surface for agent, channel, gateway, message bus, and MCP activity. Publishing events and printing logs are separate responsibilities:
@@ -90,12 +93,12 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.turn.end` | A turn exits, whether it completed, errored, or was hard-aborted. | `status` (`completed`/`error`/`aborted`), `iterations_total`, `duration_ms`, `final_len` |
 | `agent.llm.request` | Before each LLM provider request. | `model`, `messages`, `tools`, `max_tokens` |
 | `agent.llm.delta` | Reserved for streaming LLM deltas; the kind is defined, but the current implementation has no natural emit site. | `content_delta_len`, `reasoning_delta_len` |
-| `agent.llm.response` | After the LLM provider returns a complete response. | `content_len`, `tool_calls`, `has_reasoning` |
+| `agent.llm.response` | After the LLM provider returns a complete response. | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | Before retrying an LLM request after context, rate-limit, transient provider, or fallback handling. | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
-| `agent.context.compress` | Agent context history is compressed, for example during proactive budget checks or LLM retry handling. | `reason`, `dropped_messages`, `remaining_messages` |
+| `agent.context.compress` | Agent context history is compressed, for example during proactive budget checks or LLM retry handling. | `reason`, `dropped_messages`, `summarized_messages`, `remaining_messages`, `attempts`, `fallback`, `archived_path` |
 | `agent.session.summarize` | Session history summarization completes, either asynchronously after a turn or on a manual `/compact` (legacy context manager). | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
 | `agent.tool.exec_start` | Before the agent executes a tool call. | `tool`, `args_count`; full arguments are not logged by default |
-| `agent.tool.exec_end` | After a tool call completes, including successful results, tool errors, and async results. | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
+| `agent.tool.exec_end` | After a tool call completes, including successful results, tool errors, and async results. For tools that ran concurrently it is emitted in call order once the whole parallel segment finished. | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
 | `agent.tool.exec_skipped` | A tool call is skipped because the tool is unavailable, arguments are invalid, or turn control logic requires skipping it. | `tool`, `reason` |
 | `agent.steering.injected` | Queued steering messages are injected into the next LLM context. | `count`, `total_content_len` |
 | `agent.follow_up.queued` | An async tool result is queued back into the inbound/follow-up flow. | `source_tool`, `content_len` |
@@ -105,6 +108,8 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.subturn.result_delivered` | A child turn result is delivered to the target channel/chat. | `target_channel`, `target_chat_id`, `content_len` |
 | `agent.subturn.orphan` | A child turn result cannot be delivered or cannot be associated back to its parent turn. | `parent_turn_id`, `child_turn_id`, `reason` |
 | `agent.error` | Agent execution reports an error. | `stage`, `error` |
+
+Token counts on `agent.llm.response` come from the provider usage report. They stay `0` when the provider does not return usage information.
 
 ### Channel
 
@@ -191,9 +196,9 @@ Agent events add safe payload summaries:
 | `agent.turn.end` | `status`, `iterations_total`, `duration_ms`, `final_len` |
 | `agent.llm.request` | `model`, `messages`, `tools`, `max_tokens` |
 | `agent.llm.delta` | `content_delta_len`, `reasoning_delta_len` |
-| `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning` |
+| `agent.llm.response` | `content_len`, `tool_calls`, `has_reasoning`, `input_tokens`, `output_tokens`, `total_tokens` |
 | `agent.llm.retry` | `attempt`, `max_retries`, `reason`, `error`, `backoff_ms` |
-| `agent.context.compress` | `reason`, `dropped_messages`, `remaining_messages` |
+| `agent.context.compress` | `reason`, `dropped_messages`, `summarized_messages`, `remaining_messages`, `attempts`, `fallback`, `archived_path` |
 | `agent.session.summarize` | `summarized_messages`, `kept_messages`, `summary_len`, `omitted_oversized` |
 | `agent.tool.exec_start` | `tool`, `args_count` |
 | `agent.tool.exec_end` | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
@@ -217,4 +222,4 @@ Runtime event kinds are defined in `pkg/events/kind.go`. Event logging can selec
 - `gateway.*`: start, ready, shutdown, and reload lifecycle.
 - `mcp.*`: MCP server connection, tool discovery, and tool call events.
 
-See [`../../config/config.example.json`](../../config/config.example.json) for the default event logging example.
+See [`../../config/config.example.json`](https://github.com/afjcjsbx/picoclaw/blob/main/config/config.example.json) for the default event logging example.

@@ -207,13 +207,6 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 			contentV2:  "# Updated Agent",
 			checkField: "Updated Agent",
 		},
-		{
-			name:       "memory file change",
-			file:       "memory/MEMORY.md",
-			contentV1:  "# Memory\nUser likes Go.",
-			contentV2:  "# Memory\nUser likes Rust.",
-			checkField: "User likes Rust",
-		},
 	}
 
 	for _, tt := range tests {
@@ -272,42 +265,6 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 		cb.systemPromptMutex.RUnlock()
 		if !changed {
 			t.Error("sourceFilesChangedLocked() should detect skills dir mtime change")
-		}
-	})
-
-	// Daily notes are folded into the cached prompt through GetMemoryContext.
-	// Creating one must invalidate the cache even though it is not a workspace
-	// bootstrap file.
-	t.Run("daily note change", func(t *testing.T) {
-		tmpDir := setupWorkspace(t, nil)
-		defer os.RemoveAll(tmpDir)
-
-		cb := NewContextBuilder(tmpDir)
-		sp1 := cb.BuildSystemPromptWithCache()
-
-		dailyPath := cb.memory.dailyNotePath(time.Now())
-		if err := os.MkdirAll(filepath.Dir(dailyPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dailyPath, []byte("# Today\n\nWent for a run."), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		future := time.Now().Add(2 * time.Second)
-		os.Chtimes(dailyPath, future, future)
-
-		cb.systemPromptMutex.RLock()
-		changed := cb.sourceFilesChangedLocked()
-		cb.systemPromptMutex.RUnlock()
-		if !changed {
-			t.Fatal("sourceFilesChangedLocked() should detect daily note creation")
-		}
-
-		sp2 := cb.BuildSystemPromptWithCache()
-		if sp1 == sp2 {
-			t.Error("cache not rebuilt after daily note change")
-		}
-		if !strings.Contains(sp2, "Went for a run") {
-			t.Error("rebuilt prompt missing daily note content")
 		}
 	})
 }
@@ -382,12 +339,6 @@ func TestNewFileCreationInvalidatesCache(t *testing.T) {
 			file:       "SOUL.md",
 			content:    "# Soul\nBe kind and helpful.",
 			checkField: "Be kind and helpful",
-		},
-		{
-			name:       "new memory file",
-			file:       "memory/MEMORY.md",
-			content:    "# Memory\nUser prefers dark mode.",
-			checkField: "User prefers dark mode",
 		},
 	}
 
@@ -795,5 +746,45 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = cb.BuildMessages(history, "summary", "new message", nil, "cli", "test", "", "")
+	}
+}
+
+// TestMemoryWritesKeepSystemPromptCache pins issue #439: memory files are
+// injected through a per-session snapshot, so writing MEMORY.md, USER.md or a
+// daily note must not invalidate (rebuild) the shared cached system prompt.
+func TestMemoryWritesKeepSystemPromptCache(t *testing.T) {
+	tmpDir := setupWorkspace(t, map[string]string{"AGENT.md": "# Agent"})
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+	sp1 := cb.BuildSystemPromptWithCache()
+
+	future := time.Now().Add(2 * time.Second)
+	for path, content := range map[string]string{
+		filepath.Join(tmpDir, "memory", "MEMORY.md"):    "User likes Go.",
+		filepath.Join(tmpDir, "USER.md"):                "Name: Ada",
+		cb.memory.dailyNotePath(time.Now()):             "Went for a run.",
+		filepath.Join(tmpDir, "memory", "extra-new.md"): "ignored",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		os.Chtimes(path, future, future)
+	}
+
+	cb.systemPromptMutex.RLock()
+	changed := cb.sourceFilesChangedLocked()
+	cb.systemPromptMutex.RUnlock()
+	if changed {
+		t.Fatal("memory writes must not invalidate the cached system prompt")
+	}
+	if sp2 := cb.BuildSystemPromptWithCache(); sp1 != sp2 {
+		t.Fatal("cached system prompt changed after a memory write")
+	}
+	if strings.Contains(sp1, "User likes Go") {
+		t.Fatal("memory content must not be part of the shared static prompt")
 	}
 }

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +49,61 @@ func assertVisibleToolCallMessage(
 		t.Fatalf("tool call = %#v, want function %q", msg.ToolCalls[0], toolName)
 	}
 	return msg.ToolCalls[0]
+}
+
+func TestSessionTranscriptMessagesPreservesUsage(t *testing.T) {
+	transcript := sessionTranscriptMessages([]providers.Message{{
+		Role:    "assistant",
+		Content: "answer",
+		Usage: &providers.UsageInfo{
+			PromptTokens:        1234,
+			CompletionTokens:    567,
+			TotalTokens:         1801,
+			CacheReadTokens:     120,
+			CacheCreationTokens: 80,
+			CostUSD:             0.0123,
+			Requests:            3,
+			ContextTokens:       900,
+			DurationMS:          4200,
+		},
+	}}, 0, false)
+
+	if len(transcript) != 1 {
+		t.Fatalf("len(transcript) = %d, want 1", len(transcript))
+	}
+	usage := transcript[0].Usage
+	if usage == nil {
+		t.Fatal("Usage = nil, want session usage")
+	}
+	want := sessionUsage{
+		InputTokens:         1234,
+		OutputTokens:        567,
+		TotalTokens:         1801,
+		CacheReadTokens:     120,
+		CacheCreationTokens: 80,
+		CostUSD:             0.0123,
+		Requests:            3,
+		ContextTokens:       900,
+		DurationMS:          4200,
+	}
+	if *usage != want {
+		t.Fatalf("Usage = %+v, want %+v", *usage, want)
+	}
+}
+
+func TestSessionTranscriptMessagesOmitsZeroUsage(t *testing.T) {
+	transcript := sessionTranscriptMessages([]providers.Message{{
+		Role:    "assistant",
+		Content: "answer",
+		Usage:   &providers.UsageInfo{},
+	}}, 0, false)
+
+	if len(transcript) != 1 {
+		t.Fatalf("len(transcript) = %d, want 1", len(transcript))
+	}
+	if transcript[0].Usage != nil {
+		t.Fatalf("Usage = %+v, want nil", transcript[0].Usage)
+	}
 }
 
 func TestHandleListSessions_JSONLStorage(t *testing.T) {
@@ -1707,16 +1761,22 @@ func TestHandleGetSession_LegacyJSONFallback(t *testing.T) {
 	defer cleanup()
 
 	dir := sessionsTestDir(t, configPath)
-	manager := session.NewSessionManager(dir)
-	sessionKey := legacyPicoSessionPrefix + "legacy-json"
-	if err := manager.AddMessage(context.Background(), sessionKey, "user", "legacy user"); err != nil {
-		t.Fatalf("AddMessage() error = %v", err)
+	now := time.Now()
+	legacy := sessionFile{
+		Key: legacyPicoSessionPrefix + "legacy-json",
+		Messages: []providers.Message{
+			{Role: "user", Content: "legacy user"},
+			{Role: "assistant", Content: "legacy assistant"},
+		},
+		Created: now,
+		Updated: now,
 	}
-	if err := manager.AddMessage(context.Background(), sessionKey, "assistant", "legacy assistant"); err != nil {
-		t.Fatalf("AddMessage() error = %v", err)
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
 	}
-	if err := manager.Save(context.Background(), sessionKey); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "legacy-json.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1768,6 +1828,86 @@ func TestHandleSessions_FiltersEmptyJSONLFiles(t *testing.T) {
 
 	if detailRec.Code != http.StatusNotFound {
 		t.Fatalf("detail status = %d, want %d, body=%s", detailRec.Code, http.StatusNotFound, detailRec.Body.String())
+	}
+}
+
+func TestHandleSessions_ListsClearedSession(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	sessionKey := "sk_v1_cleared_session"
+	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
+	if err := os.WriteFile(base+".jsonl", []byte{}, 0o644); err != nil {
+		t.Fatalf("WriteFile(jsonl) error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	meta := memory.SessionMeta{
+		Key:       sessionKey,
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now,
+		Scope: json.RawMessage(`{
+			"version": 1,
+			"agent_id": "main",
+			"channel": "pico",
+			"dimensions": ["chat"],
+			"values": {"chat": "direct:pico:cleared-session"}
+		}`),
+	}
+	metaData, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("Marshal(meta) error = %v", err)
+	}
+	if err := os.WriteFile(base+".meta.json", metaData, 0o644); err != nil {
+		t.Fatalf("WriteFile(meta) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	listRec := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	mux.ServeHTTP(listRec, listReq)
+
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body=%s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+
+	var items []sessionListItem
+	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("Unmarshal(list) error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if items[0].ID != "cleared-session" {
+		t.Fatalf("items[0].ID = %q, want %q", items[0].ID, "cleared-session")
+	}
+	if items[0].Title != "" || items[0].Preview != "" {
+		t.Fatalf("cleared session title/preview = %q/%q, want empty", items[0].Title, items[0].Preview)
+	}
+	if items[0].MessageCount != 0 {
+		t.Fatalf("items[0].MessageCount = %d, want 0", items[0].MessageCount)
+	}
+
+	detailRec := httptest.NewRecorder()
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/sessions/cleared-session", nil)
+	mux.ServeHTTP(detailRec, detailReq)
+
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, want %d, body=%s", detailRec.Code, http.StatusOK, detailRec.Body.String())
+	}
+	var detail struct {
+		Messages []sessionChatMessage `json:"messages"`
+		Total    int                  `json:"total"`
+	}
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("Unmarshal(detail) error = %v", err)
+	}
+	if detail.Total != 0 || len(detail.Messages) != 0 {
+		t.Fatalf("detail messages = %d/%d, want 0/0", len(detail.Messages), detail.Total)
 	}
 }
 

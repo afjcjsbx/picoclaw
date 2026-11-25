@@ -118,15 +118,8 @@ func (t *SpawnTool) execute(
 		return ErrorResult("task is required and must be a non-empty string")
 	}
 
-	label, ok := args["label"].(string)
-	if !ok {
-		label = ""
-	}
-	agentID, ok := args["agent_id"].(string)
-	if !ok {
-		agentID = ""
-	}
-	targetAgentID := strings.TrimSpace(agentID)
+	label := stringArg(args, "label")
+	targetAgentID := strings.TrimSpace(stringArg(args, "agent_id"))
 
 	// Check allowlist if targeting a specific agent
 	if targetAgentID != "" && t.allowlistCheck != nil {
@@ -136,30 +129,44 @@ func (t *SpawnTool) execute(
 	}
 
 	// Build system prompt for spawned subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a spawned subagent running in the background. Complete the given task independently and report back when done.
-
-Task: %s`,
+	role := "You are a spawned subagent running in the background"
+	if label != "" {
+		role = fmt.Sprintf("You are a spawned subagent labeled %q running in the background", label)
+	}
+	systemPrompt := subagentSystemPrompt(
+		role,
+		"Complete the given task independently and report back when done.",
 		task,
 	)
 
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a spawned subagent labeled "%s" running in the background. Complete the given task independently and report back when done.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
-
 	// Use spawner if available (direct SpawnSubTurn call)
 	if t.spawner != nil {
-		// Tracked children (sub-turn parents) are joined before the parent
-		// finishes and get their result through the tracker; untracked ones
-		// (root turns) deliver via the callback/bus as before.
+		// Reserve admission before acknowledging. If all slots are busy the
+		// tool call waits (bounded by concurrency_timeout_sec) instead of
+		// acknowledging a task that the parent turn would drop on exit.
+		slotHeld := false
+		var slotRelease func()
+		if waiter, ok := t.spawner.(SubTurnSlotWaiter); ok {
+			release, err := waiter.WaitForSubTurnSlot(ctx)
+			if err != nil {
+				return ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
+			}
+			slotHeld = true
+			slotRelease = release
+		}
+
+		// Tracked children (sub-turn parents and CLI root turns) are joined
+		// before the parent finishes; untracked root turns deliver via the
+		// callback/bus.
 		track := beginChild(ctx)
+		deliverInternally := cb == nil && track == nil
+
 		go func() {
+			// Release the slot if this goroutine dies before spawnSubTurn takes
+			// ownership. The release function is idempotent.
+			if slotRelease != nil {
+				defer slotRelease()
+			}
 			// Recover panics in this goroutine: it outlives the registry's
 			// synchronous recover, so an unrecovered panic would crash the
 			// whole process instead of failing the spawned task.
@@ -182,9 +189,11 @@ Task: %s`,
 					SystemPrompt:  systemPrompt,
 					MaxTokens:     t.maxTokens,
 					Temperature:   t.temperature,
-					Async:         track == nil, // tracker delivers the result itself
-					Critical:      true,         // Background spawn should survive parent turn completion
+					Async:         deliverInternally,
+					Critical:      true, // Background spawn should survive parent turn completion
 					TargetAgentID: targetAgentID,
+					SlotHeld:      slotHeld,
+					SlotRelease:   slotRelease,
 				})
 				if err != nil {
 					return ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
@@ -197,8 +206,6 @@ Task: %s`,
 
 			if result != nil && result.ForLLM != "" {
 				// Several children report back to the same parent: say who this is.
-				// Copy: with Async=true the same pointer was already delivered to the
-				// parent's pendingResults, so mutating it would race with the parent.
 				tagged := *result
 				tagged.ForLLM = fmt.Sprintf(
 					"[Result from subagent %s]\n%s",
@@ -210,11 +217,7 @@ Task: %s`,
 
 			if track != nil {
 				track(result)
-				return
-			}
-
-			// Call callback if provided
-			if cb != nil {
+			} else if cb != nil {
 				cb(ctx, result)
 			}
 		}()

@@ -272,7 +272,16 @@ func (fc *FallbackChain) ExecuteCandidate(
 		}
 
 		// Retriable error: mark failure and continue to next candidate.
-		fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+		// An unusable response means the provider answered but produced nothing
+		// we can use, so it is not put into cooldown: the next request should
+		// try it again instead of silently skipping it for a while.
+		if failErr.Reason != FailoverUnusable {
+			if failErr.Reason == FailoverBilling && failErr.BillingUnverified {
+				fc.cooldown.MarkFailureWithoutBillingCooldown(cooldownKey, failErr.Reason)
+			} else {
+				fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+			}
+		}
 		result.Attempts = append(result.Attempts, FallbackAttempt{
 			Provider: candidate.Provider,
 			Model:    candidate.Model,

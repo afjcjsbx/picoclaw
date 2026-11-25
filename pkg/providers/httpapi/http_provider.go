@@ -96,11 +96,31 @@ func (p *HTTPProvider) SupportsThinking() bool {
 	return p.delegate.SupportsThinking()
 }
 
+// ReplaysReasoningContent forwards the delegate's reasoning replay capability
+// without importing the providers package (which would create an import cycle).
+func (p *HTTPProvider) ReplaysReasoningContent() bool {
+	if p == nil || p.delegate == nil {
+		return true
+	}
+	if capable, ok := any(p.delegate).(interface{ ReplaysReasoningContent() bool }); ok {
+		return capable.ReplaysReasoningContent()
+	}
+	return true
+}
+
 func (p *HTTPProvider) SetProviderName(providerName string) {
 	if p == nil || p.delegate == nil {
 		return
 	}
 	p.delegate.SetProviderName(providerName)
+}
+
+// SetProviderSort sets the OpenRouter provider routing sort order.
+func (p *HTTPProvider) SetProviderSort(providerSort string) {
+	if p == nil || p.delegate == nil {
+		return
+	}
+	p.delegate.SetProviderSort(providerSort)
 }
 
 func (p *HTTPProvider) SetSessionHeader(name, fallback string) {

@@ -219,16 +219,23 @@ func NormalizeExposePath(item config.ExposePath) config.ExposePath {
 
 // DefaultExposePaths returns the minimum built-in host paths required for the
 // current platform to run isolated child processes.
+//
+// On Linux, only narrow instance-root subdirectories are mounted by default
+// (workspace rw, runtime-user-env rw, skills ro) so config.json and other
+// internal files are not reachable from the sandbox. An operator can still
+// re-expose the full instance root by adding an expose_paths rule whose target
+// equals the root path; that rule is merged in by MergeExposePaths and
+// overrides the default narrow view.
 func DefaultExposePaths(root string) []config.ExposePath {
-	items := []config.ExposePath{{
+	if runtime.GOOS == "linux" {
+		items := defaultLinuxInstanceExposePaths(root)
+		return append(items, defaultLinuxSystemExposePaths()...)
+	}
+	return []config.ExposePath{{
 		Source: root,
 		Target: root,
 		Mode:   "rw",
 	}}
-	if runtime.GOOS == "linux" {
-		items = append(items, defaultLinuxSystemExposePaths()...)
-	}
-	return items
 }
 
 func defaultLinuxSystemExposePaths() []config.ExposePath {
@@ -290,13 +297,60 @@ func MergeExposePaths(defaults []config.ExposePath, overrides []config.ExposePat
 
 // BuildLinuxMountPlan converts the merged expose-path configuration into the
 // mount rules consumed by the Linux bubblewrap backend.
+//
+// The default Linux instance-root paths (workspace, runtime-user-env, skills)
+// are filtered to only those that exist on disk: PrepareInstanceRoot creates
+// them during Preflight, so they will be present by the time a child is
+// launched. User-supplied overrides are passed through unchanged; bwrap will
+// surface a stat error for any override whose source does not exist.
 func BuildLinuxMountPlan(root string, overrides []config.ExposePath) []MountRule {
-	merged := MergeExposePaths(DefaultExposePaths(root), overrides)
+	defaults := existingExposePaths(DefaultExposePaths(root))
+	merged := MergeExposePaths(defaults, overrides)
 	plan := make([]MountRule, 0, len(merged))
 	for _, item := range merged {
 		plan = append(plan, MountRule{Source: item.Source, Target: item.Target, Mode: item.Mode})
 	}
 	return plan
+}
+
+// appendLinuxCommandMountRules exposes an executable to the bubblewrap sandbox.
+// It always mounts the parent directory so the command path exists in the new
+// root. A symlink path itself is not mounted: bubblewrap 0.10 refuses to bind
+// over a symlink destination ("Can't mount on symlink destination"), so the
+// link is made visible through its parent and the resolved target is mounted
+// instead when it lives outside that parent.
+func appendLinuxCommandMountRules(plan []MountRule, resolvedPath string) []MountRule {
+	if !isSymlinkPath(resolvedPath) {
+		plan = ensureLinuxMountRule(plan, resolvedPath, resolvedPath, "ro")
+	}
+	plan = ensureLinuxMountRule(plan, filepath.Dir(resolvedPath), filepath.Dir(resolvedPath), "ro")
+
+	resolved, err := filepath.EvalSymlinks(resolvedPath)
+	if err != nil || resolved == resolvedPath {
+		return plan
+	}
+	if !isSymlinkPath(resolved) {
+		plan = ensureLinuxMountRule(plan, resolved, resolved, "ro")
+	}
+	return ensureLinuxMountRule(plan, filepath.Dir(resolved), filepath.Dir(resolved), "ro")
+}
+
+func isSymlinkPath(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink != 0
+}
+
+// ensureLinuxMountRule appends a mount rule unless another rule already owns
+// the same target path.
+func ensureLinuxMountRule(plan []MountRule, source, target, mode string) []MountRule {
+	cleanSource := filepath.Clean(source)
+	cleanTarget := filepath.Clean(target)
+	for _, rule := range plan {
+		if filepath.Clean(rule.Target) == cleanTarget {
+			return plan
+		}
+	}
+	return append(plan, MountRule{Source: cleanSource, Target: cleanTarget, Mode: mode})
 }
 
 // BuildWindowsAccessRules derives the host-path access policy used by the
@@ -318,13 +372,21 @@ func validateWindowsExposePaths(items []config.ExposePath) error {
 	return fmt.Errorf("windows isolation does not yet support expose_paths filesystem rules")
 }
 
-func validateDarwinExposePaths(items []config.ExposePath) error {
+func validateDarwinExposePaths(items []config.ExposePath, root string) error {
 	for _, item := range items {
 		path := NormalizeExposePath(item)
 		if path.Source != path.Target {
 			return fmt.Errorf(
 				"macOS Seatbelt does not support expose_paths remapping: %s -> %s",
 				path.Source,
+				path.Target,
+			)
+		}
+		if path.Mode == "ro" && boundaryPathWithin(root, path.Target) {
+			return fmt.Errorf(
+				"macOS Seatbelt cannot enforce read-only expose_paths under the instance root %s: %s; "+
+					"the instance root is always writable",
+				root,
 				path.Target,
 			)
 		}
@@ -397,6 +459,10 @@ func preflight(isolation config.IsolationConfig) error {
 		}
 	}
 	if runtime.GOOS == "windows" {
+		if isolation.BlockNetwork {
+			return fmt.Errorf("isolation.block_network is not supported on windows: " +
+				"the Windows backend does not implement network namespace isolation")
+		}
 		if err := validateWindowsExposePaths(isolation.ExposePaths); err != nil {
 			return err
 		}
@@ -407,7 +473,11 @@ func preflight(isolation config.IsolationConfig) error {
 		}
 	}
 	if runtime.GOOS == "darwin" {
-		if err := validateDarwinExposePaths(isolation.ExposePaths); err != nil {
+		if isolation.BlockNetwork {
+			return fmt.Errorf("isolation.block_network is not supported on darwin: " +
+				"macOS Seatbelt does not implement network namespace isolation")
+		}
+		if err := validateDarwinExposePaths(isolation.ExposePaths, root); err != nil {
 			return err
 		}
 	}

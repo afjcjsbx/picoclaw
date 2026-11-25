@@ -41,11 +41,9 @@ func TestEditTool_EditFile_Success(t *testing.T) {
 		t.Fatal("Expected ForUser to contain the diff preview")
 	}
 
-	if result.ForLLM == result.ForUser {
-		t.Fatalf("Expected ForLLM to be a compact summary, got identical outputs %q", result.ForLLM)
-	}
-	if result.ForLLM != fmt.Sprintf("File edited: %s", testFile) {
-		t.Fatalf("Expected compact ForLLM summary, got %q", result.ForLLM)
+	if result.ForLLM != result.ForUser {
+		t.Fatalf("Expected a shared unified diff for a small edit, got\nForLLM: %q\nForUser: %q",
+			result.ForLLM, result.ForUser)
 	}
 
 	diffPath := strings.TrimLeft(filepath.ToSlash(testFile), "/")
@@ -57,8 +55,11 @@ func TestEditTool_EditFile_Success(t *testing.T) {
 		"-Hello World",
 		"+Hello Universe",
 	} {
+		if !strings.Contains(result.ForLLM, want) {
+			t.Fatalf("Expected model-facing edit diff to contain %q, got:\n%s", want, result.ForLLM)
+		}
 		if !strings.Contains(result.ForUser, want) {
-			t.Fatalf("Expected edit diff to contain %q, got:\n%s", want, result.ForUser)
+			t.Fatalf("Expected user-facing edit diff to contain %q, got:\n%s", want, result.ForUser)
 		}
 	}
 
@@ -366,7 +367,7 @@ func TestReplaceEditContent(t *testing.T) {
 
 // TestAppendFileTool_AppendToNonExistent_Restricted verifies that AppendFileTool in restricted mode
 // can append to a file that does not yet exist — it should silently create the file.
-// This exercises the errors.Is(err, fs.ErrNotExist) path in appendFileWithRW + rootRW.
+// This exercises the sandbox append path creating the file with O_CREATE.
 func TestAppendFileTool_AppendToNonExistent_Restricted(t *testing.T) {
 	workspace := t.TempDir()
 	tool := NewAppendFileTool(workspace, true)
@@ -387,6 +388,42 @@ func TestAppendFileTool_AppendToNonExistent_Restricted(t *testing.T) {
 
 	// Verify the file was created with correct content
 	data, err := os.ReadFile(filepath.Join(workspace, "brand_new_file.txt"))
+	assert.NoError(t, err)
+	assert.Equal(t, "first content", string(data))
+}
+
+// TestAppendFileTool_HostModeCreatesNestedPath verifies that the host append
+// path creates missing parent directories like the atomic write path did.
+func TestAppendFileTool_HostModeCreatesNestedPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "new.txt")
+
+	tool := NewAppendFileTool("", false)
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    path,
+		"content": "first content",
+	})
+	assert.False(t, result.IsError, "unexpected error: %s", result.ForLLM)
+
+	data, err := os.ReadFile(path)
+	assert.NoError(t, err)
+	assert.Equal(t, "first content", string(data))
+}
+
+// TestAppendFileTool_RestrictedCreatesNestedPath covers the same creation
+// behavior inside the sandbox, where the parent directories are created
+// through os.Root.
+func TestAppendFileTool_RestrictedCreatesNestedPath(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewAppendFileTool(workspace, true)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    filepath.Join("nested", "deeper", "new.txt"),
+		"content": "first content",
+	})
+	assert.False(t, result.IsError, "unexpected error: %s", result.ForLLM)
+
+	data, err := os.ReadFile(filepath.Join(workspace, "nested", "deeper", "new.txt"))
 	assert.NoError(t, err)
 	assert.Equal(t, "first content", string(data))
 }
@@ -434,7 +471,12 @@ func TestEditFileTool_Restricted_InPlaceEdit(t *testing.T) {
 	result := tool.Execute(ctx, args)
 	assert.False(t, result.IsError, "Expected success, got: %s", result.ForLLM)
 	assert.False(t, result.Silent)
-	assert.Equal(t, "File edited: edit_target.txt", result.ForLLM)
+	assert.Contains(t, result.ForLLM, "File edited: edit_target.txt")
+	assert.Contains(t, result.ForLLM, "```diff")
+	assert.Contains(t, result.ForLLM, "--- a/edit_target.txt")
+	assert.Contains(t, result.ForLLM, "+++ b/edit_target.txt")
+	assert.Contains(t, result.ForLLM, "-Hello World")
+	assert.Contains(t, result.ForLLM, "+Hello Go")
 	assert.Contains(t, result.ForUser, "```diff")
 	assert.Contains(t, result.ForUser, "--- a/edit_target.txt")
 	assert.Contains(t, result.ForUser, "+++ b/edit_target.txt")

@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "异步任务与 Spawn"
+description: "PicoClaw 通过 spawn 工具支持异步任务执行。主要由 Heartbeat（心跳） 系统使用，在不阻塞主 Agent 循环的情况下运行耗时任务。"
+---
 # 🔄 异步任务与 Spawn
 
 > 返回 [README](../project/README.zh.md)

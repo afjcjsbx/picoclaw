@@ -37,7 +37,13 @@ type (
 	ReasoningDetail        = protocoltypes.ReasoningDetail
 )
 
-const DefaultRequestTimeout = 120 * time.Second
+const (
+	DefaultRequestTimeout = 120 * time.Second
+
+	providerMaxIdleConns        = 4
+	providerMaxIdleConnsPerHost = 2
+	providerIdleConnTimeout     = 30 * time.Second
+)
 
 // SessionOptionKey is the LLM options key carrying the stable conversation
 // session key, for providers that tag requests with a per-conversation header.
@@ -90,25 +96,32 @@ func SetOpenRouterAttribution(req *http.Request) {
 	req.Header.Set("X-Openrouter-Categories", "personal-agent,cli-agent")
 }
 
+// newBoundedTransport returns a transport with a small idle-connection pool.
+// It clones http.DefaultTransport to preserve TLS, HTTP/2 and dial timeouts.
+func newBoundedTransport() *http.Transport {
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	tr.MaxIdleConns = providerMaxIdleConns
+	tr.MaxIdleConnsPerHost = providerMaxIdleConnsPerHost
+	tr.IdleConnTimeout = providerIdleConnTimeout
+	return tr
+}
+
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 func NewHTTPClient(proxy string) *http.Client {
 	client := &http.Client{
-		Timeout: DefaultRequestTimeout,
+		Timeout:   DefaultRequestTimeout,
+		Transport: newBoundedTransport(),
 	}
 	if proxy != "" {
 		parsed, err := url.Parse(proxy)
 		if err == nil {
-			// Preserve http.DefaultTransport settings (TLS, HTTP/2, timeouts, etc.)
-			if base, ok := http.DefaultTransport.(*http.Transport); ok {
-				tr := base.Clone()
-				tr.Proxy = http.ProxyURL(parsed)
-				client.Transport = tr
-			} else {
-				// Fallback: minimal transport if DefaultTransport is not *http.Transport.
-				client.Transport = &http.Transport{
-					Proxy: http.ProxyURL(parsed),
-				}
-			}
+			transport := client.Transport.(*http.Transport)
+			transport.Proxy = http.ProxyURL(parsed)
 		} else {
 			log.Printf("common: invalid proxy URL %q: %v", proxy, err)
 		}
@@ -130,9 +143,23 @@ type openaiMessage struct {
 }
 
 type openaiToolCall struct {
-	ID       string              `json:"id"`
-	Type     string              `json:"type,omitempty"`
-	Function *openaiFunctionCall `json:"function,omitempty"`
+	ID           string              `json:"id"`
+	Type         string              `json:"type,omitempty"`
+	Function     *openaiFunctionCall `json:"function,omitempty"`
+	ExtraContent *openaiExtraContent `json:"extra_content,omitempty"`
+}
+
+// openaiExtraContent carries provider-specific metadata on a tool call.
+// Google/Gemini 3 requires the thought_signature to be echoed back inside
+// extra_content.google.thought_signature on every functionCall part;
+// sending it only under function.thought_signature is rejected with HTTP 400
+// ("Function call is missing a thought_signature in functionCall parts").
+type openaiExtraContent struct {
+	Google *openaiGoogleExtra `json:"google,omitempty"`
+}
+
+type openaiGoogleExtra struct {
+	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 type openaiFunctionCall struct {
@@ -141,14 +168,37 @@ type openaiFunctionCall struct {
 	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
+// GeminiThoughtSignatureSentinel is the documented escape hatch Google accepts
+// in place of a real thought_signature. It is used when a functionCall part has
+// no captured signature (for example when the tool call was produced by another
+// provider and the turn later fell back to Gemini): Gemini 3 rejects such parts
+// with HTTP 400 "Function call is missing a thought_signature in functionCall
+// parts" unless this sentinel is echoed back.
+//
+// See https://ai.google.dev/gemini-api/docs/thought-signatures
+const GeminiThoughtSignatureSentinel = "skip_thought_signature_validator"
+
+// SerializeOptions tunes how messages are adapted to a specific endpoint.
+type SerializeOptions struct {
+	// GeminiThoughtSignatureFallback injects GeminiThoughtSignatureSentinel on
+	// every functionCall part that has no captured thought_signature. Required
+	// for Gemini 3 endpoints, which reject unsigned functionCall parts.
+	GeminiThoughtSignatureFallback bool
+}
+
 // SerializeMessages converts internal Message structs to the OpenAI wire format.
 //   - Strips SystemParts (unknown to third-party endpoints)
 //   - Converts messages with Media to multipart content format (text + image_url parts)
 //   - Preserves ToolCallID, ToolCalls, and ReasoningContent for all messages
 func SerializeMessages(messages []Message) []any {
+	return SerializeMessagesWithOptions(messages, SerializeOptions{})
+}
+
+// SerializeMessagesWithOptions is SerializeMessages with endpoint-specific tuning.
+func SerializeMessagesWithOptions(messages []Message, opts SerializeOptions) []any {
 	out := make([]any, 0, len(messages))
 	for _, m := range messages {
-		toolCalls := serializeToolCalls(m.ToolCalls)
+		toolCalls := serializeToolCalls(m.ToolCalls, opts)
 		if len(m.Media) == 0 {
 			out = append(out, openaiMessage{
 				Role:             m.Role,
@@ -208,7 +258,7 @@ func SerializeMessages(messages []Message) []any {
 	return out
 }
 
-func serializeToolCalls(toolCalls []ToolCall) []openaiToolCall {
+func serializeToolCalls(toolCalls []ToolCall, opts SerializeOptions) []openaiToolCall {
 	if len(toolCalls) == 0 {
 		return nil
 	}
@@ -220,24 +270,33 @@ func serializeToolCalls(toolCalls []ToolCall) []openaiToolCall {
 			Type: tc.Type,
 		}
 
+		// Resolve the Gemini 3 thought signature from every known location.
+		// It must be echoed back inside extra_content.google.thought_signature
+		// (Gemini rejects requests where it only appears under
+		// function.thought_signature with HTTP 400).
+		thoughtSignature := tc.ThoughtSignature
+		if tc.Function != nil && tc.Function.ThoughtSignature != "" {
+			thoughtSignature = tc.Function.ThoughtSignature
+		}
+		if thoughtSignature == "" && tc.ExtraContent != nil && tc.ExtraContent.Google != nil {
+			thoughtSignature = tc.ExtraContent.Google.ThoughtSignature
+		}
+
+		// Gemini 3 rejects unsigned functionCall parts. When the call carries no
+		// captured signature (e.g. it was produced by another provider and the
+		// turn later fell back to Gemini), inject the documented sentinel so the
+		// request is accepted instead of failing with HTTP 400.
+		if thoughtSignature == "" && opts.GeminiThoughtSignatureFallback {
+			thoughtSignature = GeminiThoughtSignatureSentinel
+		}
+
 		if tc.Function != nil {
-			thoughtSignature := tc.Function.ThoughtSignature
-			if thoughtSignature == "" {
-				thoughtSignature = tc.ThoughtSignature
-			}
-			if thoughtSignature == "" && tc.ExtraContent != nil && tc.ExtraContent.Google != nil {
-				thoughtSignature = tc.ExtraContent.Google.ThoughtSignature
-			}
 			wireCall.Function = &openaiFunctionCall{
 				Name:             tc.Function.Name,
 				Arguments:        tc.Function.Arguments,
 				ThoughtSignature: thoughtSignature,
 			}
-		} else if tc.Name != "" || len(tc.Arguments) > 0 || tc.ThoughtSignature != "" {
-			thoughtSignature := tc.ThoughtSignature
-			if thoughtSignature == "" && tc.ExtraContent != nil && tc.ExtraContent.Google != nil {
-				thoughtSignature = tc.ExtraContent.Google.ThoughtSignature
-			}
+		} else if tc.Name != "" || len(tc.Arguments) > 0 || thoughtSignature != "" {
 			argsJSON := "{}"
 			if len(tc.Arguments) > 0 {
 				if encoded, err := json.Marshal(tc.Arguments); err == nil {
@@ -248,6 +307,12 @@ func serializeToolCalls(toolCalls []ToolCall) []openaiToolCall {
 				Name:             tc.Name,
 				Arguments:        argsJSON,
 				ThoughtSignature: thoughtSignature,
+			}
+		}
+
+		if thoughtSignature != "" {
+			wireCall.ExtraContent = &openaiExtraContent{
+				Google: &openaiGoogleExtra{ThoughtSignature: thoughtSignature},
 			}
 		}
 
@@ -476,10 +541,18 @@ func (e *HTTPError) Error() string {
 	)
 }
 
+const (
+	// errorBodyPreviewLen is large enough to keep a provider's JSON error
+	// message intact (OpenRouter nests the upstream reason inside metadata.raw).
+	errorBodyPreviewLen = 2048
+	// errorBodyReadLimit reads past the preview so a longer body still shows "...".
+	errorBodyReadLimit = errorBodyPreviewLen * 2
+)
+
 // HandleErrorResponse reads a non-200 response body and returns an appropriate error.
 func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	contentType := resp.Header.Get("Content-Type")
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, errorBodyReadLimit))
 	if readErr != nil {
 		return fmt.Errorf("failed to read response: %w", readErr)
 	}
@@ -488,7 +561,7 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	}
 	return &HTTPError{
 		StatusCode:  resp.StatusCode,
-		BodyPreview: ResponsePreview(body, 128),
+		BodyPreview: ResponsePreview(body, errorBodyPreviewLen),
 		ContentType: contentType,
 		APIBase:     apiBase,
 	}

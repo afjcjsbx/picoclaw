@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 将企业微信整合为单一的 channels.wecom 渠道，基于腾讯官方企业微信 AI Bot WebSocket API 实现。 原有的 wecom、wecom_app、wecom_aibot 三个独立渠道已合并为统一配置模型。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # 企业微信（WeCom）
@@ -25,7 +29,7 @@ PicoClaw 将企业微信整合为单一的 `channels.wecom` 渠道，基于腾�
 打开 Web UI，进入 **Channels → WeCom**，点击扫码绑定按钮。用企业微信扫码并在 App 内确认，凭据自动保存。
 
 <p align="center">
-<img src="../../../assets/wecom-qr-binding.jpg" alt="Web UI 企业微信扫码绑定" width="600">
+<img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/wecom-qr-binding.jpg" alt="Web UI 企业微信扫码绑定" width="600">
 </p>
 
 ### 方式二：CLI 扫码登录

@@ -1,3 +1,6 @@
+---
+description: "All hooks use JSON-RPC 2.0 format, with one JSON message per line, transmitted via stdio."
+---
 # Hook JSON-RPC Protocol Details
 
 All hooks use `JSON-RPC 2.0` format, with one JSON message per line, transmitted via stdio.
@@ -466,15 +469,78 @@ Runtime observer event, broadcast only, no response required. `id` is `0` or abs
 }
 ```
 
-Common `Kind` values:
-- `agent.turn.start` / `agent.turn.end`
-- `agent.llm.request` / `agent.llm.response`
-- `agent.tool.exec_start` / `agent.tool.exec_end` / `agent.tool.exec_skipped`
-- `agent.steering.injected`
-- `agent.interrupt.received`
-- `agent.error`
+A second example shows a non-agent event (`mcp.server.connected`). MCP events
+carry no agent scope; source is `mcp` with the server name:
 
-Legacy observe configuration names such as `turn_end` and `tool_exec_start` are still accepted and normalized to runtime event names. New process hook notifications use `hook.runtime_event`.
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "hook.runtime_event",
+  "params": {
+    "kind": "mcp.server.connected",
+    "source": {
+      "component": "mcp",
+      "name": "my-mcp-server"
+    },
+    "scope": {},
+    "payload": {
+      "server": "my-mcp-server",
+      "type": "stdio",
+      "command": "/usr/local/bin/my-mcp-server",
+      "tool_count": 5
+    }
+  }
+}
+```
+
+The `kind` field can be any kind declared in `pkg/events`. Every kind family is
+observable; `agent.*` is the most commonly used but hooks can also observe
+`channel.*`, `bus.*`, `gateway.*`, and `mcp.*` events. The full catalog with
+payloads and severity levels is in [Runtime Events](../runtime-events.md).
+
+Representative `kind` values by family:
+
+| Family | Example kinds |
+|--------|---------------|
+| `agent.*` | `agent.turn.start`, `agent.turn.end`, `agent.llm.request`, `agent.llm.response`, `agent.llm.delta`, `agent.llm.retry`, `agent.tool.exec_start`, `agent.tool.exec_end`, `agent.tool.exec_skipped`, `agent.steering.injected`, `agent.follow_up.queued`, `agent.interrupt.received`, `agent.context.compress`, `agent.session.summarize`, `agent.subturn.spawn`, `agent.subturn.end`, `agent.subturn.result_delivered`, `agent.subturn.orphan`, `agent.error` |
+| `channel.*` | `channel.lifecycle.started`, `channel.lifecycle.stopped`, `channel.message.outbound_sent`, `channel.message.outbound_failed`, `channel.rate_limited` |
+| `bus.*` | `bus.publish.failed`, `bus.message.dropped`, `bus.close.started`, `bus.close.completed` |
+| `gateway.*` | `gateway.start`, `gateway.ready`, `gateway.shutdown`, `gateway.reload.started`, `gateway.reload.completed`, `gateway.reload.failed` |
+| `mcp.*` | `mcp.server.connected`, `mcp.server.connecting`, `mcp.server.failed`, `mcp.tool.discovered`, `mcp.tool.call.start`, `mcp.tool.call.end` |
+
+Setting `observe` to `["*"]` or `["all"]` (or the empty string `[""]`) subscribes to
+every runtime event kind. This is equivalent to listing every kind individually and
+is useful during development to capture all activity.
+
+The following legacy short aliases are accepted in `observe` and normalized to
+their canonical runtime event kind:
+
+| Alias | Canonical kind(s) |
+|-------|-------------------|
+| `turn_start` | `agent.turn.start` |
+| `turn_end` | `agent.turn.end` |
+| `turn_completed` | `agent.turn.end` (filtered to successfully completed turns only) |
+| `llm_request` | `agent.llm.request` |
+| `llm_delta` | `agent.llm.delta` |
+| `llm_response` | `agent.llm.response` |
+| `llm_retry` | `agent.llm.retry` |
+| `context_compress` | `agent.context.compress` |
+| `session_summarize` | `agent.session.summarize` |
+| `post_compaction` | `agent.context.compress` and `agent.session.summarize` |
+| `tool_exec_start` | `agent.tool.exec_start` |
+| `tool_exec_end` | `agent.tool.exec_end` |
+| `tool_exec_skipped` | `agent.tool.exec_skipped` |
+| `steering_injected` | `agent.steering.injected` |
+| `follow_up_queued` | `agent.follow_up.queued` |
+| `interrupt_received` | `agent.interrupt.received` |
+| `subturn_spawn` | `agent.subturn.spawn` |
+| `subturn_end` | `agent.subturn.end` |
+| `subturn_result_delivered` | `agent.subturn.result_delivered` |
+| `subturn_orphan` | `agent.subturn.orphan` |
+| `error` | `agent.error` |
+
+Canonical kind strings (e.g. `agent.turn.end`) are also accepted directly. New
+process hook notifications use `hook.runtime_event`.
 
 ---
 

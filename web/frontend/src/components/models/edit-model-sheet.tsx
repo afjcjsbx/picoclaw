@@ -15,6 +15,7 @@ import {
   updateModel,
 } from "@/api/models"
 import { ConfigChangeNotice } from "@/components/config-change-notice"
+import { SessionHeaderField } from "@/components/models/session-header-field"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
 import {
   AdvancedSection,
@@ -43,6 +44,7 @@ import {
   getSubmittedAPIBase,
   normalizeApiBase,
 } from "./model-provider-form-shared"
+import { validateModelSampling } from "./model-sampling"
 import { type FieldValidation, validateModelField } from "./model-validation"
 import { ProviderCombobox } from "./provider-combobox"
 import {
@@ -67,12 +69,17 @@ interface EditForm {
   workspace: string
   rpm: string
   maxTokensField: string
+  maxTokens: string
+  temperature: string
+  contextWindow: string
   requestTimeout: string
+  providerSort: string
   thinkingLevel: string
   toolSchemaTransform: string
   streamingEnabled: boolean
   extraBody: string
   customHeaders: string
+  sessionHeader: string
 }
 
 interface EditModelSheetProps {
@@ -98,7 +105,11 @@ function buildInitialEditForm(model: ModelInfo): EditForm {
     workspace: model.workspace ?? "",
     rpm: model.rpm ? String(model.rpm) : "",
     maxTokensField: model.max_tokens_field ?? "",
+    maxTokens: model.max_tokens ? String(model.max_tokens) : "",
+    temperature: model.temperature != null ? String(model.temperature) : "",
+    contextWindow: model.context_window ? String(model.context_window) : "",
     requestTimeout: model.request_timeout ? String(model.request_timeout) : "",
+    providerSort: model.provider_sort ?? "",
     thinkingLevel: model.thinking_level ?? "",
     toolSchemaTransform: model.tool_schema_transform ?? "",
     streamingEnabled: model.streaming?.enabled === true,
@@ -108,6 +119,7 @@ function buildInitialEditForm(model: ModelInfo): EditForm {
     customHeaders: model.custom_headers
       ? JSON.stringify(model.custom_headers, null, 2)
       : "",
+    sessionHeader: model.session_header ?? "",
   }
 }
 
@@ -133,12 +145,17 @@ export function EditModelSheet({
     workspace: "",
     rpm: "",
     maxTokensField: "",
+    maxTokens: "",
+    temperature: "",
+    contextWindow: "",
     requestTimeout: "",
+    providerSort: "",
     thinkingLevel: "",
     toolSchemaTransform: "",
     streamingEnabled: false,
     extraBody: "",
     customHeaders: "",
+    sessionHeader: "",
   })
   const [saving, setSaving] = useState(false)
   const [setAsDefault, setSetAsDefault] = useState(false)
@@ -363,6 +380,16 @@ export function EditModelSheet({
       return
     }
 
+    const sampling = validateModelSampling(form)
+    if (!sampling.ok) {
+      setError(
+        t(`models.field.${sampling.field}`) +
+          ": " +
+          t(`models.field.samplingError.${sampling.reason}`),
+      )
+      return
+    }
+
     onUpdateStarted()
     setSaving(true)
     setError("")
@@ -387,14 +414,19 @@ export function EditModelSheet({
         workspace: form.workspace.trim() || undefined,
         rpm: form.rpm ? Number(form.rpm) : undefined,
         max_tokens_field: form.maxTokensField.trim() || undefined,
+        max_tokens: sampling.payload.max_tokens,
+        temperature: sampling.payload.temperature,
+        context_window: sampling.payload.context_window,
         request_timeout: form.requestTimeout
           ? Number(form.requestTimeout)
           : undefined,
+        provider_sort: form.providerSort.trim().toLowerCase(),
         thinking_level: form.thinkingLevel.trim() || undefined,
         tool_schema_transform: form.toolSchemaTransform.trim() || undefined,
         streaming,
         extra_body: extraBody,
         custom_headers: customHeaders,
+        session_header: form.sessionHeader.trim(),
       })
       onUpdated(response.reference_rename)
       if (setAsDefault && !model.is_default) {
@@ -493,7 +525,7 @@ export function EditModelSheet({
                     <span>
                       {t(
                         modelValidation.messageKey,
-                        modelValidation.messageParams,
+                        modelValidation.messageParams ?? {},
                       )}
                     </span>
                     {modelValidation.fix && (
@@ -681,6 +713,17 @@ export function EditModelSheet({
                 </Field>
 
                 <Field
+                  label={t("models.field.providerSort")}
+                  hint={t("models.field.providerSortHint")}
+                >
+                  <Input
+                    value={form.providerSort}
+                    onChange={setField("providerSort")}
+                    placeholder={t("models.field.providerDefault")}
+                  />
+                </Field>
+
+                <Field
                   label={t("models.field.rpm")}
                   hint={t("models.field.rpmHint")}
                 >
@@ -716,6 +759,48 @@ export function EditModelSheet({
                 </Field>
 
                 <Field
+                  label={t("models.field.maxTokens")}
+                  hint={t("models.field.maxTokensHint")}
+                >
+                  <Input
+                    value={form.maxTokens}
+                    onChange={setField("maxTokens")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={1}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.temperature")}
+                  hint={t("models.field.temperatureHint")}
+                >
+                  <Input
+                    value={form.temperature}
+                    onChange={setField("temperature")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={0.1}
+                  />
+                </Field>
+
+                <Field
+                  label={t("models.field.contextWindow")}
+                  hint={t("models.field.contextWindowHint")}
+                >
+                  <Input
+                    value={form.contextWindow}
+                    onChange={setField("contextWindow")}
+                    placeholder={t("models.field.inherit")}
+                    type="number"
+                    min={0}
+                    step={1}
+                  />
+                </Field>
+
+                <Field
                   label={t("models.field.extraBody")}
                   hint={t("models.field.extraBodyHint")}
                 >
@@ -738,6 +823,15 @@ export function EditModelSheet({
                     rows={3}
                   />
                 </Field>
+
+                <SessionHeaderField
+                  label={t("models.field.sessionHeader")}
+                  hint={t("models.field.sessionHeaderHint")}
+                  value={form.sessionHeader}
+                  onChange={(value) =>
+                    setForm((f) => ({ ...f, sessionHeader: value }))
+                  }
+                />
 
                 <Field
                   label={t("models.field.toolSchemaTransform")}

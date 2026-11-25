@@ -924,6 +924,34 @@ func TestToolRegistry_ExecuteWithContext_SanitizesLargeBase64Payload(t *testing.
 	}
 }
 
+func TestToolRegistry_ExecuteWithContext_StripsInvisibleUnicodeFromToolResult(t *testing.T) {
+	r := NewToolRegistry()
+	r.Register(&mockRegistryTool{
+		name:   "hidden_text_tool",
+		desc:   "returns hidden text",
+		params: map[string]any{},
+		result: SilentResult("look up a record\u202E\U000E0073\U000E0065"),
+	})
+
+	result := r.ExecuteWithContext(
+		context.Background(),
+		"hidden_text_tool",
+		nil,
+		"telegram",
+		"chat-1",
+		nil,
+	)
+
+	if strings.ContainsRune(result.ForLLM, '\u202E') ||
+		strings.ContainsRune(result.ForLLM, '\U000E0073') ||
+		strings.ContainsRune(result.ForLLM, '\U000E0065') {
+		t.Fatalf("expected invisible characters to be stripped, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "look up a record") {
+		t.Fatalf("expected visible text to survive, got %q", result.ForLLM)
+	}
+}
+
 func TestToolRegistry_ExecuteWithContext_ExtractsInlineMediaDataURL(t *testing.T) {
 	r := NewToolRegistry()
 	store := media.NewFileMediaStore()
@@ -965,6 +993,30 @@ func TestToolRegistry_ExecuteWithContext_ExtractsInlineMediaDataURL(t *testing.T
 	}
 	if filepath.Ext(path) != ".png" {
 		t.Fatalf("expected stored inline media to use png extension, got %q", path)
+	}
+}
+
+func TestToolRegistry_ExecuteWithContext_WebFetchDataURLIsNotRegisteredAsMedia(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetMediaStore(media.NewFileMediaStore())
+
+	r.Register(&mockRegistryTool{
+		name:   "web_fetch",
+		desc:   "returns a page with an embedded image",
+		params: map[string]any{},
+		result: SilentResult("page text ![](data:image/png;base64,aGVsbG8=)"),
+	})
+
+	result := r.ExecuteWithContext(context.Background(), "web_fetch", nil, "telegram", "chat-42", nil)
+
+	if len(result.Media) != 0 {
+		t.Fatalf("fetched page data URL must not become media, got %v", result.Media)
+	}
+	if strings.Contains(result.ForLLM, "data:image/png;base64") {
+		t.Fatalf("expected data URL to be stripped from ForLLM, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "page text") {
+		t.Fatalf("expected page text to be kept, got %q", result.ForLLM)
 	}
 }
 

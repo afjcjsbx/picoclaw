@@ -1,3 +1,6 @@
+---
+description: "PicoClaw reference: CLI commands, tool switches, MCP servers, cron scheduling, Gateway HTTP API, config versioning, and rate limiting."
+---
 # Reference
 
 Reference docs for precise configuration, runtime behavior, and tool semantics.

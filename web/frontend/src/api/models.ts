@@ -18,6 +18,10 @@ export interface ModelInfo {
   rpm?: number
   max_tokens_field?: string
   request_timeout?: number
+  provider_sort?: string
+  max_tokens?: number
+  temperature?: number | null
+  context_window?: number
   thinking_level?: string
   tool_schema_transform?: string
   streaming?: {
@@ -25,6 +29,7 @@ export interface ModelInfo {
   }
   extra_body?: Record<string, unknown>
   custom_headers?: Record<string, string>
+  session_header?: string
   // Meta
   enabled: boolean
   available: boolean

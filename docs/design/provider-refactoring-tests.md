@@ -1,3 +1,6 @@
+---
+description: "This document summarizes the complete test suite designed for the Provider architecture refactoring."
+---
 # Provider Architecture Refactoring - Test Suite Summary
 
 This document summarizes the complete test suite designed for the Provider architecture refactoring.

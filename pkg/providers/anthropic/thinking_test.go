@@ -192,6 +192,23 @@ func TestParseResponse_NoThinkingBlock(t *testing.T) {
 	}
 }
 
+func TestBuildParams_Claude5OmitsTemperature(t *testing.T) {
+	msgs := []Message{{Role: "user", Content: "hello"}}
+	opts := map[string]any{
+		"max_tokens":  1024,
+		"temperature": 0.8,
+	}
+
+	params, err := buildParams(msgs, nil, "claude-sonnet-5.5", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if params.Temperature.Valid() {
+		t.Error("temperature should be omitted for Claude 5 models")
+	}
+}
+
 func TestBuildParams_NoThinkingKeepsTemperature(t *testing.T) {
 	msgs := []Message{{Role: "user", Content: "hello"}}
 	opts := map[string]any{

@@ -10,6 +10,7 @@ func contextCommand() Definition {
 		Name:        "context",
 		Description: "Show current session context and token usage",
 		Usage:       "/context",
+		ReadOnly:    true,
 		Handler: func(_ context.Context, req Request, rt *Runtime) error {
 			if rt == nil || rt.GetContextStats == nil {
 				return req.Reply(unavailableMsg)

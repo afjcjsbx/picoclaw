@@ -404,10 +404,50 @@ func (h *Handler) gatewayStartReady() (bool, string, error) {
 		return false, fmt.Sprintf("default model %q has no credentials configured", modelName), nil
 	}
 	if requiresRuntimeProbe(modelCfg) && !probeLocalModelAvailability(modelCfg) {
+		if fallbackName, ok := firstReadyFallbackModel(cfg, defaultChainProvider(cfg)); ok {
+			logger.InfoCF("gateway", "Default model is unreachable; starting gateway with a fallback model",
+				map[string]any{
+					"default_model":  modelName,
+					"fallback_model": fallbackName,
+				})
+			return true, "", nil
+		}
 		return false, fmt.Sprintf("default model %q is not reachable", modelName), nil
 	}
 
 	return true, "", nil
+}
+
+// firstReadyFallbackModel returns the first fallback model in the default chain
+// that can serve chat requests. It keeps the launcher startable when the
+// configured primary is only temporarily unreachable.
+func firstReadyFallbackModel(cfg *config.Config, defaultProvider string) (string, bool) {
+	if cfg == nil {
+		return "", false
+	}
+
+	for _, rawFallback := range cfg.Agents.Defaults.ModelFallbacks {
+		fallbackName := strings.TrimSpace(rawFallback)
+		if fallbackName == "" {
+			continue
+		}
+		fallbackCfg := lookupModelConfig(cfg, fallbackName)
+		if fallbackCfg == nil {
+			continue
+		}
+		if !defaultModelAllowedForModelConfig(fallbackCfg, defaultProvider) {
+			continue
+		}
+		if !rawTemplateHasConfiguration(fallbackCfg) {
+			continue
+		}
+		if requiresRuntimeProbe(fallbackCfg) && !probeLocalModelAvailability(fallbackCfg) {
+			continue
+		}
+		return fallbackName, true
+	}
+
+	return "", false
 }
 
 func lookupModelConfig(cfg *config.Config, modelName string) *config.ModelConfig {

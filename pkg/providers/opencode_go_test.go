@@ -146,6 +146,44 @@ func TestOpenCodeGoEndToEnd(t *testing.T) {
 	}
 }
 
+// With an explicit provider, a repeated provider prefix must not leak into the
+// route lookup or the upstream request body.
+func TestOpenCodeGoExplicitProviderStripsModelPrefix(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := &config.ModelConfig{
+		ModelName: "go",
+		Provider:  "opencode-go",
+		Model:     "opencode-go/glm-5.3-flash",
+		APIBase:   srv.URL,
+	}
+	cfg.SetAPIKey("k")
+	provider, modelID, err := CreateProviderFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig: %v", err)
+	}
+	if modelID != "glm-5.3-flash" {
+		t.Fatalf("modelID = %q, want glm-5.3-flash", modelID)
+	}
+	if _, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, modelID, nil); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if gotPath != "/openai/v1/chat/completions" {
+		t.Errorf("path = %q, want /openai/v1/chat/completions", gotPath)
+	}
+	if gotBody["model"] != "glm-5.3-flash" {
+		t.Errorf("model = %v, want glm-5.3-flash", gotBody["model"])
+	}
+}
+
 // An explicit custom header must win over the injected session id.
 func TestOpenCodeGoExplicitSessionHeaderWins(t *testing.T) {
 	var got string

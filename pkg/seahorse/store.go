@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const sqliteTimeLayout = "2006-01-02 15:04:05"
@@ -44,7 +47,10 @@ type CreateSummaryInput struct {
 // --- Conversation Operations ---
 
 // GetOrCreateConversation returns the conversation for a sessionKey, creating if needed.
-func (s *Store) GetOrCreateConversation(ctx context.Context, sessionKey string) (*Conversation, error) {
+func (s *Store) GetOrCreateConversation(
+	ctx context.Context,
+	sessionKey string,
+) (*Conversation, error) {
 	// Try to get first
 	conv, err := s.GetConversationBySessionKey(ctx, sessionKey)
 	if err != nil {
@@ -77,13 +83,17 @@ func (s *Store) GetOrCreateConversation(ctx context.Context, sessionKey string) 
 }
 
 // GetConversationBySessionKey retrieves a conversation by session key.
-func (s *Store) GetConversationBySessionKey(ctx context.Context, sessionKey string) (*Conversation, error) {
+func (s *Store) GetConversationBySessionKey(
+	ctx context.Context,
+	sessionKey string,
+) (*Conversation, error) {
 	var conv Conversation
 	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx,
-		"SELECT conversation_id, session_key, created_at, updated_at FROM conversations WHERE session_key = ?",
+	err := s.db.QueryRowContext(
+		ctx,
+		"SELECT conversation_id, session_key, created_at, updated_at, version FROM conversations WHERE session_key = ?",
 		sessionKey,
-	).Scan(&conv.ConversationID, &conv.SessionKey, &createdAt, &updatedAt)
+	).Scan(&conv.ConversationID, &conv.SessionKey, &createdAt, &updatedAt, &conv.Version)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -93,6 +103,33 @@ func (s *Store) GetConversationBySessionKey(ctx context.Context, sessionKey stri
 	conv.CreatedAt = parseSQLiteTime(createdAt)
 	conv.UpdatedAt = parseSQLiteTime(updatedAt)
 	return &conv, nil
+}
+
+// GetConversationVersion returns the current context generation for a
+// conversation. It returns sql.ErrNoRows when the conversation does not exist.
+func (s *Store) GetConversationVersion(ctx context.Context, convID int64) (int64, error) {
+	var version int64
+	err := s.db.QueryRowContext(ctx,
+		"SELECT version FROM conversations WHERE conversation_id = ?", convID,
+	).Scan(&version)
+	return version, err
+}
+
+func getConversationVersionTx(ctx context.Context, tx *sql.Tx, convID int64) (int64, error) {
+	var version int64
+	err := tx.QueryRowContext(ctx,
+		"SELECT version FROM conversations WHERE conversation_id = ?", convID,
+	).Scan(&version)
+	return version, err
+}
+
+func bumpConversationVersionTx(ctx context.Context, tx *sql.Tx, convID int64) error {
+	_, err := tx.ExecContext(
+		ctx,
+		"UPDATE conversations SET version = version + 1, updated_at = datetime('now') WHERE conversation_id = ?",
+		convID,
+	)
+	return err
 }
 
 // GetSessionStatus returns status for a specific session.
@@ -169,7 +206,10 @@ func (s *Store) getSummaryCount(ctx context.Context, convID int64) (int, error) 
 	return count, err
 }
 
-func (s *Store) getMessageTimeRange(ctx context.Context, convID int64) (time.Time, time.Time, error) {
+func (s *Store) getMessageTimeRange(
+	ctx context.Context,
+	convID int64,
+) (time.Time, time.Time, error) {
 	var minTime, maxTime string
 	err := s.db.QueryRowContext(ctx,
 		"SELECT MIN(created_at), MAX(created_at) FROM messages WHERE conversation_id = ?",
@@ -186,7 +226,12 @@ func (s *Store) getMessageTimeRange(ctx context.Context, convID int64) (time.Tim
 // --- Message Operations ---
 
 // AddMessage appends a message to a conversation.
-func (s *Store) AddMessage(ctx context.Context, convID int64, role, content string, tokenCount int) (*Message, error) {
+func (s *Store) AddMessage(
+	ctx context.Context,
+	convID int64,
+	role, content string,
+	tokenCount int,
+) (*Message, error) {
 	return s.AddMessageWithReasoning(ctx, convID, role, content, "", "", tokenCount, time.Time{})
 }
 
@@ -266,7 +311,16 @@ func (s *Store) AddMessageWithParts(
 	parts []MessagePart,
 	tokenCount int,
 ) (*Message, error) {
-	return s.AddMessageWithPartsAndReasoning(ctx, convID, role, parts, "", "", tokenCount, time.Time{})
+	return s.AddMessageWithPartsAndReasoning(
+		ctx,
+		convID,
+		role,
+		parts,
+		"",
+		"",
+		tokenCount,
+		time.Time{},
+	)
 }
 
 // AddMessageWithPartsAndReasoning adds a message with structured parts and reasoning content.
@@ -291,46 +345,16 @@ func (s *Store) AddMessageWithPartsAndReasoning(
 		storedCreatedAt = normalizeMessageCreatedAt(time.Now())
 	}
 
-	// Derive readable content from Parts for FTS5 indexing and summary formatting
-	readableContent := partsToReadableContent(parts)
-
-	result, err := tx.ExecContext(
-		ctx,
-		"INSERT INTO messages (conversation_id, role, content, model_name, reasoning_content, token_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		convID,
-		role,
-		readableContent,
-		modelName,
-		reasoningContent,
-		tokenCount,
-		formatSQLiteTime(storedCreatedAt),
-	)
+	msgID, _, err := insertMessageTx(ctx, tx, convID, Message{
+		Role:             role,
+		ModelName:        modelName,
+		ReasoningContent: reasoningContent,
+		TokenCount:       tokenCount,
+		CreatedAt:        storedCreatedAt,
+		Parts:            parts,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("add message: %w", err)
-	}
-	msgID, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("get last insert id: %w", err)
-	}
-
-	for i, p := range parts {
-		_, err = tx.ExecContext(
-			ctx,
-			`INSERT INTO message_parts (message_id, type, text, name, arguments, tool_call_id, media_uri, mime_type, ordinal)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			msgID,
-			p.Type,
-			p.Text,
-			p.Name,
-			p.Arguments,
-			p.ToolCallID,
-			p.MediaURI,
-			p.MimeType,
-			i,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("add message part %d: %w", i, err)
-		}
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
@@ -354,8 +378,192 @@ func (s *Store) AddMessageWithPartsAndReasoning(
 	return msg, nil
 }
 
+// insertMessageTx inserts one message row — deriving the FTS-indexed content
+// from its parts when present — followed by its part rows, inside an existing
+// transaction. It returns the message ID and whether a new row was inserted.
+// A message with a non-empty ExternalID is deduplicated against the partial
+// unique index, making bootstrap retries idempotent.
+func insertMessageTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	convID int64,
+	msg Message,
+) (int64, bool, error) {
+	storedCreatedAt := normalizeMessageCreatedAt(msg.CreatedAt)
+	if storedCreatedAt.IsZero() {
+		storedCreatedAt = normalizeMessageCreatedAt(time.Now())
+	}
+
+	content := msg.Content
+	if len(msg.Parts) > 0 {
+		// Derive readable content from Parts for FTS5 indexing and summary formatting
+		content = partsToReadableContent(msg.Parts)
+	}
+
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO messages (conversation_id, role, content, model_name, reasoning_content, external_id, token_count, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(conversation_id, external_id) WHERE external_id <> '' DO NOTHING`,
+		convID,
+		msg.Role,
+		content,
+		msg.ModelName,
+		msg.ReasoningContent,
+		msg.ExternalID,
+		msg.TokenCount,
+		formatSQLiteTime(storedCreatedAt),
+	)
+	if err != nil {
+		return 0, false, fmt.Errorf("add message: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, false, fmt.Errorf("add message rows affected: %w", err)
+	}
+	if rows == 0 {
+		// The source-identified message already exists. Reuse it; its parts and
+		// context item were written by the transaction that inserted it.
+		var existingID int64
+		if findErr := tx.QueryRowContext(ctx,
+			"SELECT message_id FROM messages WHERE conversation_id = ? AND external_id = ?",
+			convID, msg.ExternalID,
+		).Scan(&existingID); findErr != nil {
+			return 0, false, fmt.Errorf("find existing message %q: %w", msg.ExternalID, findErr)
+		}
+		return existingID, false, nil
+	}
+
+	msgID, err := result.LastInsertId()
+	if err != nil {
+		return 0, false, fmt.Errorf("get last insert id: %w", err)
+	}
+
+	for i, p := range msg.Parts {
+		_, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO message_parts (message_id, type, text, name, arguments, tool_call_id, media_uri, mime_type, ordinal)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			msgID,
+			p.Type,
+			p.Text,
+			p.Name,
+			p.Arguments,
+			p.ToolCallID,
+			p.MediaURI,
+			p.MimeType,
+			i,
+		)
+		if err != nil {
+			return 0, false, fmt.Errorf("add message part %d: %w", i, err)
+		}
+	}
+	return msgID, true, nil
+}
+
+// AddMessagesBatch inserts a batch of messages (with optional parts) and
+// appends them to the conversation context, returning the inserted message IDs
+// in input order.
+//
+// When a message has Parts, the stored content is derived from those parts for
+// FTS5 indexing and summary formatting, and Message.Content is ignored.
+//
+// The batch is written in chunks of at most IngestBatchChunkSize messages. Each
+// chunk is a single transaction that covers both the message rows and their
+// context items, so a chunk is either fully visible or not visible at all. A
+// batch that fits in one chunk therefore costs one commit instead of N+1.
+//
+// Chunking bounds how long the SQLite write lock is held: a whole-history
+// bootstrap would otherwise block concurrent writers (another session's ingest,
+// compaction) for the entire duration and push them into SQLITE_BUSY.
+//
+// An error returned for a chunk rolls back only that chunk. Chunks committed
+// before it stay visible, so the caller must not treat a partial error as if
+// nothing was written.
+func (s *Store) AddMessagesBatch(
+	ctx context.Context,
+	convID int64,
+	msgs []Message,
+) ([]int64, error) {
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]int64, 0, len(msgs))
+	for start := 0; start < len(msgs); start += IngestBatchChunkSize {
+		end := min(start+IngestBatchChunkSize, len(msgs))
+		chunkIDs, err := s.addMessagesChunk(ctx, convID, msgs[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("chunk %d-%d of %d: %w", start, end-1, len(msgs), err)
+		}
+		ids = append(ids, chunkIDs...)
+	}
+	return ids, nil
+}
+
+// addMessagesChunk writes one chunk of messages and its context items in a
+// single transaction. Either the whole chunk is committed or nothing is.
+func (s *Store) addMessagesChunk(
+	ctx context.Context,
+	convID int64,
+	msgs []Message,
+) ([]int64, error) {
+	var ids []int64
+	err := retryBusy(ctx, func() error {
+		var err error
+		ids, err = s.addMessagesChunkOnce(ctx, convID, msgs)
+		return err
+	})
+	return ids, err
+}
+
+func (s *Store) addMessagesChunkOnce(
+	ctx context.Context,
+	convID int64,
+	msgs []Message,
+) ([]int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	ids := make([]int64, len(msgs))
+	items := make([]ContextItem, 0, len(msgs))
+	for i := range msgs {
+		id, inserted, err := insertMessageTx(ctx, tx, convID, msgs[i])
+		if err != nil {
+			return nil, fmt.Errorf("message %d: %w", i, err)
+		}
+		ids[i] = id
+		if !inserted {
+			continue
+		}
+		items = append(items, ContextItem{
+			ItemType:   "message",
+			MessageID:  id,
+			TokenCount: msgs[i].TokenCount,
+		})
+	}
+	if len(items) > 0 {
+		if err := s.appendContextItemsTx(ctx, tx, convID, items); err != nil {
+			return nil, fmt.Errorf("append context: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return ids, nil
+}
+
 // GetMessages retrieves messages for a conversation.
-func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, beforeID int64) ([]Message, error) {
+func (s *Store) GetMessages(
+	ctx context.Context,
+	convID int64,
+	limit int,
+	beforeID int64,
+) ([]Message, error) {
 	query := "SELECT message_id, conversation_id, role, content, model_name, reasoning_content, token_count, created_at FROM messages WHERE conversation_id = ?"
 	args := []any{convID}
 	if beforeID > 0 {
@@ -445,7 +653,11 @@ func (s *Store) GetMessageByID(ctx context.Context, messageID int64) (*Message, 
 }
 
 // UpdateMessageReasoningContent updates reasoning_content for an existing message.
-func (s *Store) UpdateMessageReasoningContent(ctx context.Context, messageID int64, reasoningContent string) error {
+func (s *Store) UpdateMessageReasoningContent(
+	ctx context.Context,
+	messageID int64,
+	reasoningContent string,
+) error {
 	return s.updateMessageColumn(
 		ctx,
 		messageReasoningContentColumn,
@@ -455,11 +667,25 @@ func (s *Store) UpdateMessageReasoningContent(ctx context.Context, messageID int
 	)
 }
 
-func (s *Store) UpdateMessageModelName(ctx context.Context, messageID int64, modelName string) error {
-	return s.updateMessageColumn(ctx, messageModelNameColumn, modelName, messageID, messageModelNameColumn)
+func (s *Store) UpdateMessageModelName(
+	ctx context.Context,
+	messageID int64,
+	modelName string,
+) error {
+	return s.updateMessageColumn(
+		ctx,
+		messageModelNameColumn,
+		modelName,
+		messageID,
+		messageModelNameColumn,
+	)
 }
 
-func (s *Store) UpdateMessageCreatedAt(ctx context.Context, messageID int64, createdAt time.Time) error {
+func (s *Store) UpdateMessageCreatedAt(
+	ctx context.Context,
+	messageID int64,
+	createdAt time.Time,
+) error {
 	storedCreatedAt := normalizeMessageCreatedAt(createdAt)
 	if storedCreatedAt.IsZero() {
 		return fmt.Errorf("message %d created_at cannot be zero", messageID)
@@ -480,7 +706,13 @@ const (
 	messageCreatedAtColumn        = "created_at"
 )
 
-func (s *Store) updateMessageColumn(ctx context.Context, column string, value any, messageID int64, op string) error {
+func (s *Store) updateMessageColumn(
+	ctx context.Context,
+	column string,
+	value any,
+	messageID int64,
+	op string,
+) error {
 	result, err := s.db.ExecContext(ctx,
 		"UPDATE messages SET "+column+" = ? WHERE message_id = ?", value, messageID)
 	if err != nil {
@@ -527,7 +759,10 @@ func (s *Store) loadMessageParts(ctx context.Context, msgID int64) ([]MessagePar
 // (chunked to stay under SQLite's bound-variable limit). The returned map only
 // contains entries for messages that have parts; callers should treat a missing
 // key as "no parts". Parts within each message are ordered by ordinal.
-func (s *Store) loadMessagePartsBatch(ctx context.Context, msgIDs []int64) (map[int64][]MessagePart, error) {
+func (s *Store) loadMessagePartsBatch(
+	ctx context.Context,
+	msgIDs []int64,
+) (map[int64][]MessagePart, error) {
 	result := make(map[int64][]MessagePart, len(msgIDs))
 	if len(msgIDs) == 0 {
 		return result, nil
@@ -584,71 +819,30 @@ func (s *Store) loadMessagePartsChunk(ctx context.Context, chunk []int64) ([]Mes
 
 // CreateSummary creates a new summary and indexes it in FTS5.
 func (s *Store) CreateSummary(ctx context.Context, input CreateSummaryInput) (*Summary, error) {
-	// Generate summary ID
-	now := time.Now().UTC()
-	summaryID := generateSummaryID(input.Content, now)
+	var summary *Summary
+	err := retryBusy(ctx, func() error {
+		var err error
+		summary, err = s.createSummaryOnce(ctx, input)
+		return err
+	})
+	return summary, err
+}
 
-	var earliestAt, latestAt sql.NullString
-	if input.EarliestAt != nil {
-		earliestAt = sql.NullString{String: input.EarliestAt.Format(time.RFC3339), Valid: true}
-	}
-	if input.LatestAt != nil {
-		latestAt = sql.NullString{String: input.LatestAt.Format(time.RFC3339), Valid: true}
-	}
-
+func (s *Store) createSummaryOnce(ctx context.Context, input CreateSummaryInput) (*Summary, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count,
-			earliest_at, latest_at, descendant_count, descendant_token_count,
-			source_message_token_count, model)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		summaryID, input.ConversationID, string(input.Kind), input.Depth,
-		input.Content, input.TokenCount,
-		earliestAt, latestAt,
-		input.DescendantCount, input.DescendantTokenCount,
-		input.SourceMessageTokens, input.Model,
-	)
+	summary, err := createSummaryTx(ctx, tx, input)
 	if err != nil {
-		return nil, fmt.Errorf("insert summary: %w", err)
+		return nil, err
 	}
-
-	// FTS trigger will fire automatically for summaries table insert
-
-	// Link parent summaries (DAG edges) for condensed summaries
-	for _, parentID := range input.ParentIDs {
-		_, err = tx.ExecContext(ctx,
-			"INSERT INTO summary_parents (summary_id, parent_summary_id) VALUES (?, ?)",
-			summaryID, parentID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("link parent %s: %w", parentID, err)
-		}
-	}
-
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
-
-	return &Summary{
-		SummaryID:               summaryID,
-		ConversationID:          input.ConversationID,
-		Kind:                    input.Kind,
-		Depth:                   input.Depth,
-		Content:                 input.Content,
-		TokenCount:              input.TokenCount,
-		EarliestAt:              input.EarliestAt,
-		LatestAt:                input.LatestAt,
-		DescendantCount:         input.DescendantCount,
-		DescendantTokenCount:    input.DescendantTokenCount,
-		SourceMessageTokenCount: input.SourceMessageTokens,
-		Model:                   input.Model,
-		CreatedAt:               now,
-	}, nil
+	return summary, nil
 }
 
 // GetSummary retrieves a summary by ID.
@@ -716,21 +910,29 @@ func (s *Store) GetSummaryParents(ctx context.Context, summaryID string) ([]Summ
 }
 
 // LinkSummaryToMessages links a leaf summary to its source messages.
-func (s *Store) LinkSummaryToMessages(ctx context.Context, summaryID string, messageIDs []int64) error {
+func (s *Store) LinkSummaryToMessages(
+	ctx context.Context,
+	summaryID string,
+	messageIDs []int64,
+) error {
+	return retryBusy(ctx, func() error {
+		return s.linkSummaryToMessagesOnce(ctx, summaryID, messageIDs)
+	})
+}
+
+func (s *Store) linkSummaryToMessagesOnce(
+	ctx context.Context,
+	summaryID string,
+	messageIDs []int64,
+) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	for i, msgID := range messageIDs {
-		_, err = tx.ExecContext(ctx,
-			"INSERT OR IGNORE INTO summary_messages (summary_id, message_id, ordinal) VALUES (?, ?, ?)",
-			summaryID, msgID, i,
-		)
-		if err != nil {
-			return err
-		}
+	if err := linkSummaryToMessagesTx(ctx, tx, summaryID, messageIDs); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -845,6 +1047,12 @@ func (s *Store) GetContextItems(ctx context.Context, convID int64) ([]ContextIte
 
 // UpsertContextItems replaces all context items for a conversation.
 func (s *Store) UpsertContextItems(ctx context.Context, convID int64, items []ContextItem) error {
+	return retryBusy(ctx, func() error {
+		return s.upsertContextItemsOnce(ctx, convID, items)
+	})
+}
+
+func (s *Store) upsertContextItemsOnce(ctx context.Context, convID int64, items []ContextItem) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -857,39 +1065,132 @@ func (s *Store) UpsertContextItems(ctx context.Context, convID int64, items []Co
 	}
 
 	for _, item := range items {
-		_, err = tx.ExecContext(ctx,
+		_, err = tx.ExecContext(
+			ctx,
 			`INSERT INTO context_items (conversation_id, ordinal, item_type, summary_id, message_id, token_count)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
-			convID, item.Ordinal, item.ItemType,
-			nullString(item.SummaryID), nullInt64(item.MessageID),
+			convID,
+			item.Ordinal,
+			item.ItemType,
+			nullString(item.SummaryID),
+			nullInt64(item.MessageID),
 			item.TokenCount,
 		)
 		if err != nil {
 			return err
 		}
 	}
+	if versionErr := bumpConversationVersionTx(ctx, tx, convID); versionErr != nil {
+		return versionErr
+	}
 	return tx.Commit()
 }
 
 // ClearContextItems removes all context items for a conversation.
 func (s *Store) ClearContextItems(ctx context.Context, convID int64) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM context_items WHERE conversation_id = ?", convID)
-	return err
+	return retryBusy(ctx, func() error {
+		return s.clearContextItemsOnce(ctx, convID)
+	})
 }
 
-// DeleteMessagesAfterID deletes all messages with ID > afterID for a conversation.
-// Also clears related context_items, message_parts, summary_messages, and FTS entries.
-// Uses transaction to ensure atomicity of the delete cascade.
-func (s *Store) DeleteMessagesAfterID(ctx context.Context, convID int64, afterID int64) error {
+func (s *Store) clearContextItemsOnce(ctx context.Context, convID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM context_items WHERE conversation_id = ?", convID); err != nil {
+		return err
+	}
+	if err := bumpConversationVersionTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// InvalidateDerivedState removes every summary and context item for a
+// conversation while leaving raw messages intact. Bootstrap uses this before
+// deleting a changed message tail so no summary can outlive its sources.
+func (s *Store) InvalidateDerivedState(ctx context.Context, convID int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	if err := invalidateDerivedStateTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	if err := bumpConversationVersionTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func invalidateDerivedStateTx(ctx context.Context, tx *sql.Tx, convID int64) error {
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM context_items WHERE conversation_id = ?", convID); err != nil {
+		return fmt.Errorf("context_items: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM summary_messages WHERE summary_id IN (
+			SELECT summary_id FROM summaries WHERE conversation_id = ?
+		)`, convID); err != nil {
+		return fmt.Errorf("summary_messages: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM summary_parents WHERE summary_id IN (
+			SELECT summary_id FROM summaries WHERE conversation_id = ?
+		) OR parent_summary_id IN (
+			SELECT summary_id FROM summaries WHERE conversation_id = ?
+		)`, convID, convID); err != nil {
+		return fmt.Errorf("summary_parents: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM summaries WHERE conversation_id = ?", convID); err != nil {
+		return fmt.Errorf("summaries: %w", err)
+	}
+	return nil
+}
+
+// InvalidateConversation clears all stored state for a conversation but keeps
+// the conversation row so the session key remains addressable. Bootstrap uses
+// it when the canonical JSONL history is empty.
+func (s *Store) InvalidateConversation(ctx context.Context, convID int64) error {
+	return s.ClearConversation(ctx, convID)
+}
+
+// DeleteMessagesAfterID deletes all messages with ID > afterID for a conversation.
+// Also clears related context_items, message_parts, summary_messages, and FTS entries.
+// Uses transaction to ensure atomicity of the delete cascade.
+func (s *Store) DeleteMessagesAfterID(ctx context.Context, convID int64, afterID int64) error {
+	return retryBusy(ctx, func() error {
+		return s.deleteMessagesAfterIDOnce(ctx, convID, afterID)
+	})
+}
+
+func (s *Store) deleteMessagesAfterIDOnce(ctx context.Context, convID int64, afterID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// A raw-message deletion invalidates every summary derived from the
+	// conversation, not just the link rows for the deleted messages. Keeping a
+	// summary whose sources were removed is worse than losing compression: it
+	// would surface stale facts in the prompt and in FTS results.
+	if invalidateErr := invalidateDerivedStateTx(ctx, tx, convID); invalidateErr != nil {
+		return invalidateErr
+	}
+
 	// Get message IDs to delete for cleaning up related tables
-	rows, err := tx.QueryContext(ctx,
-		"SELECT message_id FROM messages WHERE conversation_id = ? AND message_id > ?", convID, afterID)
+	rows, err := tx.QueryContext(
+		ctx,
+		"SELECT message_id FROM messages WHERE conversation_id = ? AND message_id > ?",
+		convID,
+		afterID,
+	)
 	if err != nil {
 		return err
 	}
@@ -930,6 +1231,9 @@ func (s *Store) DeleteMessagesAfterID(ctx context.Context, convID int64, afterID
 		"DELETE FROM messages WHERE conversation_id = ? AND message_id > ?", convID, afterID); err != nil {
 		return err
 	}
+	if err := bumpConversationVersionTx(ctx, tx, convID); err != nil {
+		return err
+	}
 
 	return tx.Commit()
 }
@@ -939,12 +1243,29 @@ func (s *Store) DeleteMessagesAfterID(ctx context.Context, convID int64, afterID
 // message_parts, and messages. FTS entries are handled automatically by triggers.
 // Uses a transaction for atomicity.
 func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
+	return retryBusy(ctx, func() error {
+		return s.clearConversationOnce(ctx, convID)
+	})
+}
+
+func (s *Store) clearConversationOnce(ctx context.Context, convID int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	if err := clearConversationTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	if err := bumpConversationVersionTx(ctx, tx, convID); err != nil {
+		return fmt.Errorf("bump conversation version: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func clearConversationTx(ctx context.Context, tx *sql.Tx, convID int64) error {
 	// Delete in child→parent order. FTS tables (messages_fts, summaries_fts) are
 	// kept in sync by DELETE triggers, so we just delete from the parent tables.
 
@@ -981,22 +1302,33 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 		"DELETE FROM messages WHERE conversation_id = ?", convID); err != nil {
 		return fmt.Errorf("messages: %w", err)
 	}
-
-	return tx.Commit()
+	return nil
 }
 
 // DeleteConversation removes all data for a conversation and the conversation
 // row itself. Unlike ClearConversation (which keeps the row for /clear), this
 // is used by session pruning so no orphaned conversations accumulate.
 func (s *Store) DeleteConversation(ctx context.Context, convID int64) error {
-	if err := s.ClearConversation(ctx, convID); err != nil {
+	return retryBusy(ctx, func() error {
+		return s.deleteConversationOnce(ctx, convID)
+	})
+}
+
+func (s *Store) deleteConversationOnce(ctx context.Context, convID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx,
+	defer tx.Rollback()
+
+	if err := clearConversationTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM conversations WHERE conversation_id = ?", convID); err != nil {
 		return fmt.Errorf("delete conversation row: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ConversationCount returns the number of conversations in the database.
@@ -1030,11 +1362,27 @@ func (s *Store) ReclaimableBytes(ctx context.Context) (int64, error) {
 // CheckpointWAL folds the write-ahead log back into the main database file.
 // Pass truncate=true to also shrink the -wal file to zero bytes.
 func (s *Store) CheckpointWAL(ctx context.Context, truncate bool) error {
+	pragma := "PRAGMA wal_checkpoint(PASSIVE)"
 	if truncate {
-		_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+		pragma = "PRAGMA wal_checkpoint(TRUNCATE)"
+	}
+	var busy, logFrames, checkpointed int
+	if err := s.db.QueryRowContext(ctx, pragma).Scan(&busy, &logFrames, &checkpointed); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
+	if busy != 0 {
+		return fmt.Errorf(
+			"wal checkpoint busy: %d frames remain, %d checkpointed",
+			logFrames,
+			checkpointed,
+		)
+	}
+	return nil
+}
+
+// Optimize runs SQLite's planner/index maintenance after a workload or prune.
+func (s *Store) Optimize(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "PRAGMA optimize")
 	return err
 }
 
@@ -1062,12 +1410,36 @@ func (s *Store) AppendContextSummary(ctx context.Context, convID int64, summaryI
 }
 
 func (s *Store) appendContextItems(ctx context.Context, convID int64, items []ContextItem) error {
+	return retryBusy(ctx, func() error {
+		return s.appendContextItemsOnce(ctx, convID, items)
+	})
+}
+
+func (s *Store) appendContextItemsOnce(
+	ctx context.Context,
+	convID int64,
+	items []ContextItem,
+) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	if err := s.appendContextItemsTx(ctx, tx, convID, items); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// appendContextItemsTx is the transaction-scoped implementation of context
+// item appends. The caller owns the transaction boundary.
+func (s *Store) appendContextItemsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	convID int64,
+	items []ContextItem,
+) error {
 	maxOrd, err := s.GetMaxOrdinalTx(ctx, tx, convID)
 	if err != nil {
 		return err
@@ -1084,11 +1456,15 @@ func (s *Store) appendContextItems(ctx context.Context, convID int64, items []Co
 			tokenCount = s.resolveItemTokenCountTx(ctx, tx, item)
 		}
 
-		_, err = tx.ExecContext(ctx,
+		_, err = tx.ExecContext(
+			ctx,
 			`INSERT INTO context_items (conversation_id, ordinal, item_type, summary_id, message_id, token_count)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
-			convID, ordinal, item.ItemType,
-			nullString(item.SummaryID), nullInt64(item.MessageID),
+			convID,
+			ordinal,
+			item.ItemType,
+			nullString(item.SummaryID),
+			nullInt64(item.MessageID),
 			tokenCount,
 		)
 		if err != nil {
@@ -1096,7 +1472,7 @@ func (s *Store) appendContextItems(ctx context.Context, convID int64, items []Co
 		}
 		ordinal += OrdinalStep
 	}
-	return tx.Commit()
+	return nil
 }
 
 // resolveItemTokenCountTx looks up token count within a transaction.
@@ -1125,6 +1501,17 @@ func (s *Store) resolveItemTokenCountTx(ctx context.Context, tx *sql.Tx, item Co
 // ReplaceContextRangeWithSummary atomically replaces a range of context items with a summary.
 // If ordinal gap is exhausted, triggers resequencing (spec lines 1204-1209).
 func (s *Store) ReplaceContextRangeWithSummary(
+	ctx context.Context,
+	convID int64,
+	startOrdinal, endOrdinal int,
+	summaryID string,
+) error {
+	return retryBusy(ctx, func() error {
+		return s.replaceContextRangeWithSummaryOnce(ctx, convID, startOrdinal, endOrdinal, summaryID)
+	})
+}
+
+func (s *Store) replaceContextRangeWithSummaryOnce(
 	ctx context.Context,
 	convID int64,
 	startOrdinal, endOrdinal int,
@@ -1176,6 +1563,9 @@ func (s *Store) ReplaceContextRangeWithSummary(
 			return err
 		}
 	}
+	if err := bumpConversationVersionTx(ctx, tx, convID); err != nil {
+		return err
+	}
 
 	return tx.Commit()
 }
@@ -1183,6 +1573,17 @@ func (s *Store) ReplaceContextRangeWithSummary(
 // ReplaceContextItemsWithSummary replaces specific context items (by summary_id) with a new summary.
 // Use this when candidates are not contiguous in ordinal space to avoid deleting non-candidate items.
 func (s *Store) ReplaceContextItemsWithSummary(
+	ctx context.Context,
+	convID int64,
+	summaryIDs []string,
+	newSummaryID string,
+) error {
+	return retryBusy(ctx, func() error {
+		return s.replaceContextItemsWithSummaryOnce(ctx, convID, summaryIDs, newSummaryID)
+	})
+}
+
+func (s *Store) replaceContextItemsWithSummaryOnce(
 	ctx context.Context,
 	convID int64,
 	summaryIDs []string,
@@ -1268,13 +1669,21 @@ func (s *Store) ReplaceContextItemsWithSummary(
 			return err
 		}
 	}
+	if err := bumpConversationVersionTx(ctx, tx, convID); err != nil {
+		return err
+	}
 
 	return tx.Commit()
 }
 
 // resequenceContextItemsTx renumbers context_items with fresh OrdinalStep gaps.
 // Uses temp negative ordinals to avoid PRIMARY KEY constraint violations (spec lines 1240-1247).
-func (s *Store) resequenceContextItemsTx(ctx context.Context, tx *sql.Tx, convID int64, newSummaryID string) error {
+func (s *Store) resequenceContextItemsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	convID int64,
+	newSummaryID string,
+) error {
 	// Get all remaining items sorted by current ordinal
 	rows, err := tx.QueryContext(
 		ctx,
@@ -1402,7 +1811,11 @@ func (s *Store) GetMaxOrdinalTx(ctx context.Context, tx *sql.Tx, convID int64) (
 
 // GetDistinctDepthsInContext returns distinct depth levels of summaries currently in context.
 // maxOrdinalExclusive filters out summaries with ordinal >= this value (0 = no filter).
-func (s *Store) GetDistinctDepthsInContext(ctx context.Context, convID int64, maxOrdinalExclusive int) ([]int, error) {
+func (s *Store) GetDistinctDepthsInContext(
+	ctx context.Context,
+	convID int64,
+	maxOrdinalExclusive int,
+) ([]int, error) {
 	query := `SELECT DISTINCT s.depth
 		FROM context_items ci
 		JOIN summaries s ON s.summary_id = ci.summary_id
@@ -1438,7 +1851,10 @@ func (s *Store) GetDistinctDepthsInContext(ctx context.Context, convID int64, ma
 
 // GetSummarySubtree returns all summaries in the subtree rooted at summaryID,
 // including summaryID itself. Uses a recursive CTE to traverse the DAG.
-func (s *Store) GetSummarySubtree(ctx context.Context, summaryID string) ([]SummarySubtreeNode, error) {
+func (s *Store) GetSummarySubtree(
+	ctx context.Context,
+	summaryID string,
+) ([]SummarySubtreeNode, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		WITH RECURSIVE subtree AS (
 			SELECT summary_id, 0 AS depth_from_root
@@ -1475,11 +1891,24 @@ func (s *Store) GetSummarySubtree(ctx context.Context, summaryID string) ([]Summ
 
 // SearchSummaries performs full-text search on summaries.
 func (s *Store) SearchSummaries(ctx context.Context, input SearchInput) ([]SearchResult, error) {
-	// "like" → LIKE search, anything else (including "full_text" or empty) → FTS5
-	if input.Mode == "like" {
+	// "like" → LIKE search, anything else (including "full_text" or empty) → FTS5.
+	// The trigram tokenizer cannot match queries shorter than three characters,
+	// so those always use LIKE.
+	if input.Mode == "like" || utf8.RuneCountInString(input.Pattern) < 3 {
 		return s.searchSummariesLike(ctx, input)
 	}
-	return s.searchSummariesFTS(ctx, input)
+	results, err := s.searchSummariesFTS(ctx, input)
+	if err == nil && len(results) > 0 {
+		return results, nil
+	}
+	if err != nil && !isBusyError(err) {
+		// A malformed FTS expression should not hide matches that LIKE can find.
+		return s.searchSummariesLike(ctx, input)
+	}
+	if len(results) == 0 {
+		return s.searchSummariesLike(ctx, input)
+	}
+	return results, nil
 }
 
 func (s *Store) searchSummariesFTS(ctx context.Context, input SearchInput) ([]SearchResult, error) {
@@ -1510,17 +1939,20 @@ func (s *Store) searchSummariesFTS(ctx context.Context, input SearchInput) ([]Se
 
 	// First, get total count (bm25 conflicts with window functions in FTS5)
 	countQuery := `SELECT COUNT(*) FROM summaries_fts fts
-		JOIN summaries s ON s.summary_id = fts.summary_id
+		JOIN summaries s ON s.rowid = fts.rowid
 		WHERE ` + whereStr
 	var totalCount int
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount); err != nil {
 		return nil, err
 	}
 
-	// Then, get actual results with bm25 ranking
-	dataQuery := `SELECT s.summary_id, s.conversation_id, s.kind, s.content, s.created_at, bm25(summaries_fts) as rank
+	// Then, get actual results with bm25 ranking. snippet() is capped so a
+	// matching issue with a huge tool result does not dump the whole row into
+	// the model context.
+	dataQuery := `SELECT s.summary_id, s.conversation_id, s.kind, s.depth, s.content, s.created_at,
+		bm25(summaries_fts) as rank
 		FROM summaries_fts fts
-		JOIN summaries s ON s.summary_id = fts.summary_id
+		JOIN summaries s ON s.rowid = fts.rowid
 		WHERE ` + whereStr + ` ORDER BY rank`
 
 	dataArgs := append([]any{}, args...) // copy args
@@ -1581,8 +2013,11 @@ func buildMessagesLikeQuery(query string, args []any, input SearchInput) (string
 	return buildLikeQuery(query, args, input)
 }
 
-func (s *Store) searchSummariesLike(ctx context.Context, input SearchInput) ([]SearchResult, error) {
-	query := `SELECT summary_id, conversation_id, kind, content, created_at, COUNT(*) OVER() as total_count
+func (s *Store) searchSummariesLike(
+	ctx context.Context,
+	input SearchInput,
+) ([]SearchResult, error) {
+	query := `SELECT summary_id, conversation_id, kind, depth, content, created_at, COUNT(*) OVER() as total_count
 		FROM summaries WHERE content LIKE ?`
 	args := []any{"%" + input.Pattern + "%"}
 	query, args = buildLikeQuery(query, args, input)
@@ -1604,12 +2039,15 @@ func (s *Store) scanSearchResults(rows *sql.Rows, withRank bool) ([]SearchResult
 		var kind string
 		if withRank {
 			// FTS5 mode: no TotalCount in query (set by caller after COUNT)
-			if err := rows.Scan(&r.SummaryID, &r.ConversationID, &kind, &r.Content, &createdAt, &r.Rank); err != nil {
+			if err := rows.Scan(
+				&r.SummaryID, &r.ConversationID, &kind, &r.Depth,
+				&r.Content, &createdAt, &r.Rank,
+			); err != nil {
 				return nil, err
 			}
 		} else {
 			// LIKE mode: TotalCount from window function
-			if err := rows.Scan(&r.SummaryID, &r.ConversationID, &kind,
+			if err := rows.Scan(&r.SummaryID, &r.ConversationID, &kind, &r.Depth,
 				&r.Content, &createdAt, &r.TotalCount); err != nil {
 				return nil, err
 			}
@@ -1623,11 +2061,14 @@ func (s *Store) scanSearchResults(rows *sql.Rows, withRank bool) ([]SearchResult
 
 // SearchMessages performs full-text or regex search on messages.
 func (s *Store) SearchMessages(ctx context.Context, input SearchInput) ([]SearchResult, error) {
-	// Try FTS5 first for full-text mode
+	// Try FTS5 first for full-text mode. Short patterns bypass FTS because the
+	// trigram tokenizer requires at least three characters.
 	if input.Mode == "" || input.Mode == "full_text" {
-		results, err := s.searchMessagesFTS(ctx, input)
-		if err == nil && len(results) > 0 {
-			return results, nil
+		if utf8.RuneCountInString(input.Pattern) >= 3 {
+			results, err := s.searchMessagesFTS(ctx, input)
+			if err == nil && len(results) > 0 {
+				return results, nil
+			}
 		}
 		// Fall through to LIKE
 	}
@@ -1668,17 +2109,20 @@ func (s *Store) searchMessagesFTS(ctx context.Context, input SearchInput) ([]Sea
 
 	// First, get total count (bm25 conflicts with window functions in FTS5)
 	countQuery := `SELECT COUNT(*) FROM messages_fts f
-		JOIN messages m ON f.message_id = m.message_id
+		JOIN messages m ON f.rowid = m.message_id
 		WHERE ` + whereStr
 	var totalCount int
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount); err != nil {
 		return nil, err
 	}
 
-	// Then, get actual results with bm25 ranking
-	dataQuery := `SELECT m.message_id, m.conversation_id, m.role, m.content, m.created_at, bm25(messages_fts) as rank
+	// Then, get actual results with bm25 ranking. Use FTS5 snippet() with a
+	// small token window instead of returning the entire stored content.
+	dataQuery := `SELECT m.message_id, m.conversation_id, m.role,
+		snippet(messages_fts, 1, '', '', '…', 32) as snippet,
+		m.created_at, bm25(messages_fts) as rank
 		FROM messages_fts f
-		JOIN messages m ON f.message_id = m.message_id
+		JOIN messages m ON f.rowid = m.message_id
 		WHERE ` + whereStr + ` ORDER BY rank`
 
 	dataArgs := append([]any{}, args...) // copy args
@@ -1706,7 +2150,7 @@ func (s *Store) searchMessagesFTS(ctx context.Context, input SearchInput) ([]Sea
 }
 
 func (s *Store) searchMessagesLike(ctx context.Context, input SearchInput) ([]SearchResult, error) {
-	query := `SELECT message_id, conversation_id, role, content, created_at, COUNT(*) OVER() as total_count
+	query := `SELECT message_id, conversation_id, role, substr(content, 1, 1024), created_at, COUNT(*) OVER() as total_count
 		FROM messages WHERE content LIKE ?`
 	args := []any{"%" + input.Pattern + "%"}
 	query, args = buildMessagesLikeQuery(query, args, input)
@@ -1821,8 +2265,15 @@ func generateSummaryID(content string, t time.Time) string {
 }
 
 func isUniqueViolation(err error) bool {
-	return err != nil && (contains(err.Error(), "UNIQUE constraint failed") ||
-		contains(err.Error(), "constraint failed"))
+	if err == nil {
+		return false
+	}
+	if isSQLiteCode(err, sqlite3.SQLITE_CONSTRAINT_UNIQUE, sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY) {
+		return true
+	}
+	// Fallback for older drivers/wrappers that do not expose modernc's Error.
+	return strings.Contains(err.Error(), "UNIQUE constraint failed") ||
+		strings.Contains(err.Error(), "PRIMARY KEY")
 }
 
 func normalizeMessageCreatedAt(createdAt time.Time) time.Time {

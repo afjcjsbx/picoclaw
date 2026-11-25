@@ -1,4 +1,5 @@
 import type { ChannelConfig } from "@/api/channels"
+import { asStringArray } from "@/components/channels/channel-array-utils"
 
 export const SECRET_FIELD_MAP = {
   token: "_token",
@@ -53,6 +54,11 @@ export function buildEditConfig(
 ): ChannelConfig {
   const edit: ChannelConfig = { ...config }
 
+  if (channelName === "a2a") {
+    edit._tokens = []
+    edit._tokens_cleared = false
+  }
+
   for (const key of CHANNEL_SECRET_FIELDS[channelName] ?? []) {
     if (!(key in edit)) {
       edit[key] = ""
@@ -64,6 +70,14 @@ export function buildEditConfig(
   }
 
   return edit
+}
+
+export function getA2ATokenUpdate(config: ChannelConfig): string[] | undefined {
+  const tokens = asStringArray(config._tokens)
+  if (config._tokens_cleared === true || tokens.length > 0) {
+    return tokens
+  }
+  return undefined
 }
 
 export function hasConfiguredSecret(

@@ -56,12 +56,19 @@ func validateOAuthConfig(cfg config.MCPServerConfig) error {
 
 // LoginOAuth performs an explicit browser login. Background MCP connections use
 // only saved credentials and never launch a browser or wait for user input.
+//
+// The caller's context bounds the interactive flow; when it carries no
+// deadline, a five-minute default keeps a forgotten login from blocking
+// forever. Picoclaw mcp login passes its --timeout through the context.
 func LoginOAuth(ctx context.Context, name string, cfg config.MCPServerConfig, opts OAuthLoginOptions) error {
 	if err := validateOAuthConfig(cfg); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+	}
 	listener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.OAuth.CallbackPort)))
 	if err != nil {
 		return fmt.Errorf("listen for MCP OAuth callback: %w", err)
@@ -145,7 +152,10 @@ func fetchBrowserCode(
 	if err := validateOAuthURL(authURL); err != nil {
 		return nil, err
 	}
-	parsed, _ := url.Parse(authURL)
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OAuth authorization URL: %w", err)
+	}
 	state := parsed.Query().Get("state")
 	if state == "" {
 		return nil, errors.New("OAuth authorization state is missing")

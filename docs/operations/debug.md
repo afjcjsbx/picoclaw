@@ -1,3 +1,6 @@
+---
+description: "PicoClaw performs multiple complex interactions under the hood for every single request it receives, from routing messages and evaluating complexity."
+---
 # Debugging PicoClaw
 
 PicoClaw performs multiple complex interactions under the hood for every single request it receives—from routing messages and evaluating complexity, to executing tools and adapting to model failures. Being able to see exactly what is happening is crucial, not just for troubleshooting potential issues, but also for truly understanding how the agent operates.
@@ -79,6 +82,8 @@ When `enabled` is `true`, every tool call sends a short message to the chat befo
 🔧 `web_search`
 {"query": "picoclaw release notes"}
 ```
+
+The optional line between the tool name and the argument block is the model's visible prelude for the response that requested the tool—the same text it would show in the chat. It is not the provider's hidden reasoning: PicoClaw keeps `reasoning_content` separate and never uses it for tool feedback.
 
 On channels that cannot edit messages (for example Weixin, QQ, Slack or WhatsApp), every feedback is a new chat message. To keep the chat readable there, the tool calls of one model response are merged into a single message that lists every tool with its arguments, and an explanation that repeats the previous feedback of the same turn is left out. Channels that update one progress message in place (Telegram, Discord, Feishu, Matrix) are unchanged.
 

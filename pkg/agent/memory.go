@@ -7,24 +7,31 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-// MemoryStore provides read access to the agent's persistent memory.
-// - Long-term memory: memory/MEMORY.md
-// - Daily notes: memory/YYYYMM/YYYYMMDD.md
+// MemoryStore renders the agent's persistent memory for the system prompt.
+//   - Long-term memory: memory/MEMORY.md
+//   - User profile: USER.md
+//   - Daily notes: memory/YYYYMM/YYYYMMDD.md
 //
-// Writes go through the agent's generic file tools (write_file / edit_file),
-// which target these paths directly, so the store only reads.
+// Writes go through the memory tool (MEMORY.md, USER.md) or the generic file
+// tools (daily notes), so the store only reads. What it returns is always
+// bounded by the configured limits; the files themselves are never modified.
 type MemoryStore struct {
 	workspace  string
 	memoryDir  string
 	memoryFile string
+	userFile   string
+	cfg        config.MemoryConfig
 }
 
 // NewMemoryStore creates a new MemoryStore with the given workspace path.
@@ -46,12 +53,11 @@ func NewMemoryStore(workspace string) *MemoryStore {
 		workspace:  workspace,
 		memoryDir:  memoryDir,
 		memoryFile: memoryFile,
+		userFile:   filepath.Join(workspace, "USER.md"),
+		// Limits fall back to the config defaults when left at zero.
+		cfg: config.MemoryConfig{Enabled: true, DailyNotesEnabled: true},
 	}
 }
-
-// recentDailyNotesDays is the number of daily notes folded into the memory
-// context and, therefore, into the cached system prompt.
-const recentDailyNotesDays = 3
 
 // dailyNotePath returns the path to the daily note file for t
 // (memory/YYYYMM/YYYYMMDD.md).
@@ -61,75 +67,152 @@ func (ms *MemoryStore) dailyNotePath(t time.Time) string {
 	return filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
 }
 
-// RecentDailyNotePaths returns the paths of the last N daily notes, including
-// entries for files that do not exist yet. It reports exactly the set of files
-// GetRecentDailyNotes reads, so callers can track them for cache invalidation.
-func (ms *MemoryStore) RecentDailyNotePaths(days int) []string {
-	if days <= 0 {
-		return nil
-	}
-	now := time.Now()
-	paths := make([]string, 0, days)
-	for i := range days {
-		paths = append(paths, ms.dailyNotePath(now.AddDate(0, 0, -i)))
-	}
-	return paths
-}
-
-// ReadLongTerm reads the long-term memory (MEMORY.md).
-// Returns empty string if the file doesn't exist.
-func (ms *MemoryStore) ReadLongTerm() string {
-	if data, err := os.ReadFile(ms.memoryFile); err == nil {
-		return string(data)
-	}
-	return ""
-}
-
-// GetRecentDailyNotes returns daily notes from the last N days, newest first.
-// Existing notes are joined with a "\n\n---\n\n" separator.
-func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
-	var sb strings.Builder
-	first := true
-
-	for i := range days {
-		filePath := ms.dailyNotePath(time.Now().AddDate(0, 0, -i))
-
-		if data, err := os.ReadFile(filePath); err == nil {
-			if !first {
-				sb.WriteString("\n\n---\n\n")
-			}
-			sb.Write(data)
-			first = false
-		}
-	}
-
-	return sb.String()
-}
-
-// GetMemoryContext returns formatted memory context for the agent prompt.
-// Includes long-term memory and recent daily notes.
-func (ms *MemoryStore) GetMemoryContext() string {
-	longTerm := ms.ReadLongTerm()
-	recentNotes := ms.GetRecentDailyNotes(recentDailyNotesDays)
-
-	if longTerm == "" && recentNotes == "" {
+// readBounded reads path and fits it to limit characters. It returns "" when
+// the file is missing or blank.
+func (ms *MemoryStore) readBounded(path string, limit int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return ""
 	}
+	rel, err := filepath.Rel(ms.workspace, path)
+	if err != nil {
+		rel = path
+	}
+	return fitMemory(string(data), limit, filepath.ToSlash(rel), path)
+}
+
+// recentDailyNotes returns the daily notes of the last N days, newest first,
+// each bounded to limit characters.
+func (ms *MemoryStore) recentDailyNotes(days, limit int) string {
+	var notes []string
+	for i := range days {
+		path := ms.dailyNotePath(time.Now().AddDate(0, 0, -i))
+		if note := ms.readBounded(path, limit); note != "" {
+			notes = append(notes, note)
+		}
+	}
+	return strings.Join(notes, "\n\n---\n\n")
+}
+
+// Snapshot renders the memory block of the system prompt: long-term memory,
+// the user profile and recent daily notes, each within its configured limit.
+// It returns "" when there is nothing to show.
+func (ms *MemoryStore) Snapshot() string {
+	var sections []string
+	add := func(title, text string) {
+		if text != "" {
+			sections = append(sections, "## "+title+"\n\n"+text)
+		}
+	}
+	if ms.cfg.Enabled {
+		add("Long-term Memory", ms.readBounded(ms.memoryFile, ms.cfg.GetMemoryCharLimit()))
+	}
+	add("USER.md", ms.readBounded(ms.userFile, ms.cfg.GetUserCharLimit()))
+	if ms.cfg.DailyNotesEnabled {
+		add(
+			"Recent Daily Notes",
+			ms.recentDailyNotes(ms.cfg.GetRecentDailyNotesCount(), ms.cfg.GetDailyNotesCharLimit()),
+		)
+	}
+	return strings.Join(sections, "\n\n---\n\n")
+}
+
+// fitMemory bounds text to limit characters without touching the file it came
+// from. Markdown sections (split at heading lines) are kept whole from the
+// newest backwards, which suits files that are appended to; older sections
+// shrink to their heading so the model still sees the index. When even the
+// newest section does not fit, its newest lines are kept. A footer says what
+// was left out and where the full file is. label is the workspace-relative
+// path and path the absolute one, used for the read_file hint.
+func fitMemory(text string, limit int, label, path string) string {
+	text = strings.TrimSpace(text)
+	total := utf8.RuneCountInString(text)
+	if total == 0 || total <= limit {
+		return text
+	}
+
+	type section struct {
+		head string
+		body []string
+	}
+	secs := []section{{}}
+	inFence := false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+		}
+		if !inFence && strings.HasPrefix(line, "#") {
+			secs = append(secs, section{head: line})
+			continue
+		}
+		last := &secs[len(secs)-1]
+		last.body = append(last.body, line)
+	}
+
+	budget := limit
+	for _, sec := range secs {
+		if sec.head != "" {
+			budget -= utf8.RuneCountInString(sec.head) + 1
+		}
+	}
+	if budget <= 0 {
+		// Headings alone fill the budget: fall back to the newest lines.
+		secs, budget = []section{{body: strings.Split(text, "\n")}}, limit
+	}
+
+	kept := make([][]string, len(secs))
+	keptAny := false
+	for i := len(secs) - 1; i >= 0 && budget > 0; i-- {
+		body := secs[i].body
+		if n := runeCountLines(body); n <= budget {
+			kept[i], budget, keptAny = body, budget-n, keptAny || n > 0
+			continue
+		}
+		if !keptAny {
+			// The newest section alone is too big: keep its newest lines.
+			kept[i] = newestLines(body, budget)
+		}
+		break
+	}
 
 	var sb strings.Builder
-
-	if longTerm != "" {
-		sb.WriteString("## Long-term Memory\n\n")
-		sb.WriteString(longTerm)
-	}
-
-	if recentNotes != "" {
-		if longTerm != "" {
-			sb.WriteString("\n\n---\n\n")
+	for i, sec := range secs {
+		if sec.head != "" {
+			sb.WriteString(sec.head + "\n")
 		}
-		sb.WriteString("## Recent Daily Notes\n\n")
-		sb.WriteString(recentNotes)
+		for _, line := range kept[i] {
+			sb.WriteString(line + "\n")
+		}
 	}
+	out := strings.TrimSpace(sb.String())
+	return fmt.Sprintf(
+		"%s\n\n[%s truncated: showing %d of %d chars, older content omitted. Full file: read_file %s]",
+		out, label, utf8.RuneCountInString(out), total, path,
+	)
+}
 
-	return sb.String()
+func runeCountLines(lines []string) int {
+	n := 0
+	for _, l := range lines {
+		n += utf8.RuneCountInString(l) + 1
+	}
+	return n
+}
+
+// newestLines returns the trailing lines that fit in budget characters. A
+// single line longer than the budget is cut from its start.
+func newestLines(lines []string, budget int) []string {
+	n, start := 0, len(lines)
+	for start > 0 {
+		c := utf8.RuneCountInString(lines[start-1]) + 1
+		if n+c > budget {
+			break
+		}
+		n, start = n+c, start-1
+	}
+	if start == len(lines) && len(lines) > 0 {
+		r := []rune(lines[len(lines)-1])
+		return []string{string(r[max(0, len(r)-budget):])}
+	}
+	return lines[start:]
 }

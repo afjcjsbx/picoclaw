@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "MQTT 渠道"
+description: "PicoClaw 支持将任意 MQTT 客户端作为消息渠道。设备或服务向 Broker 发布请求，PicoClaw 订阅后处理并将响应发布回去。"
+---
 # 📡 MQTT 渠道
 
 PicoClaw 支持将任意 MQTT 客户端作为消息渠道。设备或服务向 Broker 发布请求，PicoClaw 订阅后处理并将响应发布回去。
@@ -136,7 +141,7 @@ channel_list:
 
 ## ⚠️ 注意事项
 
-- **TLS**：支持 SSL/TLS（Broker 地址使用 `ssl://`），默认跳过证书验证。
+- **TLS**：支持 SSL/TLS（Broker 地址使用 `ssl://`），默认启用证书验证；仅在可信内网中使用自签名证书的 Broker 时才将 `tls_insecure_skip_verify` 设为 `true`。
 - **流式响应**：流式输出时会向 response topic 发送多条消息，客户端按顺序拼接即为完整回复。
 - **client_id 与会话 ID 的区别**：topic 路径中的 `client_id` 由客户端应用自行设置，用于区分会话；它与 PicoClaw paho 连接 Broker 时使用的客户端 ID 是两个独立的概念。
 - **多实例部署**：若多个 PicoClaw 实例使用相同 `agent_id` 连接同一 Broker，需为每个实例配置不同的 `client_id` 以避免 Broker 层面的冲突。

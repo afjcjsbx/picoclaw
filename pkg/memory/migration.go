@@ -13,7 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-// jsonSession mirrors pkg/session.Session for migration purposes.
+// jsonSession mirrors the legacy sessions/*.json schema for migration purposes.
 type jsonSession struct {
 	Key      string              `json:"key"`
 	Messages []providers.Message `json:"messages"`
@@ -90,6 +90,13 @@ func MigrateFromJSON(
 				"memory: migrate %s: set history: %w",
 				name, setErr,
 			)
+		}
+		// The migrated messages can carry usage the counters have not seen, so
+		// the counters are rebuilt from the file.
+		if resetter, ok := store.(usageCounterResetter); ok {
+			if resetErr := resetter.resetUsageCounters(key); resetErr != nil {
+				return migrated, fmt.Errorf("memory: migrate %s: reset usage: %w", name, resetErr)
+			}
 		}
 
 		if sess.Summary != "" {

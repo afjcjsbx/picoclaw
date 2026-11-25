@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/seahorse"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/session/pruner"
-	"github.com/sipeed/picoclaw/pkg/tokenizer"
 )
 
 // seahorseContextManager adapts seahorse.Engine to agent.ContextManager.
@@ -47,7 +47,16 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	dbPath := agent.Workspace + "/sessions/seahorse.db"
 
 	// Create CompleteFn from provider
-	completeFn := providerToCompleteFn(agent.Provider, agent.Model)
+	target := agent.compactionTarget(al.cfg)
+	// seahorse chooses its own output budget per call, so only thinking applies.
+	extraOpts := map[string]any{}
+	target.applyThinking(extraOpts, agent.ID)
+	completeFn := providerToCompleteFnWithOptions(
+		target.provider,
+		target.model,
+		llmRetryFromConfig(al.cfg),
+		extraOpts,
+	)
 
 	// Create engine
 	engine, err := seahorse.NewEngine(seahorse.Config{
@@ -140,7 +149,7 @@ func (m *seahorseContextManager) pruneStores() (stores []pruner.Store, ok bool) 
 }
 
 // asPruneStore returns the session store as a pruning store when its dynamic
-// type supports deletion (JSONLBackend and SessionManager do).
+// type supports deletion (JSONLBackend does).
 func asPruneStore(store session.SessionStore) pruner.Store {
 	if store == nil {
 		return nil
@@ -205,25 +214,105 @@ func (m *seahorseContextManager) Close() error {
 	return m.closeErr
 }
 
-// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.
-func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse.CompleteFn {
+// providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn. A
+// transient upstream failure is retried with backoff, since seahorse does not
+// retry a failed summarization itself.
+func providerToCompleteFn(provider providers.LLMProvider, model string, retry llmRetry) seahorse.CompleteFn {
+	return providerToCompleteFnWithOptions(provider, model, retry, nil)
+}
+
+// providerToCompleteFnWithOptions is providerToCompleteFn with extra request
+// options (for example thinking_level) merged into every call.
+func providerToCompleteFnWithOptions(
+	provider providers.LLMProvider,
+	model string,
+	retry llmRetry,
+	extra map[string]any,
+) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
-		resp, err := provider.Chat(
+		callOpts := map[string]any{
+			"max_tokens":       opts.MaxTokens,
+			"temperature":      opts.Temperature,
+			"prompt_cache_key": "seahorse",
+		}
+		for k, v := range extra {
+			callOpts[k] = v
+		}
+		resp, err := chatRetryingTransient(
 			ctx,
+			provider,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil, // no tools for summarization
 			model,
-			map[string]any{
-				"max_tokens":       opts.MaxTokens,
-				"temperature":      opts.Temperature,
-				"prompt_cache_key": "seahorse",
-			},
+			callOpts,
+			retry,
 		)
 		if err != nil {
 			return "", err
 		}
 		return resp.Content, nil
 	}
+}
+
+// staticPromptReserveFor estimates the prompt envelope (system prompt and tool
+// definitions) that is added around assembled history. Keeping this out of the
+// history budget prevents an assembly that is within budget only until the
+// system prompt is prepended.
+func (m *seahorseContextManager) staticPromptReserveFor(agent *AgentInstance) int {
+	if m == nil || agent == nil {
+		return 0
+	}
+	reserve := 0
+	if agent.Tools != nil {
+		reserve += EstimateToolDefsTokens(agent.Tools.ToProviderDefs())
+	}
+	if agent.ContextBuilder != nil {
+		// Active skills are deliberately omitted: this is the stable envelope.
+		reserve += agent.ContextBuilder.EstimateSystemTokens("", nil)
+	}
+	return reserve
+}
+
+// sessionAgent resolves the agent that owns a session once, so callers that
+// need both the prompt reserve and the token calibration pay for one lookup.
+func (m *seahorseContextManager) sessionAgent(sessionKey string) *AgentInstance {
+	if m == nil || m.al == nil {
+		return nil
+	}
+	return m.al.agentForSession(sessionKey)
+}
+
+// ContextTokens reports the token size of the stored context, if the manager
+// can expose it. It lets the agent decide to compact based on storage rather
+// than only on the prompt after assembly eviction. The count is calibrated with
+// the session's real/heuristic token ratio when a provider-reported prompt
+// size exists, so code, JSON and tool output are not systematically
+// undercounted.
+func (m *seahorseContextManager) ContextTokens(ctx context.Context, sessionKey string) (int, error) {
+	if m == nil || m.engine == nil {
+		return 0, nil
+	}
+	tokens, err := m.engine.ContextTokens(ctx, sessionKey)
+	if err != nil {
+		return 0, err
+	}
+	ratio := 1.0
+	if m.al != nil {
+		ratio = m.al.usageAnchorRatioForSession(sessionKey)
+	}
+	return calibrateHeuristicTokens(tokens, ratio), nil
+}
+
+// tokenCalibrationFor returns the real/heuristic token ratio observed for the
+// session's last LLM call, or 1 when no usable anchor exists.
+func (m *seahorseContextManager) tokenCalibrationFor(
+	agent *AgentInstance,
+	sessionKey string,
+) float64 {
+	if m == nil || m.al == nil || agent == nil {
+		return 1
+	}
+	return m.al.usageAnchorRatio(agent.ID, sessionKey)
 }
 
 // Assemble builds budget-aware context from seahorse SQLite.
@@ -238,13 +327,32 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	}
 
 	// Reserve space for model response (spec lines 1400-1410)
-	effectiveBudget := budget - req.MaxTokens
-	if effectiveBudget <= 0 {
+	historyBudget := budget - req.MaxTokens
+	if historyBudget <= 0 {
 		// MaxTokens >= budget is a configuration problem
 		// Use 50% as minimum to avoid guaranteed overflow
 		logger.WarnCF("agent", "MaxTokens >= budget, using 50% fallback",
 			map[string]any{"budget": budget, "max_tokens": req.MaxTokens})
-		effectiveBudget = budget / 2
+		historyBudget = budget / 2
+	}
+
+	// Seahorse budgets are in heuristic token units, while the window and the
+	// output reserve are real tokens. Convert first, then subtract the static
+	// prompt envelope (itself a heuristic estimate).
+	agent := m.sessionAgent(req.SessionKey)
+	effectiveBudget := scaleHeuristicBudget(
+		historyBudget,
+		m.tokenCalibrationFor(agent, req.SessionKey),
+	)
+
+	// The assembly budget is for history only. Subtract the static system
+	// prompt and tool definitions here so the assembler does not fill the
+	// entire window with history and leave no room for the prompt envelope.
+	if reserve := m.staticPromptReserveFor(agent); reserve > 0 {
+		effectiveBudget -= reserve
+		if effectiveBudget < 1 {
+			effectiveBudget = 1
+		}
 	}
 
 	result, err := m.engine.Assemble(ctx, req.SessionKey, seahorse.AssembleInput{
@@ -252,6 +360,10 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	})
 	if err != nil {
 		return nil, fmt.Errorf("seahorse assemble: %w", err)
+	}
+	if result == nil {
+		// The engine returns nil for ignored session patterns (heartbeat).
+		return &AssembleResponse{}, nil
 	}
 
 	history := seahorseToProviderMessages(result)
@@ -263,20 +375,100 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	}, nil
 }
 
+// compactBudget returns the target available to compaction. Assembly reserves
+// the static system/tool prompt on top of the output reserve, so compaction
+// must use the same history-only budget or it will settle above what assembly
+// can actually keep. Real-token budgets are converted to seahorse's heuristic
+// units with the session's observed calibration.
+func (m *seahorseContextManager) compactBudget(sessionKey string, budget int) int {
+	if budget <= 0 {
+		return budget
+	}
+	agent := m.sessionAgent(sessionKey)
+	budget = scaleHeuristicBudget(budget, m.tokenCalibrationFor(agent, sessionKey))
+	if reserve := m.staticPromptReserveFor(agent); reserve > 0 && reserve < budget {
+		budget -= reserve
+		if budget < 1 {
+			budget = 1
+		}
+	}
+	return budget
+}
+
+// manualCompactNoopReason classifies a manual compaction that created no
+// summary. It reads the stored context after the leaf pass so a request that
+// was brought under the target is reported as such, not as a generic failure.
+func (m *seahorseContextManager) manualCompactNoopReason(
+	ctx context.Context,
+	req *CompactRequest,
+	result *seahorse.CompactResult,
+	budget int,
+) CompactReason {
+	if result != nil && result.CondensedInProgress {
+		return CompactReasonInProgress
+	}
+	tokens, err := m.engine.ContextTokens(ctx, req.SessionKey)
+	if err != nil {
+		return CompactReasonNoCandidates
+	}
+	if tokens == 0 {
+		return CompactReasonTooShort
+	}
+	if budget > 0 && tokens <= budget {
+		return CompactReasonBelowTarget
+	}
+	return CompactReasonNoCandidates
+}
+
 // Compact compresses conversation history via seahorse summarization.
 func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactRequest) error {
 	if req == nil {
 		return nil
 	}
+	budget := m.compactBudget(req.SessionKey, req.Budget)
+	if req.Outcome != nil {
+		req.Outcome.Target = budget
+	}
 
 	if req.Reason == ContextCompressReasonManual {
-		result, err := m.engine.CompactNow(ctx, req.SessionKey, req.Instructions)
+		var (
+			result *seahorse.CompactResult
+			err    error
+		)
+		if req.Force {
+			result, err = m.engine.CompactNow(
+				ctx,
+				req.SessionKey,
+				req.Instructions,
+				req.ActiveTurnMessages,
+			)
+		} else {
+			result, err = m.engine.CompactNowWithBudget(
+				ctx,
+				req.SessionKey,
+				req.Instructions,
+				budget,
+				req.ActiveTurnMessages,
+			)
+		}
 		if err != nil {
 			return err
 		}
-		if result.LeafSummaries+result.CondensedSummaries == 0 {
+		created := result.LeafSummaries + result.CondensedSummaries
+		if req.Outcome != nil {
+			req.Outcome.LeafSummaries = result.LeafSummaries
+			req.Outcome.CondensedSummaries = result.CondensedSummaries
+			if created > 0 {
+				req.Outcome.Compacted = true
+				req.Outcome.Reason = CompactReasonCompacted
+			} else {
+				req.Outcome.Reason = m.manualCompactNoopReason(ctx, req, result, budget)
+			}
+		}
+		if created == 0 {
 			return ErrNothingToCompact
 		}
+		m.notifyCompaction(ctx, req, result)
 		return nil
 	}
 
@@ -286,24 +478,28 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		result *seahorse.CompactResult
 		err    error
 	)
-	if req.Reason == ContextCompressReasonRetry && req.Budget > 0 {
-		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
+	if req.Reason == ContextCompressReasonRetry && budget > 0 {
+		result, err = m.engine.CompactUntilUnder(ctx, req.SessionKey, budget, req.ActiveTurnMessages)
 	} else {
 		result, err = m.engine.Compact(ctx, req.SessionKey, seahorse.CompactInput{
-			Force:  req.Reason == ContextCompressReasonRetry,
-			Budget: &req.Budget,
+			Force:               req.Reason == ContextCompressReasonRetry,
+			Budget:              &budget,
+			ProtectTailMessages: req.ActiveTurnMessages,
 		})
 	}
 	if err != nil {
 		return err
 	}
 	m.notifyCompaction(ctx, req, result)
+	if req.Reason == ContextCompressReasonThreshold &&
+		(result == nil || result.LeafSummaries+result.CondensedSummaries == 0) {
+		return ErrNothingToCompact
+	}
 	return nil
 }
 
-// notifyCompaction reports a summarization/compaction notice to the session's
-// channel when seahorse actually created summaries. It is a no-op unless tool
-// feedback is enabled (enforced by notifyContextFeedback).
+// notifyCompaction emits the summarization runtime event and reports a notice
+// to the session's channel when seahorse actually created summaries.
 func (m *seahorseContextManager) notifyCompaction(
 	ctx context.Context,
 	req *CompactRequest,
@@ -315,6 +511,17 @@ func (m *seahorseContextManager) notifyCompaction(
 	if result.LeafSummaries+result.CondensedSummaries <= 0 {
 		return
 	}
+	m.al.emitEvent(
+		runtimeevents.KindAgentSessionSummarize,
+		m.al.newTurnEventScope(
+			m.al.eventAgentIDForSession(ctx, req.SessionKey),
+			req.SessionKey,
+			nil,
+		).meta(0, "seahorseCompact", "turn.session.summarize"),
+		SessionSummarizePayload{
+			SummarizedMessages: result.LeafSummaries + result.CondensedSummaries,
+		},
+	)
 	content := formatContextSummaryCounts(result.LeafSummaries, result.CondensedSummaries)
 	m.al.notifyContextFeedbackFromCtx(ctx, req.SessionKey, content)
 }
@@ -326,9 +533,21 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 		return nil
 	}
 
-	msg := providerToSeahorseMessage(req.Message)
+	msg := providerToSeahorseMessageWithProvider(m.providerForSession(req.SessionKey), req.Message)
 	_, err := m.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg})
 	return err
+}
+
+// providerForSession resolves the provider that will send the session's next
+// prompt, so seahorse token counts match what the provider actually receives.
+func (m *seahorseContextManager) providerForSession(sessionKey string) providers.LLMProvider {
+	if m == nil || m.al == nil {
+		return nil
+	}
+	if agent := m.al.agentForSession(sessionKey); agent != nil {
+		return agent.Provider
+	}
+	return nil
 }
 
 // Clear removes all stored context for a session (seahorse DB + JSONL).
@@ -360,17 +579,19 @@ func (m *seahorseContextManager) bootstrapSession(ctx context.Context, sessionKe
 
 	history, err := m.sessions.GetHistory(ctx, sessionKey)
 	if err != nil {
+		// Do not treat a read failure as an empty history: that would delete
+		// SQLite state while the canonical JSONL may still exist.
 		warnSessionStoreError(sessionKey, "get history", err)
-		history = nil
-	}
-	if len(history) == 0 {
 		return
 	}
 
-	// Convert provider messages to seahorse messages
+	// Convert provider messages to seahorse messages. An empty history is
+	// passed through on purpose: Bootstrap treats it as a cleared session and
+	// invalidates stale SQLite rows.
+	provider := m.providerForSession(sessionKey)
 	msgs := make([]seahorse.Message, len(history))
 	for i, h := range history {
-		msgs[i] = providerToSeahorseMessage(h)
+		msgs[i] = providerToSeahorseMessageWithProvider(provider, h)
 	}
 
 	if err := m.engine.Bootstrap(ctx, sessionKey, msgs); err != nil {
@@ -383,12 +604,24 @@ func (m *seahorseContextManager) bootstrapSession(ctx context.Context, sessionKe
 
 // providerToSeahorseMessage converts a providers.Message to a seahorse.Message.
 func providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
+	return providerToSeahorseMessageWithProvider(nil, msg)
+}
+
+// providerToSeahorseMessageWithProvider counts only what the provider will
+// send, so reasoning that is stripped on replay does not inflate seahorse's
+// budgets or make compaction run earlier than necessary. ReasoningContent is
+// always stored: DeepSeek/MiMo replay it for tool rounds and it is part of the
+// audit trail. Only TokenCount is provider-dependent.
+func providerToSeahorseMessageWithProvider(
+	provider providers.LLMProvider,
+	msg protocoltypes.Message,
+) seahorse.Message {
 	result := seahorse.Message{
 		Role:             msg.Role,
 		Content:          msg.Content,
 		ModelName:        msg.ModelName,
 		ReasoningContent: msg.ReasoningContent,
-		TokenCount:       tokenizer.EstimateMessageTokens(msg),
+		TokenCount:       estimateMessageTokensForProvider(provider, msg),
 		CreatedAt:        normalizeSeahorseMessageCreatedAt(msg.CreatedAt),
 	}
 

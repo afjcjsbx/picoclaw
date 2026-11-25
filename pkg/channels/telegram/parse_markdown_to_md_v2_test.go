@@ -56,6 +56,31 @@ func Test_markdownToTelegramMarkdownV2(t *testing.T) {
 			input:    "<Market Capitalization>",
 			expected: "\\<Market Capitalization\\>",
 		},
+		{
+			name:     "link label with period gets escaped",
+			input:    "Please refer to the PicoClaw website. ([picoclaw.io](https://picoclaw.io/))",
+			expected: "Please refer to the PicoClaw website\\. \\([picoclaw\\.io](https://picoclaw.io/)\\)",
+		},
+		{
+			name:     "blockquote with link gets escaped",
+			input:    "> **Please refer to the source code.** ([github.com](https://github.com/sipeed/picoclaw))",
+			expected: "> *Please refer to the source code\\.* \\([github\\.com](https://github.com/sipeed/picoclaw)\\)",
+		},
+		{
+			name:     "fenced code block keeps backslashes",
+			input:    "```\nC:\\Users\\name\n```",
+			expected: "```\nC:\\\\Users\\\\name\n```",
+		},
+		{
+			name:     "inline code keeps backslashes",
+			input:    "`C:\\Users`",
+			expected: "`C:\\\\Users`",
+		},
+		{
+			name:     "shell redirection in fenced code block stays readable",
+			input:    "```json\n{\"command\": \"ls 2>/dev/null\"}\n```",
+			expected: "```json\n{\"command\": \"ls 2>/dev/null\"}\n```",
+		},
 	}
 
 	for _, tc := range cases {

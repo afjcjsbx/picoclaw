@@ -50,6 +50,7 @@ func TestNewPicoclawCommand(t *testing.T) {
 		"skills",
 		"status",
 		"update",
+		"usage",
 		"version",
 	}
 
@@ -61,5 +62,28 @@ func TestNewPicoclawCommand(t *testing.T) {
 		assert.True(t, found, "unexpected subcommand %q", subcmd.Name())
 
 		assert.False(t, subcmd.Hidden)
+	}
+}
+
+func TestMachineOutputRequested(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "json flag", args: []string{"usage", "--json"}, want: true},
+		{name: "json true", args: []string{"usage", "--json=true"}, want: true},
+		{name: "json one", args: []string{"usage", "--json=1"}, want: true},
+		{name: "json false", args: []string{"usage", "--json=false"}, want: false},
+		{name: "no json", args: []string{"usage"}, want: false},
+		{name: "json as value of session", args: []string{"usage", "--session", "--json"}, want: false},
+		{name: "root flag before command", args: []string{"--no-color", "usage", "--json"}, want: true},
+		{name: "command without json flag", args: []string{"agent", "-m", "--json"}, want: false},
+		{name: "unknown command", args: []string{"nope", "--json"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, machineOutputRequested(tt.args))
+		})
 	}
 }

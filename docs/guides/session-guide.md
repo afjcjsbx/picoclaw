@@ -1,12 +1,20 @@
+---
+description: "PicoClaw sessions decide which messages share the same conversation history."
+---
 # Session Guide
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 PicoClaw sessions decide which messages share the same conversation history.
 If your bot "remembers too much" or "forgets too much", the first thing to check is the session configuration.
 
 This guide is for users configuring session behavior in `config.json`.
 For implementation details, see the architecture docs instead.
+
+The optional `seahorse` context manager adds a SQLite index, multi-level
+summaries, and retrieval tools on top of the JSONL history. Its behavior,
+configuration, and limits are documented in
+[Seahorse Memory](../architecture/seahorse-memory.md).
 
 ## What Sessions Control
 
@@ -128,8 +136,17 @@ You usually do not need a special workaround for Telegram forums.
 
 ### Summaries happen per session
 
-`summarize_message_threshold` and `summarize_token_percent` apply inside each session independently.
-If you create smaller sessions, summarization also happens on smaller per-session histories.
+`summarize_token_percent` applies inside each session independently: summarization starts once the prompt (system prompt, summary, history and tool definitions) reaches that percentage of the usable context window (`context_window - max_tokens`). The number of messages does not matter. The check runs right before every LLM call, including in the middle of a long tool loop, and the turn waits for the summary before continuing from the compacted context.
+If you create smaller sessions, each one stays further from the threshold. `summarize_message_threshold` is deprecated and ignored.
+
+The legacy context manager also protects a head and a tail instead of keeping only the last four messages:
+
+- `protect_first_n` (default `1`) keeps the first conversation messages verbatim; the opening user instruction is never summarized. `0` disables head protection.
+- `protect_last_n` (default `4`) is the minimum number of trailing messages kept verbatim. The token budget can keep more. `0` disables the count floor.
+- `min_tail_user_messages` (default `1`) guarantees at least that many real `user` messages in the tail. `0` disables the guarantee.
+- `tail_token_budget` (default auto) walks the tail backwards by estimated tokens. Auto is 10% of the usable window (`context_window - max_tokens`), clamped to 2,000-32,000 and to half the window. Set an explicit token count to override it, or `0` to disable the token budget and keep only the message/user-message floors.
+
+These values live under `agents.defaults` and can also be set with the matching `PICOCLAW_AGENTS_DEFAULTS_*` environment variables. A larger head/tail keeps more context verbatim and leaves less to summarize; a too-large tail can prevent compaction on short sessions. The cut is always aligned to a Turn boundary, so when the only safe boundary is later than the target the kept tail can be shorter than `protect_last_n`. If the protected tail itself is over budget, old tool outputs inside it are archived under `<workspace>/.artifacts/evicted/` and replaced by a stub pointing at the file, so a single huge tool result does not force the whole conversation to be dropped. This is best effort: only tool results large enough to prune are candidates, and a tail made of user/assistant messages can stay above the budget.
 
 ### Compact a session on demand
 
@@ -137,15 +154,21 @@ Summarization normally starts by itself, but you can trigger it from any chat ch
 
 ```text
 /compact
+/compact --force
 /compact focus on database migration
+/compact --force focus on database migration
 ```
 
 `/compact` summarizes the older part of the current session right away and keeps the most recent messages.
 Any text after the command is passed to the summarizer as a hint about which details to preserve.
 The command works with both the `legacy` and `seahorse` context managers and only affects the session it is sent in.
+With Seahorse, `/compact` runs one leaf pass and the condensed loop synchronously; see [Seahorse Memory](../architecture/seahorse-memory.md#compactnow-manual-compact) for the exact sequence and its edge cases.
 
-PicoClaw replies `Context compacted.` when it summarized something, or `Nothing to compact yet.` when the history is still too short.
-If an automatic summarization of the same session is already running, `/compact` reports that instead of starting a second one.
+By default the manual command is budget-aware: if the session is already within the compaction target, PicoClaw replies with the measured history tokens and target, for example `Context already within the compaction target (3300/3327 history tokens). No new summary was needed. Use /compact --force to compact anyway.` Replies are specific for a conversation that is too short, no compactable history, or a compaction already running.
+Use `/compact --force` to ignore the target and run leaf plus condensed compaction anyway.
+On success the reply reports the created summaries and the history-token change when available.
+With the `legacy` manager, if an automatic summarization of the same session is already running, `/compact` reports that instead of starting a second one.
+With Seahorse, a running background condensed loop is reported as `A compaction is already running. Try again shortly.`
 
 ## Common Recipes
 

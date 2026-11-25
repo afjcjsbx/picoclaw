@@ -37,6 +37,11 @@ func outboundContextFromInbound(
 	if outboundCtx.ReplyToMessageID == "" {
 		outboundCtx.ReplyToMessageID = replyToMessageID
 	}
+	if outboundCtx.ReplyToMessageID == "" && outboundCtx.MessageID != "" {
+		// Thread the response to the message that triggered the turn so the
+		// answer stays attached to the originating question in the chat.
+		outboundCtx.ReplyToMessageID = outboundCtx.MessageID
+	}
 	return outboundCtx
 }
 
@@ -212,7 +217,10 @@ func toolFeedbackExplanationFromMessages(messages []providers.Message) string {
 }
 
 func toolFeedbackArgsPreview(args map[string]any, maxLen int) string {
-	argsJSON := utils.FormatArgsJSON(args, true, false)
+	// Keep the preview human-readable: HTML escaping would turn "2>" into
+	// "\u003e", which Telegram MarkdownV2 renders as "u003e" because the
+	// backslash is consumed as an escape character inside code blocks.
+	argsJSON := utils.FormatArgsJSON(args, true, true)
 	return utils.Truncate(argsJSON, maxLen)
 }
 
@@ -359,6 +367,28 @@ func inferMediaType(filename, contentType string) string {
 
 func normalizedInboundContext(msg bus.InboundMessage) bus.InboundContext {
 	return bus.NormalizeInboundMessage(msg).Context
+}
+
+const (
+	cronSessionKeyPrefix = "agent:cron-"
+	// picoCronChatPrefix is the pico chat ID of a "[cron]" WebUI entry: the web
+	// backend lists a cron session under its key with ":" replaced by "_".
+	picoCronChatPrefix = "pico:agent_cron-"
+)
+
+// effectiveSessionKey returns the explicit session key of msg. A pico chat
+// opened from a "[cron]" WebUI entry maps back to that cron run's session, so
+// the conversation continues in place instead of forking into a new session
+// that shares the entry's pico ID and stays hidden behind the cron one.
+func effectiveSessionKey(msg bus.InboundMessage) string {
+	if msg.SessionKey != "" {
+		return msg.SessionKey
+	}
+	inbound := normalizedInboundContext(msg)
+	if inbound.Channel == "pico" && strings.HasPrefix(inbound.ChatID, picoCronChatPrefix) {
+		return cronSessionKeyPrefix + strings.TrimPrefix(inbound.ChatID, picoCronChatPrefix)
+	}
+	return ""
 }
 
 func resolveScopeKey(routeSessionKey, msgSessionKey string) string {
@@ -544,6 +574,26 @@ func responseReasoningContent(response *providers.LLMResponse) string {
 		return response.ReasoningContent
 	}
 	return ""
+}
+
+func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	if usage.PromptTokens <= 0 && usage.CompletionTokens <= 0 && usage.TotalTokens <= 0 && usage.CostUSD <= 0 {
+		return nil
+	}
+	return &bus.TokenUsage{
+		InputTokens:         usage.PromptTokens,
+		OutputTokens:        usage.CompletionTokens,
+		TotalTokens:         usage.TotalTokens,
+		CacheReadTokens:     usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
+		Requests:            usage.Requests,
+		ContextTokens:       usage.ContextTokens,
+		DurationMS:          usage.DurationMS,
+	}
 }
 
 func shallowCloneLLMOptions(opts map[string]any) map[string]any {

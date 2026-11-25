@@ -1,6 +1,7 @@
 import {
   IconFileCode,
   IconFolder,
+  IconPuzzle,
   IconSparkles,
   IconWorld,
 } from "@tabler/icons-react"
@@ -35,6 +36,9 @@ export function OriginIcon({ origin }: { origin: string }) {
   }
   if (origin === "third_party") {
     return <IconWorld className="size-3.5" />
+  }
+  if (origin === "plugin") {
+    return <IconPuzzle className="size-3.5" />
   }
   if (origin === "manual") {
     return <IconFolder className="size-3.5" />

@@ -51,11 +51,16 @@ type modelResponse struct {
 	RPM                 int                         `json:"rpm,omitempty"`
 	MaxTokensField      string                      `json:"max_tokens_field,omitempty"`
 	RequestTimeout      int                         `json:"request_timeout,omitempty"`
+	ProviderSort        string                      `json:"provider_sort,omitempty"`
+	MaxTokens           int                         `json:"max_tokens,omitempty"`
+	Temperature         *float64                    `json:"temperature,omitempty"`
+	ContextWindow       int                         `json:"context_window,omitempty"`
 	ThinkingLevel       string                      `json:"thinking_level,omitempty"`
 	ToolSchemaTransform string                      `json:"tool_schema_transform,omitempty"`
 	Streaming           config.ModelStreamingConfig `json:"streaming,omitempty"`
 	ExtraBody           map[string]any              `json:"extra_body,omitempty"`
 	CustomHeaders       map[string]string           `json:"custom_headers,omitempty"`
+	SessionHeader       string                      `json:"session_header,omitempty"`
 	// Meta
 	Enabled             bool   `json:"enabled"`
 	Available           bool   `json:"available"`
@@ -99,6 +104,11 @@ func normalizeStoredModelConfig(mc *config.ModelConfig, defaultProvider string) 
 	authMethod := strings.ToLower(strings.TrimSpace(mc.AuthMethod))
 	if authMethod != mc.AuthMethod {
 		mc.AuthMethod = authMethod
+		changed = true
+	}
+	providerSort := strings.ToLower(strings.TrimSpace(mc.ProviderSort))
+	if providerSort != mc.ProviderSort {
+		mc.ProviderSort = providerSort
 		changed = true
 	}
 
@@ -152,6 +162,7 @@ func normalizeIncomingModelConfig(mc *config.ModelConfig, defaultProvider string
 	mc.Model = strings.TrimSpace(mc.Model)
 	mc.Provider = strings.TrimSpace(mc.Provider)
 	mc.AuthMethod = strings.ToLower(strings.TrimSpace(mc.AuthMethod))
+	mc.ProviderSort = strings.ToLower(strings.TrimSpace(mc.ProviderSort))
 	if mc.Provider == "" {
 		mc.Provider, mc.Model = providers.SplitModelProviderAndID(mc.Model, defaultProvider)
 	} else {
@@ -631,11 +642,16 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			RPM:                 m.RPM,
 			MaxTokensField:      m.MaxTokensField,
 			RequestTimeout:      m.RequestTimeout,
+			ProviderSort:        m.ProviderSort,
+			MaxTokens:           m.MaxTokens,
+			Temperature:         m.Temperature,
+			ContextWindow:       m.ContextWindow,
 			ThinkingLevel:       m.ThinkingLevel,
 			ToolSchemaTransform: m.ToolSchemaTransform,
 			Streaming:           m.Streaming,
 			ExtraBody:           m.ExtraBody,
 			CustomHeaders:       m.CustomHeaders,
+			SessionHeader:       m.SessionHeader,
 			Enabled:             m.Enabled,
 			Available:           modelStatuses[i].Available,
 			Status:              modelStatuses[i].Status,
@@ -725,6 +741,7 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -809,8 +826,28 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	} else if len(mc.CustomHeaders) == 0 {
 		mc.CustomHeaders = nil
 	}
+	// Preserve the existing session_header when the caller omits it. Older
+	// clients may leave the field out, and an unconditional copy from the
+	// decoded body would silently wipe it on every save. An explicit ""
+	// clears it.
+	if _, ok := rawFields["session_header"]; !ok {
+		mc.SessionHeader = cfg.ModelList[idx].SessionHeader
+	}
 	if _, ok := rawFields["tool_schema_transform"]; !ok {
 		mc.ToolSchemaTransform = cfg.ModelList[idx].ToolSchemaTransform
+	}
+	if _, ok := rawFields["provider_sort"]; !ok {
+		mc.ProviderSort = cfg.ModelList[idx].ProviderSort
+	}
+	// Clients that predate the per-model sampling fields must not wipe them.
+	if _, ok := rawFields["max_tokens"]; !ok {
+		mc.MaxTokens = cfg.ModelList[idx].MaxTokens
+	}
+	if _, ok := rawFields["temperature"]; !ok {
+		mc.Temperature = cfg.ModelList[idx].Temperature
+	}
+	if _, ok := rawFields["context_window"]; !ok {
+		mc.ContextWindow = cfg.ModelList[idx].ContextWindow
 	}
 	if _, ok := rawFields["streaming"]; !ok {
 		mc.Streaming = cfg.ModelList[idx].Streaming
@@ -890,6 +927,7 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]any{"status": "ok"}
@@ -963,6 +1001,7 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -1059,6 +1098,7 @@ func (h *Handler) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -1108,6 +1148,7 @@ func (h *Handler) handleUpdateDefaultChain(w http.ResponseWriter, r *http.Reques
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
+	h.reloadGatewayAfterModelSave(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(defaultChainResponse{
@@ -1600,12 +1641,21 @@ func probeModelConnectivity(m *config.ModelConfig) bool {
 		return probeOpenAICompatibleModel(apiBase, modelID, m.APIKey())
 	case "github-copilot":
 		return probeTCPService(apiBase)
+	case "anthropic", "anthropic-messages", "alibaba-coding-anthropic":
+		if hasLocalAPIBase(apiBase) {
+			// Local Anthropic-compatible endpoint (for example a proxy): the
+			// model listing contract may not be implemented, so only check TCP.
+			return probeTCPService(apiBase)
+		}
+		return probeAnthropicModel(apiBase, modelID, m.APIKey())
 	case "claude-cli":
 		return probeCommandAvailable("claude")
 	case "codex-cli":
 		return probeCommandAvailable("codex")
+	case "gemini":
+		return probeGeminiModel(apiBase, modelID, m.APIKey())
 	default:
-		// For remote providers (OpenAI, Anthropic, Gemini, DeepSeek, etc.),
+		// For remote providers (OpenAI, Anthropic, DeepSeek, etc.),
 		// make a real GET /models request to verify connectivity and credentials.
 		if apiBase != "" {
 			return probeOpenAICompatibleModel(apiBase, modelID, m.APIKey())

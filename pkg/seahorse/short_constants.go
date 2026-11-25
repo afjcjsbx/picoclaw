@@ -27,4 +27,12 @@ const (
 	// With a 200k token context window and 75% threshold, ~20 iterations is enough
 	// for any realistic scenario. If exceeded, the issue is logged as a warning.
 	MaxCompactIterations int = 20
+
+	// IngestBatchChunkSize is the maximum number of messages written inside a
+	// single transaction by AddMessagesBatch. SQLite allows one writer at a
+	// time, so a whole-history bootstrap in one transaction would hold the
+	// write lock for the duration of the entire batch and starve concurrent
+	// writers (a second ingest, compaction) into SQLITE_BUSY. Chunking bounds
+	// the lock window while keeping each chunk atomic.
+	IngestBatchChunkSize int = 200
 )

@@ -27,6 +27,9 @@ type Definition struct {
 	Aliases     []string
 	SubCommands []SubCommand // optional; when set, Executor routes to sub-command handlers
 	Handler     Handler      // for simple commands without sub-commands
+	// ReadOnly marks commands that only inspect runtime state and can safely
+	// run while another turn is active. Mutating commands must leave this false.
+	ReadOnly bool
 }
 
 // EffectiveUsage returns the usage string. When SubCommands are present,

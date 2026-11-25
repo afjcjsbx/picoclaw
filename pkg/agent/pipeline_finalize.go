@@ -47,6 +47,7 @@ func (p *Pipeline) Finalize(
 			Content:          finalContent,
 			ModelName:        exec.llmModelName,
 			ReasoningContent: responseReasoningContent(exec.response),
+			Usage:            ts.GetTurnUsage(),
 		}
 		warnSessionStoreError(
 			ts.sessionKey,
@@ -75,12 +76,12 @@ func (p *Pipeline) Finalize(
 			&CompactRequest{
 				SessionKey: ts.sessionKey,
 				Reason:     ContextCompressReasonSummarize,
-				Budget:     ts.agent.ContextWindow,
+				Budget:     usableContextTokens(ts.agent),
 			},
 		)
 	}
 
-	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)
+	contextUsage, _ := al.currentContextUsage(ts.agent, ts.sessionKey)
 	streamErr := finalizeConfiguredStreamingLLM(turnCtx, ts, exec, finalContent, contextUsage)
 	// If streaming never became visible, keep the legacy Pico interim publish path
 	// so the final answer is still delivered outside normal SendResponse.
@@ -90,6 +91,7 @@ func (p *Pipeline) Finalize(
 			modelName: exec.llmModelName,
 		})
 		msg.ContextUsage = contextUsage
+		msg.Usage = tokenUsageFromProviders(ts.GetTurnUsage())
 		markFinalOutbound(&msg)
 		_ = al.bus.PublishOutbound(turnCtx, msg)
 	}

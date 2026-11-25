@@ -7,10 +7,23 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
+// EstimateOptions controls which parts of a message are counted.
+type EstimateOptions struct {
+	// IncludeReasoning counts ReasoningContent. Keep this true unless the
+	// provider strips reasoning before sending the request.
+	IncludeReasoning bool
+}
+
 // EstimateMessageTokens estimates the token count for a single message,
 // including Content, ReasoningContent, ToolCalls arguments, ToolCallID
 // metadata, and Media items. Uses a heuristic of 2.5 characters per token.
 func EstimateMessageTokens(msg providers.Message) int {
+	return EstimateMessageTokensWithOptions(msg, EstimateOptions{IncludeReasoning: true})
+}
+
+// EstimateMessageTokensWithOptions estimates a message using the supplied
+// options, so callers can exclude content the target provider never sends.
+func EstimateMessageTokensWithOptions(msg providers.Message, opts EstimateOptions) int {
 	contentChars := utf8.RuneCountInString(msg.Content)
 
 	// SystemParts are structured system blocks used for cache-aware adapters.
@@ -32,7 +45,9 @@ func EstimateMessageTokens(msg providers.Message) int {
 		chars = systemPartsChars
 	}
 
-	chars += utf8.RuneCountInString(msg.ReasoningContent)
+	if opts.IncludeReasoning {
+		chars += utf8.RuneCountInString(msg.ReasoningContent)
+	}
 
 	for _, tc := range msg.ToolCalls {
 		chars += len(tc.ID) + len(tc.Type)

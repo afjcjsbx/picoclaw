@@ -1,3 +1,6 @@
+---
+description: "The skills tool configures skill discovery and installation via registries like ClawHub and GitHub."
+---
 # Skills tools
 
 The skills tool configures skill discovery and installation via registries like ClawHub and GitHub.

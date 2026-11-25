@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -195,6 +196,7 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 		RPM:                 60,
 		MaxTokensField:      "max_completion_tokens",
 		RequestTimeout:      30,
+		ProviderSort:        "throughput",
 		ThinkingLevel:       "high",
 		ToolSchemaTransform: "simple",
 		Streaming:           ModelStreamingConfig{Enabled: true},
@@ -224,6 +226,9 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 	if primary.RequestTimeout != 30 {
 		t.Errorf("expected request_timeout preserved, got %d", primary.RequestTimeout)
 	}
+	if primary.ProviderSort != "throughput" {
+		t.Errorf("expected provider_sort preserved, got %q", primary.ProviderSort)
+	}
 	if primary.ThinkingLevel != "high" {
 		t.Errorf("expected thinking_level preserved, got %q", primary.ThinkingLevel)
 	}
@@ -244,6 +249,9 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 	}
 	if additional.RPM != 60 {
 		t.Errorf("expected additional rpm preserved, got %d", additional.RPM)
+	}
+	if additional.ProviderSort != "throughput" {
+		t.Errorf("expected provider_sort preserved, got %q", additional.ProviderSort)
 	}
 	if additional.ToolSchemaTransform != "simple" {
 		t.Errorf("expected additional tool_schema_transform preserved, got %q", additional.ToolSchemaTransform)
@@ -376,5 +384,69 @@ func TestMergeAPIKeys(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExpandMultiKeyModels_PrimaryKeepsKeysAndEnabled(t *testing.T) {
+	models := []*ModelConfig{
+		{
+			ModelName: "gpt-4",
+			Model:     "openai/gpt-4o",
+			APIKeys:   SimpleSecureStrings("key1", "key2", "key3"),
+			Fallbacks: []string{"claude-3"},
+			Enabled:   true,
+		},
+	}
+
+	result := expandMultiKeyModels(models)
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 models, got %d", len(result))
+	}
+
+	primary := result[2]
+	if len(primary.APIKeys) != 3 {
+		t.Errorf("primary should keep all 3 api_keys for persistence, got %d", len(primary.APIKeys))
+	}
+	if primary.APIKey() != "key1" {
+		t.Errorf("expected primary api_key 'key1', got %q", primary.APIKey())
+	}
+	if !primary.Enabled {
+		t.Error("primary should keep enabled=true")
+	}
+	wantFallbacks := []string{"gpt-4__key_1", "gpt-4__key_2", "claude-3"}
+	if !slices.Equal(primary.Fallbacks, wantFallbacks) {
+		t.Errorf("expected fallbacks %v, got %v", wantFallbacks, primary.Fallbacks)
+	}
+
+	for _, virtual := range result[:2] {
+		if !virtual.isVirtual {
+			t.Errorf("%s should be virtual", virtual.ModelName)
+		}
+		if virtual.Enabled {
+			t.Errorf("virtual model %s should not be enabled", virtual.ModelName)
+		}
+	}
+}
+
+func TestExpandMultiKeyModels_PreservesSamplingFields(t *testing.T) {
+	temp := 0.2
+	modelCfg := &ModelConfig{
+		ModelName:     "gpt-4",
+		Model:         "openai/gpt-4o",
+		MaxTokens:     2048,
+		Temperature:   &temp,
+		ContextWindow: 32000,
+		APIKeys:       SimpleSecureStrings("key0", "key1"),
+	}
+
+	for i, got := range expandMultiKeyModels([]*ModelConfig{modelCfg}) {
+		if got.MaxTokens != 2048 || got.ContextWindow != 32000 {
+			t.Errorf("entry %d: max_tokens/context_window = %d/%d, want 2048/32000",
+				i, got.MaxTokens, got.ContextWindow)
+		}
+		if got.Temperature == nil || *got.Temperature != 0.2 {
+			t.Errorf("entry %d: temperature = %v, want 0.2", i, got.Temperature)
+		}
 	}
 }

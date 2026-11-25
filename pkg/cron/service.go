@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,11 +32,21 @@ type CronPayload struct {
 	To      string `json:"to,omitempty"`
 }
 
+// CronRunRecord is one past execution of a job. The scheduler keeps a small
+// bounded history so the dashboard can show recent runs without parsing logs.
+type CronRunRecord struct {
+	RunAtMS    int64  `json:"runAtMs"`
+	Status     string `json:"status"`
+	Error      string `json:"error,omitempty"`
+	DurationMS int64  `json:"durationMs"`
+}
+
 type CronJobState struct {
-	NextRunAtMS *int64 `json:"nextRunAtMs,omitempty"`
-	LastRunAtMS *int64 `json:"lastRunAtMs,omitempty"`
-	LastStatus  string `json:"lastStatus,omitempty"`
-	LastError   string `json:"lastError,omitempty"`
+	NextRunAtMS *int64          `json:"nextRunAtMs,omitempty"`
+	LastRunAtMS *int64          `json:"lastRunAtMs,omitempty"`
+	LastStatus  string          `json:"lastStatus,omitempty"`
+	LastError   string          `json:"lastError,omitempty"`
+	RunHistory  []CronRunRecord `json:"runHistory,omitempty"`
 }
 
 type CronJob struct {
@@ -57,8 +68,14 @@ type CronStore struct {
 
 type JobHandler func(job *CronJob) (string, error)
 
-// ErrJobRunning is returned by RunJob when the job is already executing.
-var ErrJobRunning = errors.New("job is already running")
+// cronRunHistoryLimit caps how many past runs are retained per job.
+const cronRunHistoryLimit = 10
+
+var (
+	ErrJobRunning        = errors.New("job is already running")
+	ErrJobNotFound       = errors.New("job not found")
+	ErrServiceNotRunning = errors.New("cron service is not running")
+)
 
 type CronService struct {
 	storePath string
@@ -291,7 +308,7 @@ func (cs *CronService) RunJob(jobID string) error {
 	defer cs.mu.Unlock()
 
 	if !cs.running {
-		return errors.New("cron service is not running")
+		return ErrServiceNotRunning
 	}
 	found := false
 	for i := range cs.store.Jobs {
@@ -301,7 +318,7 @@ func (cs *CronService) RunJob(jobID string) error {
 		}
 	}
 	if !found {
-		return errors.New("job not found")
+		return ErrJobNotFound
 	}
 	if !cs.claimJobUnsafe(jobID) {
 		return ErrJobRunning
@@ -392,6 +409,13 @@ func (cs *CronService) executeJobByID(jobID string) {
 		job.State.LastStatus = "ok"
 		job.State.LastError = ""
 	}
+
+	appendCronRun(job, CronRunRecord{
+		RunAtMS:    startTime,
+		Status:     job.State.LastStatus,
+		Error:      job.State.LastError,
+		DurationMS: execDuration,
+	})
 
 	// Recurring schedules were already advanced in checkJobs; only one-time
 	// jobs need their lifecycle finalized here.
@@ -694,12 +718,46 @@ func (cs *CronService) replaceStoreUnsafe(next *CronStore) {
 	}
 }
 
+// validateCronSchedule rejects schedules that cannot produce a next run.
+func validateCronSchedule(schedule CronSchedule) error {
+	switch schedule.Kind {
+	case "at":
+		if schedule.AtMS == nil {
+			return errors.New("at schedule requires atMs")
+		}
+	case "every":
+		if schedule.EveryMS == nil || *schedule.EveryMS <= 0 {
+			return errors.New("every schedule requires a positive everyMs")
+		}
+	case "cron":
+		expr := strings.TrimSpace(schedule.Expr)
+		if expr == "" {
+			return errors.New("cron schedule requires an expression")
+		}
+		if !gronx.IsValid(expr) {
+			return fmt.Errorf("invalid cron expression %q", schedule.Expr)
+		}
+		if schedule.TZ != "" {
+			if _, err := time.LoadLocation(schedule.TZ); err != nil {
+				return fmt.Errorf("invalid timezone %q: %w", schedule.TZ, err)
+			}
+		}
+	default:
+		return fmt.Errorf("unknown schedule kind %q", schedule.Kind)
+	}
+	return nil
+}
+
 func (cs *CronService) AddJob(
 	name string,
 	schedule CronSchedule,
 	message string,
 	channel, to string,
 ) (*CronJob, error) {
+	if err := validateCronSchedule(schedule); err != nil {
+		return nil, err
+	}
+
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -761,6 +819,9 @@ func (cs *CronService) UpdateJob(job *CronJob) error {
 		if cs.store.Jobs[i].ID == job.ID {
 			previous := cs.store.Jobs[i]
 			updated := cloneCronJob(*job)
+			if len(updated.State.RunHistory) == 0 && len(previous.State.RunHistory) > 0 {
+				updated.State.RunHistory = append([]CronRunRecord(nil), previous.State.RunHistory...)
+			}
 			now := time.Now().UnixMilli()
 			updated.UpdatedAtMS = now
 			if updated.Enabled {
@@ -777,7 +838,7 @@ func (cs *CronService) UpdateJob(job *CronJob) error {
 			return cs.saveStoreUnsafe()
 		}
 	}
-	return fmt.Errorf("job not found")
+	return ErrJobNotFound
 }
 
 func cloneCronJob(job CronJob) CronJob {
@@ -798,7 +859,23 @@ func cloneCronJob(job CronJob) CronJob {
 		lastRunAtMS := *job.State.LastRunAtMS
 		clone.State.LastRunAtMS = &lastRunAtMS
 	}
+	if len(job.State.RunHistory) > 0 {
+		clone.State.RunHistory = append([]CronRunRecord(nil), job.State.RunHistory...)
+	}
 	return clone
+}
+
+// appendCronRun prepends a run record and keeps the newest entries bounded.
+func appendCronRun(job *CronJob, record CronRunRecord) {
+	history := make([]CronRunRecord, 0, min(len(job.State.RunHistory)+1, cronRunHistoryLimit))
+	history = append(history, record)
+	for _, previous := range job.State.RunHistory {
+		if len(history) >= cronRunHistoryLimit {
+			break
+		}
+		history = append(history, previous)
+	}
+	job.State.RunHistory = history
 }
 
 func sameSchedule(a, b CronSchedule) bool {

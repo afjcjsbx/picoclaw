@@ -15,7 +15,7 @@ func (al *AgentLoop) processMessageSync(ctx context.Context, msg bus.InboundMess
 	}
 
 	response, err := al.processMessage(ctx, msg)
-	al.publishResponseOrError(ctx, msg.Channel, msg.ChatID, msg.SessionKey, response, err)
+	al.publishResponseOrError(ctx, &msg.Context, msg.Channel, msg.ChatID, msg.SessionKey, response, err)
 }
 
 func (al *AgentLoop) runTurnWithSteering(ctx context.Context, initialMsg bus.InboundMessage) {
@@ -58,7 +58,14 @@ func (al *AgentLoop) runTurnWithSteering(ctx context.Context, initialMsg bus.Inb
 
 	// Publish final response
 	if finalResponse != "" {
-		if al.publishResponseIfNeeded(ctx, target.Channel, target.ChatID, target.SessionKey, finalResponse) &&
+		if al.PublishResponseForInbound(
+			ctx,
+			&initialMsg.Context,
+			target.Channel,
+			target.ChatID,
+			target.SessionKey,
+			finalResponse,
+		) &&
 			al.voiceMode(target.SessionKey) != "off" {
 			msg := bus.NormalizeInboundMessage(initialMsg)
 			if al.hasAudioInput(msg) {
@@ -123,5 +130,5 @@ func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, stri
 	}
 	allocation := al.allocateRouteSession(route, msg)
 
-	return resolveScopeKey(allocation.SessionKey, msg.SessionKey), agent.ID, true
+	return resolveScopeKey(allocation.SessionKey, effectiveSessionKey(msg)), agent.ID, true
 }

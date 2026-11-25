@@ -1,9 +1,13 @@
 package fileutil
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
-// ExpandHome expands a leading ~ or ~/ using the current user's home directory.
-// If the home directory cannot be determined, it returns path unchanged.
+// ExpandHome expands a leading ~, ~/ or ~\ using the current user's home
+// directory. If the home directory cannot be determined, it returns path
+// unchanged.
 func ExpandHome(path string) string {
 	if path == "" || path[0] != '~' {
 		return path
@@ -15,8 +19,8 @@ func ExpandHome(path string) string {
 	if path == "~" {
 		return home
 	}
-	if path[1] == '/' {
-		return home + path[1:]
+	if path[1] == '/' || path[1] == '\\' {
+		return filepath.Join(home, path[2:])
 	}
 	return path
 }

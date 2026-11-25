@@ -23,6 +23,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/sipeed/picoclaw/pkg/x402"
 )
 
 const (
@@ -35,13 +36,28 @@ const (
 	perplexityTimeout = 30 * time.Second // Perplexity (LLM-based, slower)
 	fetchTimeout      = 60 * time.Second // WebFetchTool
 
-	// defaultMaxChars is a flood guard, not a context budget: content under it
-	// reaches the generic spillover path intact, which keeps a head+tail
-	// preview inline and stores the full page as a pageable workspace
-	// artifact. Only floods are lossy. Callers can request a smaller maxChars
-	// per call; the same head+tail truncation then applies at that cap.
+	// defaultMaxChars is a flood-guard fallback used only when the caller does
+	// not supply a preview budget (for example when large-result spilling is
+	// disabled). Normal runtime constructs the tool with
+	// tools.max_inline_result_chars, so maxChars defaults to the same threshold
+	// as the spill layer. A per-call maxChars may only lower that budget; the
+	// full page is still persisted up to maxArtifactChars, so an explicit small
+	// preview remains recoverable from the artifact.
 	defaultMaxChars = 2_000_000
 	maxRedirects    = 5
+
+	// maxArtifactChars caps the full page persisted for a truncated web_fetch
+	// preview, independently of the requested maxChars. It bounds flash writes
+	// and artifact size on low-resource devices; when a page exceeds it, the
+	// artifact keeps a head+tail window plus an explicit truncation notice.
+	// Counted in Unicode characters, so multibyte text can use up to 4x this
+	// value in bytes.
+	maxArtifactChars = 2_000_000
+
+	// minMaxChars is the floor for a per-call maxChars. A smaller request is
+	// raised to the floor so the model cannot ask for a preview too small to
+	// be useful; the configured budget still wins when it is below the floor.
+	minMaxChars = 1500
 
 	// maxSearchResponseBytes caps how much of a search provider's HTTP response
 	// is buffered in memory. Search providers return compact JSON; anything
@@ -64,11 +80,7 @@ const (
 
 // Pre-compiled regexes for HTML text extraction
 var (
-	reScript     = regexp.MustCompile(`<script[\s\S]*?</script>`)
-	reStyle      = regexp.MustCompile(`<style[\s\S]*?</style>`)
-	reTags       = regexp.MustCompile(`<[^>]+>`)
-	reWhitespace = regexp.MustCompile(`[^\S\n]+`)
-	reBlankLines = regexp.MustCompile(`\n{3,}`)
+	reTags = regexp.MustCompile(`<[^>]+>`)
 
 	// DuckDuckGo result extraction
 	reDDGLink = regexp.MustCompile(
@@ -82,6 +94,11 @@ var (
 	)
 	reSogouSnippet = regexp.MustCompile(`<div class="clamp\d*[^"]*">\s*(.*?)\s*</div>`)
 	reSogouRealURL = regexp.MustCompile(`url=([^&]+)`)
+
+	// reBlankLineRuns matches two or more newlines, allowing spaces and tabs
+	// on the blank lines between them. Search snippets are collapsed with it
+	// without flattening their line structure.
+	reBlankLineRuns = regexp.MustCompile(`\n(?:[ \t]*\n)+`)
 )
 
 type APIKeyPool struct {
@@ -131,6 +148,48 @@ type SearchResultItem struct {
 	URL       string
 	Snippet   string
 	Published string
+}
+
+// appendSearchResult appends one result using the shared layout: a numbered
+// title, the indented URL, then each non-empty detail block indented. Provider
+// snippets are excerpts from arbitrary pages, so they may contain hard wraps,
+// tabs, and markdown structure. Blank-line runs are collapsed, but line breaks,
+// indentation, and tabs are preserved so lists, code, and tables keep meaning.
+func appendSearchResult(lines []string, index int, title, resultURL string, details ...string) []string {
+	lines = append(lines, fmt.Sprintf(
+		"%d. %s\n   %s",
+		index,
+		singleLineSearchTitle(title),
+		strings.TrimSpace(resultURL),
+	))
+	for _, detail := range details {
+		if detail = normalizeSearchSnippet(detail); detail != "" {
+			lines = append(lines, "   "+detail)
+		}
+	}
+	return lines
+}
+
+// singleLineSearchTitle flattens a result title. A title is a label, not
+// markdown content, so a provider-supplied line break must not split the
+// numbered header.
+func singleLineSearchTitle(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+// normalizeSearchSnippet collapses runs of blank lines to a single newline and
+// normalizes CRLF, while preserving single line breaks, tabs, and indentation.
+// Search snippets are not documents, but their markdown structure still
+// matters; flattening every whitespace run would turn lists and code samples
+// into one unreadable line.
+func normalizeSearchSnippet(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = reBlankLineRuns.ReplaceAllString(text, "\n")
+	return strings.Trim(text, "\n")
 }
 
 func extractSogouURL(href string) string {
@@ -465,10 +524,7 @@ func (p *BraveSearchProvider) Search(
 			if i >= count {
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-			if item.Description != "" {
-				lines = append(lines, fmt.Sprintf("   %s", item.Description))
-			}
+			lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Description)
 		}
 
 		return strings.Join(lines, "\n"), nil
@@ -575,10 +631,7 @@ func (p *TavilySearchProvider) Search(
 			if i >= count {
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-			if item.Content != "" {
-				lines = append(lines, fmt.Sprintf("   %s", item.Content))
-			}
+			lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Content)
 		}
 
 		return strings.Join(lines, "\n"), nil
@@ -781,16 +834,11 @@ func (p *KeenableSearchProvider) Search(
 			if i >= count {
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
 			content := item.Snippet
 			if content == "" {
 				content = item.Description
 			}
-			// Snippets can span several passages; keep one line per result.
-			content = strings.Join(strings.Fields(content), " ")
-			if content != "" {
-				lines = append(lines, fmt.Sprintf("   %s", content))
-			}
+			lines = appendSearchResult(lines, i+1, item.Title, item.URL, content)
 		}
 
 		return strings.Join(lines, "\n"), nil
@@ -823,13 +871,11 @@ func formatKagiSearchResults(query string, results []SearchResultItem) string {
 		if title == "" {
 			title = item.URL
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, title, item.URL))
+		published := ""
 		if item.Published != "" {
-			lines = append(lines, fmt.Sprintf("   Published: %s", item.Published))
+			published = "Published: " + item.Published
 		}
-		if item.Snippet != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Snippet))
-		}
+		lines = appendSearchResult(lines, i+1, title, item.URL, published, item.Snippet)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1091,7 +1137,7 @@ func (p *GeminiSearchProvider) Search(
 		if title == "" {
 			title = chunk.Web.URI
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", citationCount, title, chunk.Web.URI))
+		lines = appendSearchResult(lines, citationCount, title, chunk.Web.URI)
 		if citationCount >= count {
 			break
 		}
@@ -1178,10 +1224,7 @@ func (p *SogouSearchProvider) Search(
 
 	lines := []string{fmt.Sprintf("Results for: %s (via Sogou)", query)}
 	for i, item := range results {
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-		if item.Snippet != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Snippet))
-		}
+		lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Snippet)
 	}
 	return strings.Join(lines, "\n"), nil
 }
@@ -1264,16 +1307,12 @@ func (p *DuckDuckGoSearchProvider) extractResults(
 			}
 		}
 
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, title, urlStr))
-
+		snippet := ""
 		// Attempt to attach snippet if available and index aligns
 		if i < len(snippetMatches) {
-			snippet := stripTags(snippetMatches[i][1])
-			snippet = strings.TrimSpace(snippet)
-			if snippet != "" {
-				lines = append(lines, fmt.Sprintf("   %s", snippet))
-			}
+			snippet = stripTags(snippetMatches[i][1])
 		}
+		lines = appendSearchResult(lines, i+1, title, urlStr, snippet)
 	}
 
 	return strings.Join(lines, "\n"), nil
@@ -1461,17 +1500,12 @@ func (p *SearXNGSearchProvider) Search(
 	}
 
 	// Format results in standard PicoClaw format
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Results for: %s (via SearXNG)\n", query))
+	lines := []string{fmt.Sprintf("Results for: %s (via SearXNG)", query)}
 	for i, r := range result.Results {
-		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Title))
-		b.WriteString(fmt.Sprintf("   %s\n", r.URL))
-		if r.Content != "" {
-			b.WriteString(fmt.Sprintf("   %s\n", r.Content))
-		}
+		lines = appendSearchResult(lines, i+1, r.Title, r.URL, r.Content)
 	}
 
-	return b.String(), nil
+	return strings.Join(lines, "\n"), nil
 }
 
 type GLMSearchProvider struct {
@@ -1557,10 +1591,7 @@ func (p *GLMSearchProvider) Search(
 		if i >= count {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.Link))
-		if item.Content != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Content))
-		}
+		lines = appendSearchResult(lines, i+1, item.Title, item.Link, item.Content)
 	}
 
 	return strings.Join(lines, "\n"), nil
@@ -1654,10 +1685,7 @@ func (p *BaiduSearchProvider) Search(
 		if i >= count {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-		if item.Content != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Content))
-		}
+		lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Content)
 	}
 
 	return strings.Join(lines, "\n"), nil
@@ -2325,7 +2353,7 @@ func (t *WebFetchTool) Parameters() map[string]any {
 			"maxChars": map[string]any{
 				"type":        "integer",
 				"description": "Maximum characters to extract",
-				"minimum":     100.0,
+				"minimum":     float64(minMaxChars),
 			},
 		},
 		"required": []string{"url"},
@@ -2362,9 +2390,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// A per-call maxChars may only lower the configured flood guard: the value
 	// comes from the model, so an out-of-range number must not be able to
-	// disable truncation entirely.
+	// disable truncation entirely. Requests below the advertised floor are
+	// raised to it, but never above the configured budget.
 	maxChars := t.maxChars
-	if mc, ok := args["maxChars"].(float64); ok && mc > 100 {
+	if mc, ok := args["maxChars"].(float64); ok {
+		if mc < minMaxChars {
+			mc = minMaxChars
+		}
 		if mc > float64(maxChars) {
 			mc = float64(maxChars)
 		}
@@ -2382,7 +2414,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		if doErr != nil {
 			return nil, nil, fmt.Errorf("request failed: %w", doErr)
 		}
-		resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
+		readLimit := t.fetchLimitBytes
+		if resp.StatusCode == http.StatusPaymentRequired {
+			// Payment details live in headers, so a huge 402 body must not
+			// prevent parsing them or force buffering the whole error page.
+			readLimit = int64(x402.MaxChallengeBytes)
+		}
+		resp.Body = http.MaxBytesReader(nil, resp.Body, readLimit)
 
 		b, readErr := io.ReadAll(resp.Body)
 		return resp, b, readErr
@@ -2391,6 +2429,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	resp, body, err := doFetch(userAgent)
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
+	}
+
+	if resp != nil && resp.StatusCode == http.StatusPaymentRequired {
+		// A 402 is not a generic fetch failure: the server has told us the
+		// resource is paid. Parse the challenge even when the bounded body read
+		// was truncated, because the canonical details are in the headers.
+		return paymentRequiredResult(urlStr, resp, body)
 	}
 
 	if err != nil {
@@ -2418,9 +2463,14 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			defer resp2.Body.Close()
 		}
 
-		if err2 == nil {
+		switch {
+		case resp2 != nil && resp2.StatusCode == http.StatusPaymentRequired:
+			// The retry hit a paid resource. Keep the response so the payment
+			// challenge can be parsed even if the bounded body read failed.
 			resp, body = resp2, body2
-		} else {
+		case err2 == nil:
+			resp, body = resp2, body2
+		default:
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err2, &maxBytesErr) {
 				return ErrorResult(
@@ -2429,6 +2479,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			}
 			return ErrorResult(err2.Error())
 		}
+	}
+
+	if resp.StatusCode == http.StatusPaymentRequired {
+		// A 402 is not a generic fetch failure: the server has told us the
+		// resource is paid. Parse the challenge so the agent can explain the
+		// terms instead of reporting an opaque "request failed".
+		return paymentRequiredResult(urlStr, resp, body)
 	}
 
 	bodyStr := string(body)
@@ -2463,21 +2520,17 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	switch {
 	case mediaType == "application/json":
-		var jsonData any
-		if err := json.Unmarshal(body, &jsonData); err != nil {
+		// json.Indent validates and formats the document without building an
+		// interface{} tree, so a large payload does not pay reflection and
+		// per-value allocations just to be re-marshaled.
+		var formatted bytes.Buffer
+		if err := json.Indent(&formatted, body, "", "  "); err != nil {
 			text = bodyStr
 			extractor = "raw"
 			break
 		}
 
-		formatted, err := json.MarshalIndent(jsonData, "", "  ")
-		if err != nil {
-			text = bodyStr
-			extractor = "raw"
-			break
-		}
-
-		text = string(formatted)
+		text = formatted.String()
 		extractor = "json"
 
 	case mediaType == "text/html" || looksLikeHTML(bodyStr):
@@ -2526,44 +2579,140 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			extractor,
 			truncated,
 		),
+		// The full page is capped even when the preview is not: an explicitly
+		// requested small maxChars must not leave a huge artifact, and a page
+		// larger than the cap still gets a head+tail artifact with a notice.
+		ArtifactMaxRunes: maxArtifactChars,
 	}
 	if truncated {
 		// Hand the large-result spill the full page so a capped fetch stays
-		// pageable from the artifact instead of losing the omitted middle.
+		// pageable from the artifact instead of losing the omitted middle. The
+		// preview stays at the caller's maxChars when it fits the inline
+		// budget; ForceArtifact persists the full text even when it would
+		// otherwise fit under that budget.
 		toolResult.FullText = fullText
+		toolResult.ForceArtifact = true
 	}
 	return toolResult
 }
 
 func looksLikeHTML(body string) bool {
-	if body == "" {
-		return false
-	}
+	// Only the first tag matters, so compare a short prefix case-insensitively
+	// instead of lowercasing the whole (possibly 10 MiB) response body.
+	return hasHTMLPrefixFold(body, "<!doctype") || hasHTMLPrefixFold(body, "<html")
+}
 
-	lower := strings.ToLower(body)
-
-	return strings.HasPrefix(body, "<!doctype") ||
-		strings.HasPrefix(lower, "<html")
+func hasHTMLPrefixFold(body, prefix string) bool {
+	return len(body) >= len(prefix) && strings.EqualFold(body[:len(prefix)], prefix)
 }
 
 func (t *WebFetchTool) extractText(htmlContent string) string {
-	result := reScript.ReplaceAllLiteralString(htmlContent, "")
-	result = reStyle.ReplaceAllLiteralString(result, "")
-	result = reTags.ReplaceAllLiteralString(result, "")
+	// One tokenizer pass over the document drops script/style bodies and tags
+	// while collapsing horizontal whitespace, instead of running five regexps
+	// that each allocate a full-size copy of the input.
+	out := make([]byte, 0, len(htmlContent))
+	lastSpace := false
+	appendText := func(segment string) {
+		for i := 0; i < len(segment); i++ {
+			c := segment[i]
+			switch {
+			case c == '\n':
+				out = append(out, '\n')
+				lastSpace = false
+			case c == ' ' || c == '\t' || c == '\r' || c == '\v' || c == '\f':
+				if !lastSpace {
+					out = append(out, ' ')
+					lastSpace = true
+				}
+			default:
+				out = append(out, c)
+				lastSpace = false
+			}
+		}
+	}
 
-	result = strings.TrimSpace(result)
+	// A failed closing-tag lookup means no such closing tag exists anywhere in
+	// the rest of the document, so remember it and never rescan the suffix for
+	// the same element. Without this, a document full of unclosed <script>
+	// tags turns the walk quadratic.
+	noScriptClose := false
+	noStyleClose := false
 
-	result = reWhitespace.ReplaceAllString(result, " ")
-	result = reBlankLines.ReplaceAllString(result, "\n\n")
+	for i := 0; i < len(htmlContent); {
+		if htmlContent[i] != '<' {
+			j := i + 1
+			for j < len(htmlContent) && htmlContent[j] != '<' {
+				j++
+			}
+			appendText(htmlContent[i:j])
+			i = j
+			continue
+		}
+		if !noScriptClose && hasTagPrefixFold(htmlContent[i:], "script") {
+			if end := indexClosingTag(htmlContent[i:], "script"); end >= 0 {
+				i += end + len("</script>")
+				continue
+			}
+			noScriptClose = true
+		}
+		if !noStyleClose && hasTagPrefixFold(htmlContent[i:], "style") {
+			if end := indexClosingTag(htmlContent[i:], "style"); end >= 0 {
+				i += end + len("</style>")
+				continue
+			}
+			noStyleClose = true
+		}
+		closing := strings.IndexByte(htmlContent[i:], '>')
+		if closing < 0 {
+			appendText(htmlContent[i:])
+			break
+		}
+		if closing == 1 {
+			// "<>" has no tag name, so the original <[^>]+> kept it as text.
+			appendText("<")
+			i++
+			continue
+		}
+		i += closing + 1
+	}
 
-	lines := strings.Split(result, "\n")
-	var cleanLines []string
+	trimmed := strings.TrimSpace(string(out))
+
+	lines := strings.Split(trimmed, "\n")
+	cleanLines := make([]string, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			cleanLines = append(cleanLines, line)
 		}
 	}
-
 	return strings.Join(cleanLines, "\n")
+}
+
+// hasTagPrefixFold reports whether s starts with "<name" followed by a tag
+// delimiter, without allocating a lowercased copy.
+func hasTagPrefixFold(s, name string) bool {
+	if len(s) < len(name)+2 || s[0] != '<' || !strings.EqualFold(s[1:1+len(name)], name) {
+		return false
+	}
+	switch s[1+len(name)] {
+	case ' ', '\t', '\r', '\n', '>', '/':
+		return true
+	default:
+		return false
+	}
+}
+
+// indexClosingTag returns the offset of "</name>" in s, or -1 when absent.
+func indexClosingTag(s, name string) int {
+	needleLen := len(name) + 3
+	for i := 0; i+needleLen <= len(s); i++ {
+		if s[i] != '<' || s[i+1] != '/' {
+			continue
+		}
+		if strings.EqualFold(s[i+2:i+2+len(name)], name) && s[i+2+len(name)] == '>' {
+			return i
+		}
+	}
+	return -1
 }

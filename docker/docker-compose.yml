@@ -54,9 +54,8 @@ services:
       - launcher
     environment:
       - PICOCLAW_GATEWAY_HOST=0.0.0.0
-      # Set a fixed dashboard token instead of a random one each restart.
-      # If not set, a random token is generated and printed to the console on startup.
-      #- PICOCLAW_LAUNCHER_TOKEN=your-secret-token-here
+      # Dashboard auth uses a bcrypt password set at /launcher-setup on first run.
+      # PICOCLAW_LAUNCHER_HOST overrides the launcher bind address if needed.
     ports:
       - "18800:18800"
       - "18790:18790"

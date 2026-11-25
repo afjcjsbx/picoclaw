@@ -1,6 +1,10 @@
+---
+lang: zh
+description: "PicoClaw 运行时的 Session 系统如何完成以下事情：Pkg/session、pkg/memory 和 pkg/agent 中的核心运行时链路。 它不讨论 web/backend/middleware 中 launcher 登录 Cookie 或 dashboard 鉴权 session。"
+---
 # Session 系统
 
-> 返回 [README](../README.md)
+> 返回 [README](../)
 
 本文说明 PicoClaw 运行时的 Session 系统如何完成以下事情：
 
@@ -25,7 +29,6 @@ Session 系统承担四件事：
 | 层次 | 文件 | 作用 |
 | --- | --- | --- |
 | Session 抽象 | `pkg/session/session_store.go` | 定义 agent loop 依赖的 `SessionStore` 接口。 |
-| 旧后端 | `pkg/session/manager.go` | 每个 session 一个 JSON 文件的旧实现，仍作为回退方案保留。 |
 | Session 适配层 | `pkg/session/jsonl_backend.go` | 把 `pkg/memory.Store` 适配成 `SessionStore`，并支持 alias 与 scope metadata。 |
 | 持久化存储 | `pkg/memory/jsonl.go` | Append-only JSONL 存储与 `.meta.json` 元数据侧文件。 |
 | Scope / Key 构建 | `pkg/session/scope.go`、`pkg/session/key.go`、`pkg/session/allocator.go` | 从路由结果生成结构化 scope、不透明 canonical key 和 legacy alias。 |
@@ -167,7 +170,7 @@ dispatch 匹配和 session 分配都会使用这套映射，因此同一个人�
 各自保存：
 
 - `.jsonl`：一行一个 `providers.Message`，append-only
-- `.meta.json`：摘要、时间戳、行数、逻辑截断偏移、scope、aliases
+- `.meta.json`：摘要、时间戳、行数、逻辑截断偏移、scope、aliases、累计 usage 计数
 
 `SessionMeta` 当前包含：
 
@@ -179,6 +182,8 @@ dispatch 匹配和 session 分配都会使用这套映射，因此同一个人�
 - `UpdatedAt`
 - `Scope`
 - `Aliases`
+- `Usage`
+- `UsageTracked`
 
 ## 写入与崩溃语义
 
@@ -189,6 +194,7 @@ JSONL store 的设计核心是“追加优先、宁可暂时读到旧数据也�
 - `Compact` 才会真正重写 JSONL 文件，把被跳过的旧行物理移除。
 - `SetHistory` 和 `Compact` 都会先写 metadata 再改写 JSONL；如果中途崩溃，最多短时间暴露旧数据，不应丢数据。
 - 读取 JSONL 时如果碰到损坏行，会跳过该行，而不是让整个 session 读取失败。
+- 累计 usage 计数只在追加带 usage 的消息时增长；截断、压缩和整体替换历史都不会让它减少，alias 提升时计数会迁移到规范 session。
 
 `JSONLBackend.Save` 对应到底层的 `store.Compact(...)`。
 也就是说，`Save` 在新实现里不再是“把内存脏数据刷盘”，而是“在逻辑截断后回收无效行占用的磁盘空间”。
@@ -198,9 +204,7 @@ JSONL store 的设计核心是“追加优先、宁可暂时读到旧数据也�
 `pkg/memory.JSONLStore` 使用固定 64 分片 mutex，按 session key 的 hash 做串行化。
 这样既能做到“按 session 串行”，又不会因为 session 数量增长而把 mutex map 做成无界结构。
 
-旧的 `SessionManager` 则是一个内存 map 加 RW mutex。
-
-这两个实现都满足同一个 `SessionStore` 接口，所以 agent loop 不需要写任何存储后端特化逻辑。
+agent loop 只依赖 `SessionStore` 接口，因此不需要写任何存储后端特化逻辑。
 
 ## 兼容与迁移
 
@@ -211,9 +215,8 @@ JSONL store 的设计核心是“追加优先、宁可暂时读到旧数据也�
 1. 创建 `memory.NewJSONLStore(dir)`。
 2. 执行 `memory.MigrateFromJSON(...)`，把旧 `.json` session 迁入新格式。
 3. 用 `session.NewJSONLBackend(store)` 包装。
-4. 如果 JSONL 初始化或迁移失败，则回退到 `session.NewSessionManager(dir)`。
 
-这个回退是刻意设计的：做一半的迁移，比整轮继续使用旧后端更危险。
+没有后备存储：如果 JSONL 初始化或迁移失败，agent 启动会直接中止，避免在部分迁移或旧存储上静默丢失历史。
 
 ### Alias 提升
 
@@ -243,7 +246,6 @@ Session 系统不只被 agent loop 使用：
 ## 相关文件
 
 - `pkg/session/session_store.go`
-- `pkg/session/manager.go`
 - `pkg/session/jsonl_backend.go`
 - `pkg/session/scope.go`
 - `pkg/session/key.go`

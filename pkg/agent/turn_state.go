@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 // =============================================================================
@@ -126,7 +128,9 @@ type turnExecution struct {
 	finalContent string
 
 	// Iteration tracking
-	iteration int
+	iteration       int
+	budgetWarned    bool // the iteration-budget checkpoint was already sent this turn
+	runBudgetWarned bool // the run-budget wrap-up notice was already sent this turn
 
 	// Per-iteration state set by Pipeline.PreLLM
 	activeCandidates  []providers.FallbackCandidate
@@ -134,6 +138,14 @@ type turnExecution struct {
 	activeModelConfig *config.ModelConfig
 	activeProvider    providers.LLMProvider
 	usedLight         bool
+
+	// Mid-turn routing guards. toolIterationStreak counts consecutive
+	// light-model responses that requested tools.
+	toolIterationStreak int
+	escalatedToPrimary  bool
+	// imageRouteDisabled is set once the image model failed and the turn fell
+	// back to the base model, so later iterations do not route to it again.
+	imageRouteDisabled bool
 
 	// LLM call per-iteration state
 	response            *providers.LLMResponse
@@ -224,13 +236,17 @@ type turnState struct {
 	gracefulInterrupt     bool
 	gracefulInterruptHint string
 	gracefulTerminalUsed  bool
+	gracefulPrompt        string // overrides the default interrupt hint text
 	hardAbort             bool
 	providerCancel        context.CancelFunc
 	turnCancel            context.CancelFunc
 
 	restorePointHistory []providers.Message
 	restorePointSummary string
-	persistedMessages   []providers.Message
+	// restoreSummaryPinned freezes restorePointSummary once the session summary
+	// holds part of this turn, so a rollback does not keep the aborted work.
+	restoreSummaryPinned bool
+	persistedMessages    []providers.Message
 
 	// SubTurn support (from HEAD)
 	depth                int                    // SubTurn depth (0 for root turn)
@@ -239,6 +255,7 @@ type turnState struct {
 	pendingResults       chan *tools.ToolResult // Channel for SubTurn results
 	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
 	children             sync.WaitGroup         // Async children a SubTurn must join before finishing
+	joinSubTurns         bool                   // Root turns in CLI mode join spawned children
 	isFinished           atomic.Bool            // Whether this turn has finished
 	session              session.SessionStore   // Session store reference
 	initialHistoryLength int                    // Snapshot of history length at turn start
@@ -255,7 +272,7 @@ type turnState struct {
 	// Token budget tracking
 	tokenBudget      *atomic.Int64        // Shared token budget counter
 	lastFinishReason string               // Last LLM finish_reason
-	lastUsage        *providers.UsageInfo // Last LLM usage info
+	turnUsage        *providers.UsageInfo // Aggregated usage across all LLM calls in the turn
 
 	// Back-reference to the owning AgentLoop (set on every turn, used for hard abort cascade)
 	al *AgentLoop
@@ -276,9 +293,11 @@ type turnState struct {
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	// Cron origin survives in SenderID when a scheduled turn spawns a subturn.
-	// The session key also identifies a scheduled root turn if sender metadata is absent.
+	// The session key also identifies a scheduled root turn if sender metadata is absent;
+	// with a real sender it is a user continuing a cron session, who keeps the tool.
+	senderID := opts.Dispatch.SenderID()
 	if agent != nil && agent.Tools != nil &&
-		(opts.Dispatch.SenderID() == "cron" || strings.HasPrefix(opts.Dispatch.SessionKey, "agent:cron-")) {
+		(senderID == "cron" || (senderID == "" && strings.HasPrefix(opts.Dispatch.SessionKey, cronSessionKeyPrefix))) {
 		cronAgent := *agent
 		cronAgent.Tools = agent.Tools.CloneWithout("cron")
 		agent = &cronAgent
@@ -356,6 +375,19 @@ func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 	return nil
 }
 
+// activeTurnMessageCountForSession returns the active turn's protected message
+// count for a session, or zero when no turn is running.
+func (al *AgentLoop) activeTurnMessageCountForSession(sessionKey string) int {
+	if al == nil {
+		return 0
+	}
+	ts := al.getActiveTurnState(sessionKey)
+	if ts == nil {
+		return 0
+	}
+	return activeTurnMessageCount(ts, nil)
+}
+
 // getAnyActiveTurnState returns any active turn state (for backward compatibility)
 func (al *AgentLoop) getAnyActiveTurnState() *turnState {
 	var firstTS *turnState
@@ -427,7 +459,48 @@ func (al *AgentLoop) GetActiveTurnTree(sessionKey string) []ActiveTurnInfo {
 		}
 	}
 	walk(root)
+
+	// Async spawns outlive the turn that started them, so a later root (e.g. the
+	// /subagents command itself) no longer lists them in childTurnIDs. Attach
+	// them to the current root.
+	al.activeTurnStates.Range(func(_, val any) bool {
+		child, ok := val.(*turnState)
+		if !ok || child.parentTurnState == nil {
+			return true
+		}
+		prev := child.parentTurnState
+		if prev == root || prev.parentTurnState != nil || prev.sessionKey != sessionKey {
+			return true
+		}
+		start := len(tree)
+		walk(child)
+		tree[start].ParentTurnID = tree[0].TurnID
+		return true
+	})
 	return tree
+}
+
+// ListActiveTurns returns snapshots of every registered active turn, including
+// root turns and nested SubTurns. Callers that only care about subagents should
+// filter on Depth > 0. The result is ordered by start time, then turn ID, so a
+// status endpoint can render a stable list while polling.
+func (al *AgentLoop) ListActiveTurns() []ActiveTurnInfo {
+	turns := make([]ActiveTurnInfo, 0)
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			return true
+		}
+		turns = append(turns, ts.snapshot())
+		return true
+	})
+	sort.Slice(turns, func(i, j int) bool {
+		if !turns[i].StartedAt.Equal(turns[j].StartedAt) {
+			return turns[i].StartedAt.Before(turns[j].StartedAt)
+		}
+		return turns[i].TurnID < turns[j].TurnID
+	})
+	return turns
 }
 
 func (ts *turnState) snapshot() ActiveTurnInfo {
@@ -663,6 +736,19 @@ func (ts *turnState) requestGracefulInterrupt(hint string) bool {
 	return true
 }
 
+// requestIterationLimitSummary arms the one tool-less terminal call used to
+// wrap up a turn whose iteration budget is spent.
+func (ts *turnState) requestIterationLimitSummary() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.hardAbort {
+		return false
+	}
+	ts.gracefulInterrupt = true
+	ts.gracefulPrompt = maxIterationsSummaryRequest
+	return true
+}
+
 func (ts *turnState) gracefulInterruptRequested() (bool, string) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
@@ -719,13 +805,34 @@ func (ts *turnState) captureRestorePoint(history []providers.Message, summary st
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.restorePointHistory = append([]providers.Message(nil), history...)
-	ts.restorePointSummary = summary
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+	}
+}
+
+// pinRestoreSummary sets the summary a rollback restores to summary, the last
+// one free of this turn, and keeps it there for the rest of the turn.
+func (ts *turnState) pinRestoreSummary(summary string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if !ts.restoreSummaryPinned {
+		ts.restorePointSummary = summary
+		ts.restoreSummaryPinned = true
+	}
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.persistedMessages = append(ts.persistedMessages, msg)
+}
+
+// replacePersistedMessages rewrites the turn's persisted-message record after
+// compaction replaced part of the turn in the session.
+func (ts *turnState) replacePersistedMessages(msgs []providers.Message) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.persistedMessages = append([]providers.Message(nil), msgs...)
 }
 
 func (ts *turnState) persistedMessagesSnapshot() []providers.Message {
@@ -755,6 +862,17 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 	}
 
 	ts.captureRestorePoint(history, summary)
+	// Compaction may have shrunk the history that precedes this turn; a hard
+	// abort rolls the session back to exactly that length.
+	ts.mu.Lock()
+	ts.initialHistoryLength = len(history)
+	ts.mu.Unlock()
+}
+
+func (ts *turnState) initialHistoryLen() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.initialHistoryLength
 }
 
 // ingestMessage calls the ContextManager's Ingest method for a persisted message.
@@ -836,6 +954,9 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 	msg.PromptLayer = ""
 	msg.PromptSlot = ""
 	msg.PromptSource = ""
+	// The session store stamps CreatedAt on what it keeps; the turn's own record
+	// of the same message has none.
+	msg.CreatedAt = nil
 
 	if len(msg.Media) == 0 {
 		msg.Media = nil
@@ -874,6 +995,12 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 
 func (ts *turnState) interruptHintMessage() providers.Message {
 	_, hint := ts.gracefulInterruptRequested()
+	ts.mu.RLock()
+	prompt := ts.gracefulPrompt
+	ts.mu.RUnlock()
+	if prompt != "" {
+		return interruptPromptMessage(prompt)
+	}
 	content := "Interrupt requested. Stop scheduling tools and provide a short final summary."
 	if hint != "" {
 		content += "\n\nInterrupt hint: " + hint
@@ -962,18 +1089,75 @@ func (ts *turnState) SetLastFinishReason(reason string) {
 	ts.lastFinishReason = reason
 }
 
-// GetLastUsage returns the last LLM usage info
-func (ts *turnState) GetLastUsage() *providers.UsageInfo {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.lastUsage
-}
-
-// SetLastUsage sets the last LLM usage info
-func (ts *turnState) SetLastUsage(usage *providers.UsageInfo) {
+// AddUsage accumulates provider-reported usage across the LLM calls that make
+// up this turn, including tool-call iterations. model is the model that served
+// the call and keys the per-model split kept for multi-model turns.
+func (ts *turnState) AddUsage(model string, call *providers.UsageInfo) {
+	if ts == nil || call == nil || !call.HasUsage() {
+		return
+	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.lastUsage = usage
+	if ts.turnUsage == nil {
+		ts.turnUsage = &providers.UsageInfo{}
+	}
+	addCallUsage(ts.turnUsage, call)
+	// ContextTokens describes the turn rather than a single provider response:
+	// keep the last prompt size so callers can distinguish billed input from
+	// the live context window.
+	ts.turnUsage.ContextTokens = call.PromptTokens
+	ts.turnUsage.ByModel = addModelCall(ts.turnUsage.ByModel, model, call)
+}
+
+// addCallUsage sums one provider call into an aggregate. Requests counts LLM
+// calls, so every call adds one.
+func addCallUsage(dst, call *providers.UsageInfo) {
+	dst.PromptTokens += call.PromptTokens
+	dst.CompletionTokens += call.CompletionTokens
+	dst.TotalTokens += call.TotalTokens
+	dst.CacheReadTokens += call.CacheReadTokens
+	dst.CacheCreationTokens += call.CacheCreationTokens
+	dst.CostUSD += call.CostUSD
+	dst.DurationMS += call.DurationMS
+	dst.Requests++
+}
+
+// addModelCall adds one call to the per-model split of a turn, creating the
+// model's entry on first use. A call without a model name is recorded under
+// usage.UnknownModel, as the usage reports label it.
+func addModelCall(split []providers.ModelUsage, model string, call *providers.UsageInfo) []providers.ModelUsage {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = usage.UnknownModel
+	}
+	for i := range split {
+		if split[i].Model == model {
+			addCallUsage(&split[i].Usage, call)
+			return split
+		}
+	}
+	entry := providers.ModelUsage{Model: model}
+	addCallUsage(&entry.Usage, call)
+	return append(split, entry)
+}
+
+// GetTurnUsage returns a copy of the aggregated usage for this turn. The
+// per-model split is included only when the turn used more than one model.
+func (ts *turnState) GetTurnUsage() *providers.UsageInfo {
+	if ts == nil {
+		return nil
+	}
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	if ts.turnUsage == nil {
+		return nil
+	}
+	usage := *ts.turnUsage
+	usage.ByModel = nil
+	if len(ts.turnUsage.ByModel) > 1 {
+		usage.ByModel = append([]providers.ModelUsage(nil), ts.turnUsage.ByModel...)
+	}
+	return &usage
 }
 
 // =============================================================================
@@ -1011,4 +1195,19 @@ func (ts *turnState) repeatsToolFeedbackExplanation(explanation string) bool {
 	repeated := explanation == ts.lastToolFeedbackExplanation
 	ts.lastToolFeedbackExplanation = explanation
 	return repeated
+}
+
+// runBudgetMinCall is the shortest implicit model-call timeout under a run
+// budget, so a nearly spent budget never starves the final answer.
+const runBudgetMinCall = 60 * time.Second
+
+// implicitCallTimeout caps a non-streaming model call at the run budget still
+// left (at least runBudgetMinCall) so a hung call cannot eat the rest of it. It
+// returns 0 (no cap) without a budget, in sub-turns, or when the model sets its
+// own request_timeout: explicit admin timeouts are never touched.
+func (ts *turnState) implicitCallTimeout(mc *config.ModelConfig) time.Duration {
+	if ts.agent.RunBudget <= 0 || ts.parentTurnState != nil || (mc != nil && mc.RequestTimeout > 0) {
+		return 0
+	}
+	return max(ts.agent.RunBudget-time.Since(ts.startedAt), runBudgetMinCall)
 }

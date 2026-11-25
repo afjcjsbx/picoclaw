@@ -30,3 +30,17 @@ func EffectiveMCPTransportType(server MCPServerConfig) string {
 	}
 	return ""
 }
+
+// EffectiveDeferred reports whether this server's tools are registered as
+// hidden (deferred/discovery mode). When Deferred is nil, the global discovery
+// setting applies; when discovery is disabled the server can never be
+// deferred.
+func (c MCPServerConfig) EffectiveDeferred(discoveryEnabled bool) bool {
+	if !discoveryEnabled {
+		return false
+	}
+	if c.Deferred != nil {
+		return *c.Deferred
+	}
+	return true
+}

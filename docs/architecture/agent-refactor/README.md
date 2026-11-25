@@ -1,3 +1,6 @@
+---
+description: "Working notes for the agent package refactor: goals, the file layout after the split, and the migration order for each step."
+---
 # Agent Refactor
 
 ## What this directory is for

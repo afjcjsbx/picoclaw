@@ -240,8 +240,18 @@ func buildParams(
 		params.System = system
 	}
 
-	if temp, ok := options["temperature"].(float64); ok {
-		params.Temperature = anthropic.Float(temp)
+	// Skip temperature for models that reject it (Claude 5 family and newer
+	// thinking-always models). Also skip if thinking is being injected via
+	// thinking_level.
+	deprecatesTemperature := common.ModelDeprecatesTemperature(apiModel)
+	hasThinkingLevel := false
+	if level, ok := options["thinking_level"].(string); ok && level != "" && level != "off" {
+		hasThinkingLevel = true
+	}
+	if !deprecatesTemperature && !hasThinkingLevel {
+		if temp, ok := options["temperature"].(float64); ok {
+			params.Temperature = anthropic.Float(temp)
+		}
 	}
 
 	if len(tools) > 0 {

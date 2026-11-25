@@ -3,6 +3,7 @@ package telegram
 import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -19,7 +20,17 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			return NewTelegramChannel(bc, c, b)
+			return NewTelegramChannel(
+				bc,
+				c,
+				b,
+				WithCommandDefinitionsProvider(func() []commands.Definition {
+					return commands.MergeCustomCommandDefinitions(
+						commands.BuiltinDefinitions(),
+						commands.LoadCustomCommands(cfg.WorkspacePath()),
+					)
+				}),
+			)
 		},
 	)
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestErrorsIs(t *testing.T) {
@@ -52,5 +53,29 @@ func TestErrorMessages(t *testing.T) {
 		if got := tt.err.Error(); got != tt.want {
 			t.Errorf("error message = %q, want %q", got, tt.want)
 		}
+	}
+}
+
+func TestRateLimitError(t *testing.T) {
+	raw := errors.New("telego: sendMessage: api: 429")
+	err := &RateLimitError{RetryAfter: 14 * time.Second, Err: raw}
+
+	if !errors.Is(err, ErrRateLimit) {
+		t.Error("RateLimitError should match ErrRateLimit")
+	}
+	if errors.Is(err, ErrTemporary) {
+		t.Error("RateLimitError should not match ErrTemporary")
+	}
+	if !errors.Is(err, raw) {
+		t.Error("RateLimitError should match its wrapped error")
+	}
+
+	delay, ok := RateLimitRetryAfter(fmt.Errorf("send: %w", err))
+	if !ok || delay != 14*time.Second {
+		t.Fatalf("RateLimitRetryAfter = (%v, %v), want (14s, true)", delay, ok)
+	}
+
+	if _, ok := RateLimitRetryAfter(ErrRateLimit); ok {
+		t.Error("plain ErrRateLimit should not report a retry window")
 	}
 }

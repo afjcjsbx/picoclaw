@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "DingTalk is Alibaba's enterprise communication platform, widely used in Chinese workplaces. It uses a streaming SDK to maintain persistent connections."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # DingTalk
 
@@ -14,7 +17,10 @@ DingTalk is Alibaba's enterprise communication platform, widely used in Chinese 
       "type": "dingtalk",
       "client_id": "YOUR_CLIENT_ID",
       "client_secret": "YOUR_CLIENT_SECRET",
-      "allow_from": []
+      "allow_from": [],
+      "placeholder": { "enabled": true, "text": ["Thinking..."] },
+      "group_trigger": { "mention_only": false },
+      "reasoning_channel_id": ""
     }
   }
 }
@@ -26,6 +32,9 @@ DingTalk is Alibaba's enterprise communication platform, widely used in Chinese 
 | client_id     | string | Yes      | Client ID of the DingTalk application                    |
 | client_secret | string | Yes      | Client Secret of the DingTalk application                |
 | allow_from    | array  | No       | User ID whitelist; empty means all users are allowed     |
+| placeholder   | object | No       | Placeholder message shown while the agent is working     |
+| group_trigger | object | No       | Group trigger settings (e.g. `{ "mention_only": true }`) |
+| reasoning_channel_id | string | No | Optional ID to route reasoning/thinking output to a separate chat |
 
 ## Setup
 

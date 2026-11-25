@@ -91,6 +91,7 @@ func NewAgentLoop(
 		evolution:         bridge,
 		steering:          newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
 		workerSem:         make(chan struct{}, workerPoolSize),
+		usageAnchors:      newUsageAnchorStore(),
 		ownsRuntimeEvents: true,
 	}
 	for _, opt := range opts {
@@ -115,6 +116,18 @@ func NewAgentLoop(
 	al.providerFactory = providers.CreateProviderFromConfig
 	al.hooks = NewHookManager(al.runtimeEvents.Channel())
 	configureHookManagerFromConfig(al.hooks, cfg)
+	execApprovalHook := NamedHook(
+		"exec-unknown-command-approval",
+		&execUnknownCommandApprovalHook{agent: al},
+	)
+	// Run after operator-configured approval hooks: a plugin can still deny a
+	// command without prompting the user.
+	execApprovalHook.Priority = 100
+	if err := al.MountHook(execApprovalHook); err != nil {
+		logger.WarnCF("agent", "Failed to mount exec approval hook", map[string]any{
+			"error": err.Error(),
+		})
+	}
 	al.contextManager = al.resolveContextManager()
 
 	// Register shared tools to all agents (now that al is created)
@@ -158,7 +171,11 @@ func registerSharedTools(
 		}
 		if cfg.Tools.IsToolEnabled("web_fetch") {
 			fetchTool, err := integrationtools.NewWebFetchToolWithProxy(
-				0, // 0 = use the tool's flood-guard default; oversized pages are spilled, not cut
+				// Default maxChars to the generic inline budget; a per-call
+				// maxChars may lower it further. A non-positive value keeps
+				// the tool's flood-guard fallback (used when spilling is
+				// disabled).
+				cfg.Tools.GetMaxInlineResultChars(),
 				cfg.Tools.Web.Proxy,
 				cfg.Tools.Web.Format,
 				cfg.Tools.Web.FetchLimitBytes,
@@ -431,6 +448,11 @@ func registerSharedTools(
 				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 			})
 			agent.Tools.Register(delegateTool)
+		}
+
+		// A2A tools exist only when remote agents are configured (a2a_agents).
+		for _, tool := range integrationtools.NewA2ATools(cfg.A2AAgents) {
+			agent.Tools.Register(tool)
 		}
 
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)

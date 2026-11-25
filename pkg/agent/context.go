@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/skills"
@@ -28,6 +29,16 @@ type ContextBuilder struct {
 	splitOnMarker  bool
 	agentDiscovery func(agentID string) []AgentDescriptor
 	promptRegistry *PromptRegistry
+
+	isolationBoundary         *isolation.Boundary
+	restrictToWorkspace       bool
+	allowReadOutsideWorkspace bool
+
+	// Bootstrap prompt caps. Zero means use the config defaults. They apply to
+	// AGENT.md/AGENTS.md, SOUL.md and IDENTITY.md; USER.md is injected through
+	// the memory block and is bounded by MemoryConfig.UserCharLimit.
+	bootstrapMaxChars      int
+	bootstrapMaxTotalChars int
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -46,6 +57,13 @@ type ContextBuilder struct {
 	// build time. This catches nested file creations/deletions/mtime changes
 	// that may not update the top-level skill root directory mtime.
 	skillFilesAtCache map[string]time.Time
+
+	// memorySnapshots freezes the memory block of the prompt per session. The
+	// memory files change on disk at once, but a session keeps the block it
+	// started with, so its provider prompt cache survives memory writes; the
+	// next session (or /clear) sees the new content.
+	memoryMu        sync.Mutex
+	memorySnapshots map[string]string
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
@@ -63,6 +81,40 @@ func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuil
 			)
 		}
 	}
+	return cb
+}
+
+// WithMemoryConfig sets the limits and switches of the injected memory block.
+func (cb *ContextBuilder) WithMemoryConfig(cfg config.MemoryConfig) *ContextBuilder {
+	cb.memory.cfg = cfg
+	return cb
+}
+
+// WithBootstrapLimits overrides the per-file and total character caps applied
+// to the workspace bootstrap files in the system prompt. Non-positive values
+// fall back to the config defaults.
+func (cb *ContextBuilder) WithBootstrapLimits(maxChars, maxTotalChars int) *ContextBuilder {
+	cb.bootstrapMaxChars = maxChars
+	cb.bootstrapMaxTotalChars = maxTotalChars
+	cb.InvalidateCache()
+	return cb
+}
+
+// WithIsolation snapshots the active subprocess isolation boundary and the
+// workspace file-tool policy used by the system prompt. The prompt is static, so
+// a later isolation configuration change requires rebuilding the ContextBuilder
+// (config reload creates a new agent registry and does that automatically).
+func (cb *ContextBuilder) WithIsolation(
+	cfg config.IsolationConfig,
+	restrictToWorkspace, allowReadOutsideWorkspace bool,
+) *ContextBuilder {
+	cb.restrictToWorkspace = restrictToWorkspace
+	cb.allowReadOutsideWorkspace = allowReadOutsideWorkspace
+	cb.isolationBoundary = nil
+	if boundary, ok := isolation.DescribeBoundary(cb.workspace, cfg); ok {
+		cb.isolationBoundary = &boundary
+	}
+	cb.InvalidateCache()
 	return cb
 }
 
@@ -160,11 +212,15 @@ func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 		accuracyRule,
 		"**Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.",
 	)
-	if includeToolUseRule {
+	if includeToolUseRule && cb.memory.cfg.Enabled {
 		rules = append(
 			rules,
 			fmt.Sprintf(
-				"**Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md",
+				"**Memory** - Save durable, reusable facts with the memory tool, 1-2 compact lines each "+
+					"(target memory = lasting facts, target user = who I am). Put the day's work, technical details, "+
+					"investigations and logs in the daily note %s/memory/YYYYMM/YYYYMMDD.md instead. "+
+					"A write shows up in your prompt from the next session. "+
+					"If memory is shown as truncated or the tool refuses a write, consolidate or remove entries.",
 				workspacePath,
 			),
 		)
@@ -195,6 +251,115 @@ Your workspace is at: %s
 		workspacePath,
 		strings.Join(rules, "\n\n"),
 	)
+}
+
+// isolationPromptOrder keeps the sandbox notice after the core identity when
+// both parts share the kernel identity slot.
+const isolationPromptOrder = 10
+
+func (cb *ContextBuilder) buildIsolationPrompt() string {
+	boundary := cb.isolationBoundary
+	if boundary == nil {
+		return ""
+	}
+
+	filePolicy := fmt.Sprintf(
+		"`restrict_to_workspace=%t` and `allow_read_outside_workspace=%t`",
+		cb.restrictToWorkspace,
+		cb.allowReadOutsideWorkspace,
+	)
+
+	if !boundary.PathBoundary {
+		var sb strings.Builder
+		sb.WriteString("## Sandbox Boundaries\n\n")
+		fmt.Fprintf(
+			&sb,
+			"Process-level isolation is enabled: %s. Child processes started by PicoClaw run with reduced privileges. The exact filesystem map is platform-defined; work inside the workspace.\n\n",
+			boundary.Backend,
+		)
+		fmt.Fprintf(
+			&sb,
+			"- File tools follow %s. This isolation applies to child processes, not to the main PicoClaw process.\n",
+			filePolicy,
+		)
+		sb.WriteString(isolationBoundaryError(
+			"the workspace",
+			"Report it and ask the user to adjust the isolation configuration;",
+		))
+		return sb.String()
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Sandbox Boundaries\n\n")
+	fmt.Fprintf(
+		&sb,
+		"Subprocess isolation is enabled: %s. Commands started by `exec`, CLI providers, process hooks, and stdio MCP servers "+
+			"run in a restricted filesystem view of this host, not directly against the host filesystem.\n\n",
+		boundary.Backend,
+	)
+	if boundary.Workspace != "" {
+		fmt.Fprintf(&sb, "- Workspace: `%s` (working directory; create task files here)\n", boundary.Workspace)
+	}
+	if boundary.Root != "" && boundary.RootVisible {
+		rootMode := "read-only"
+		if boundary.RootWritable {
+			rootMode = "writable"
+		}
+		fmt.Fprintf(&sb, "- PicoClaw instance root: `%s` (%s; internal state)\n", boundary.Root, rootMode)
+	}
+	if boundary.Scratch != "" {
+		scratchMode := "read-only"
+		if boundary.ScratchWritable {
+			scratchMode = "writable"
+		}
+		fmt.Fprintf(&sb, "- Scratch: `%s` (`$TMPDIR`, %s)\n", boundary.Scratch, scratchMode)
+	}
+	if len(boundary.Writable) > 0 {
+		fmt.Fprintf(&sb, "- Additional writable paths (expose_paths): %s\n", formatBoundaryPathList(boundary.Writable))
+	}
+	if len(boundary.ReadOnly) > 0 {
+		fmt.Fprintf(&sb, "- Additional read-only paths (expose_paths): %s\n", formatBoundaryPathList(boundary.ReadOnly))
+	}
+	sb.WriteString("- Standard system runtime paths are read-only unless listed above. " +
+		"Other host paths outside the roots above are not visible.\n")
+	if boundary.Network {
+		sb.WriteString("- Network access remains available.\n")
+	} else {
+		sb.WriteString("- Network access is unavailable.\n")
+	}
+	fmt.Fprintf(
+		&sb,
+		"- File tools follow %s. This isolation applies to child processes started by PicoClaw, not to the main PicoClaw process.\n",
+		filePolicy,
+	)
+	sb.WriteString(isolationBoundaryError(
+		"the roots above",
+		"Report it and ask the user to add the path to `isolation.expose_paths`;",
+	))
+	return sb.String()
+}
+
+func isolationBoundaryError(location, action string) string {
+	return "- A `Read-only file system`, `No such file or directory`, or permission error " +
+		"on a path outside " + location + " is the sandbox boundary, not a broken host. " +
+		action + " do not retry with `sudo`, another absolute path, or another tool.\n"
+}
+
+func formatBoundaryPathList(paths []string) string {
+	const maxPaths = 8
+
+	shown := paths
+	if len(shown) > maxPaths {
+		shown = shown[:maxPaths]
+	}
+	quoted := make([]string, len(shown))
+	for i, path := range shown {
+		quoted[i] = "`" + path + "`"
+	}
+	if len(paths) > maxPaths {
+		return fmt.Sprintf("%s (+%d more)", strings.Join(quoted, ", "), len(paths)-maxPaths)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func formatToolDiscoveryRule(useBM25, useRegex bool) string {
@@ -260,6 +425,20 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 		Cache:   PromptCacheEphemeral,
 	})
 
+	if isolationPrompt := cb.buildIsolationPrompt(); isolationPrompt != "" {
+		add(PromptPart{
+			ID:      "kernel.isolation",
+			Layer:   PromptLayerKernel,
+			Slot:    PromptSlotIdentity,
+			Source:  PromptSource{ID: PromptSourceIsolation, Name: "isolation"},
+			Order:   isolationPromptOrder,
+			Title:   "sandbox boundaries",
+			Content: isolationPrompt,
+			Stable:  true,
+			Cache:   PromptCacheEphemeral,
+		})
+	}
+
 	// Bootstrap files
 	bootstrapContent := cb.LoadBootstrapFiles()
 	if bootstrapContent != "" {
@@ -305,21 +484,6 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 		})
 	}
 
-	// Memory context
-	memoryContext := cb.memory.GetMemoryContext()
-	if memoryContext != "" {
-		add(PromptPart{
-			ID:      "context.memory",
-			Layer:   PromptLayerContext,
-			Slot:    PromptSlotMemory,
-			Source:  PromptSource{ID: PromptSourceMemory, Name: "memory:workspace"},
-			Title:   "memory",
-			Content: "# Memory\n\n" + memoryContext,
-			Stable:  true,
-			Cache:   PromptCacheEphemeral,
-		})
-	}
-
 	// Multi-Message Sending (if enabled)
 	if cb.splitOnMarker {
 		add(PromptPart{
@@ -339,6 +503,61 @@ Each part separated by the marker will be sent as an independent message.`,
 
 	stack.Seal()
 	return stack.Parts()
+}
+
+// maxMemorySnapshots bounds the per-session snapshot map. ponytail: past it the
+// map is reset, so live sessions just pick up fresh memory once; add an LRU if
+// that churn ever shows.
+const maxMemorySnapshots = 256
+
+// memoryPromptPart returns the memory block for a session, frozen at the first
+// build of that session. An empty sessionKey (no session) reads live.
+func (cb *ContextBuilder) memoryPromptPart(sessionKey string) (PromptPart, bool) {
+	var snapshot string
+	if sessionKey == "" {
+		snapshot = cb.memory.Snapshot()
+	} else {
+		var ok bool
+		cb.memoryMu.Lock()
+		snapshot, ok = cb.memorySnapshots[sessionKey]
+		cb.memoryMu.Unlock()
+		if !ok {
+			// Read outside the lock so slow disk never stalls other sessions.
+			fresh := cb.memory.Snapshot()
+			cb.memoryMu.Lock()
+			// A concurrent build of the same session may have stored first; keep
+			// that one so the session sees a single frozen snapshot.
+			if snapshot, ok = cb.memorySnapshots[sessionKey]; !ok {
+				snapshot = fresh
+				if cb.memorySnapshots == nil || len(cb.memorySnapshots) >= maxMemorySnapshots {
+					cb.memorySnapshots = make(map[string]string)
+				}
+				cb.memorySnapshots[sessionKey] = snapshot
+			}
+			cb.memoryMu.Unlock()
+		}
+	}
+	if snapshot == "" {
+		return PromptPart{}, false
+	}
+	return PromptPart{
+		ID:      "context.memory",
+		Layer:   PromptLayerContext,
+		Slot:    PromptSlotMemory,
+		Source:  PromptSource{ID: PromptSourceMemory, Name: "memory:workspace"},
+		Title:   "memory",
+		Content: "# Memory\n\n" + snapshot,
+		Stable:  true,
+		Cache:   PromptCacheEphemeral,
+	}, true
+}
+
+// ForgetMemorySnapshot drops a session's frozen memory, so its next turn picks
+// up what was written meanwhile. Call it when the conversation is cleared.
+func (cb *ContextBuilder) ForgetMemorySnapshot(sessionKey string) {
+	cb.memoryMu.Lock()
+	delete(cb.memorySnapshots, sessionKey)
+	cb.memoryMu.Unlock()
 }
 
 // BuildSystemPromptWithCache returns the cached system prompt if available
@@ -437,19 +656,13 @@ func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
 		return ""
 	}
 
-	var lines []string
-	lines = append(lines, "<skills>")
+	var infos []skills.SkillInfo
 	for _, s := range cb.skillsLoader.ListSkills() {
-		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(s.Name))]; !ok {
-			continue
+		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(s.Name))]; ok {
+			infos = append(infos, s)
 		}
-		lines = append(lines, s.CatalogLines()...)
 	}
-	if len(lines) == 1 {
-		return ""
-	}
-	lines = append(lines, "</skills>")
-	return strings.Join(lines, "\n")
+	return skills.BuildCatalog(infos)
 }
 
 // EstimateSystemTokens estimates the token count of the full system message
@@ -465,6 +678,7 @@ func (cb *ContextBuilder) EstimateSystemTokens(summary string, activeSkills []st
 	const dynamicContextChars = 300
 
 	totalChars := utf8.RuneCountInString(staticPrompt) + dynamicContextChars
+	totalChars += utf8.RuneCountInString(cb.memory.Snapshot())
 
 	if skillsText := cb.buildActiveSkillsContext(activeSkills); skillsText != "" {
 		totalChars += utf8.RuneCountInString(skillsText)
@@ -511,19 +725,12 @@ func (cb *ContextBuilder) InvalidateCache() {
 }
 
 // sourcePaths returns non-skill workspace source files tracked for cache
-// invalidation (bootstrap files + memory). Skill roots are handled separately
-// because they require both directory-level and recursive file-level checks.
+// invalidation (bootstrap files). Memory files are deliberately not tracked:
+// they are injected through a per-session snapshot, so writing them must not
+// rebuild the shared prompt. Skill roots are handled separately because they
+// require both directory-level and recursive file-level checks.
 func (cb *ContextBuilder) sourcePaths() []string {
-	agentDefinition := cb.LoadAgentDefinition()
-	paths := agentDefinition.trackedPaths(cb.workspace)
-	paths = append(paths, filepath.Join(cb.workspace, "memory", "MEMORY.md"))
-	// Daily notes are folded into the cached system prompt via
-	// GetMemoryContext. Track the exact files it reads so edits and newly
-	// created notes invalidate the cache like MEMORY.md does.
-	if cb.memory != nil {
-		paths = append(paths, cb.memory.RecentDailyNotePaths(recentDailyNotesDays)...)
-	}
-	return uniquePaths(paths)
+	return bootstrapSourcePaths(cb.workspace)
 }
 
 // skillRoots returns all skill root directories that can affect
@@ -610,7 +817,7 @@ func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 		return true
 	}
 
-	// Check tracked source files (bootstrap + memory).
+	// Check tracked source files (bootstrap).
 	if slices.ContainsFunc(cb.sourcePaths(), cb.fileChangedSince) {
 		return true
 	}
@@ -727,32 +934,34 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 }
 
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
+	maxChars, maxTotal := cb.bootstrapLimits()
+	budget := maxTotal
 	var sb strings.Builder
 
 	agentDefinition := cb.LoadAgentDefinition()
 	if agentDefinition.Agent != nil {
 		label := string(agentDefinition.Source)
+		path := relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
 		if label == "" {
-			label = relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
+			label = path
 		}
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", label, agentDefinition.Agent.Body)
-	}
-	if agentDefinition.Soul != nil {
-		fmt.Fprintf(
-			&sb,
-			"## %s\n\n%s\n\n",
-			relativeWorkspacePath(cb.workspace, agentDefinition.Soul.Path),
-			agentDefinition.Soul.Content,
+		budget = appendBootstrapSection(
+			&sb, budget, maxChars,
+			label, agentDefinition.Agent.Body, path,
 		)
 	}
-	if agentDefinition.User != nil {
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
+	if agentDefinition.Soul != nil && budget > 0 {
+		path := relativeWorkspacePath(cb.workspace, agentDefinition.Soul.Path)
+		budget = appendBootstrapSection(
+			&sb, budget, maxChars,
+			path, agentDefinition.Soul.Content, path,
+		)
 	}
-
-	if agentDefinition.Source != AgentDefinitionSourceAgent {
-		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
-		if data, err := os.ReadFile(filePath); err == nil {
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "IDENTITY.md", data)
+	if agentDefinition.Source != AgentDefinitionSourceAgent && budget > 0 {
+		const identity = "IDENTITY.md"
+		filePath := filepath.Join(cb.workspace, identity)
+		if data, ok := readBootstrapFile(filePath); ok {
+			appendBootstrapSection(&sb, budget, maxChars, identity, data, identity)
 		}
 	}
 
@@ -808,10 +1017,23 @@ func currentDateLine(now time.Time) string {
 	return fmt.Sprintf("%s (%s)", now.Format("Monday, January 2, 2006"), zone)
 }
 
+func formatSystemMemory(ram uint64) string {
+	if ram < 1<<30 {
+		return fmt.Sprintf("%.1f MiB RAM", float64(ram)/(1<<20))
+	}
+	return fmt.Sprintf("%.1f GiB RAM", float64(ram)/(1<<30))
+}
+
 func (cb *ContextBuilder) buildDynamicContext(
 	channel, chatID, senderID, senderDisplayName string,
 ) string {
-	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
+	rt := fmt.Sprintf(
+		"%s %s, Go %s, %d logical CPUs",
+		runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(),
+	)
+	if ram := totalSystemMemory(); ram > 0 {
+		rt += ", " + formatSystemMemory(ram)
+	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Current Date\n%s\n\n## Runtime\n%s", currentDateLine(time.Now()), rt)
@@ -875,6 +1097,15 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	var stringParts []string
 	if strings.TrimSpace(staticPrompt) != "" {
 		stringParts = append(stringParts, staticPrompt)
+	}
+
+	// Memory is a per-session snapshot kept out of the shared static prompt, so
+	// a memory write never rebuilds it.
+	if !req.SuppressDefaultSystemPrompt {
+		if memPart, ok := cb.memoryPromptPart(req.SessionKey); ok {
+			stringParts = append(stringParts, memPart.Content)
+			contentBlocks = append(contentBlocks, promptContentBlock(memPart, nil))
+		}
 	}
 
 	promptParts := append([]PromptPart(nil), req.Overlays...)

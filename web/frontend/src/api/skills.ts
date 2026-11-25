@@ -10,6 +10,7 @@ export interface SkillSupportItem {
   registry_url?: string
   installed_version?: string
   installed_at?: number
+  plugin_id?: string
 }
 
 export interface SkillDetailResponse extends SkillSupportItem {

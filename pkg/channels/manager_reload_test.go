@@ -255,6 +255,28 @@ func TestReload_UnchangedChannelKeepsSameWorker(t *testing.T) {
 	}
 }
 
+// An enabled channel that fails its readiness check never reaches m.channels:
+// initChannels skips it. A reload that changes that channel must skip it too
+// instead of dereferencing a nil Channel and panicking the gateway.
+func TestReload_EnabledUnreadyChannelDoesNotPanic(t *testing.T) {
+	m := newReloadTestManager(t, newReloadTestConfig(t, `{"v":1}`, true))
+	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
+
+	cfg := newReloadTestConfig(t, `{"v":2}`, true)
+	cfg.Channels["telegram"] = &config.Channel{
+		Enabled:  true,
+		Type:     config.ChannelTelegram,
+		Settings: config.RawNode(`{"base_url":"https://telegram.invalid"}`),
+	}
+
+	if err := m.Reload(context.Background(), cfg); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if channelPresent(m, "telegram") {
+		t.Fatal("unready telegram channel should not be registered")
+	}
+}
+
 // A reload must reuse the manager lifecycle context so StopAll keeps owning
 // every goroutine it may need to cancel; replacing it would orphan the previous
 // cancel func on each reload.

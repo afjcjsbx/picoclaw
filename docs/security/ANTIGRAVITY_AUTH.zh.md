@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "Antigravity 使用 OAuth 2.0 with PKCE（Proof Key for Code Exchange） 进行安全认证：."
+---
 > 返回 [README](../project/README.zh.md)
 
 # Antigravity 认证与集成指南
@@ -440,7 +444,7 @@ type ProviderAuthResult = {
 
 ### 1. 所需环境/依赖
 
-- Go ≥ 1.27.1
+- Go ≥ 1.27.4
 - PicoClaw 代码库（`pkg/providers/` 和 `pkg/auth/`）
 - `crypto` 和 `net/http` 标准库包
 

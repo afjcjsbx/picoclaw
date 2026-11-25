@@ -2,7 +2,11 @@ import {
   parseToolCallsFromContent,
   parseToolCallsValue,
 } from "@/features/chat/tool-calls"
-import type { AssistantMessageKind, ChatMessage } from "@/store/chat"
+import type {
+  AssistantMessageKind,
+  ChatApproval,
+  ChatMessage,
+} from "@/store/chat"
 
 type AssistantToolCalls = ChatMessage["toolCalls"]
 type ExistingAssistantMessageState = Pick<ChatMessage, "kind" | "toolCalls">
@@ -11,6 +15,7 @@ export interface AssistantMessageCreateState {
   content: string
   kind: AssistantMessageKind
   toolCalls?: AssistantToolCalls
+  approval?: ChatApproval
 }
 
 export interface AssistantMessageUpdateState {
@@ -34,6 +39,9 @@ function parseAssistantMessageKind(
   toolCalls?: AssistantToolCalls,
 ): AssistantMessageKind {
   const kind = normalizeAssistantMessageKind(payload)
+  if (kind === "approval") {
+    return "approval"
+  }
   if (kind === "thought") {
     return "thought"
   }
@@ -44,6 +52,42 @@ function parseAssistantMessageKind(
     return "tool_calls"
   }
   return "normal"
+}
+
+function parseApproval(value: unknown): ChatApproval | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined
+  }
+
+  const raw = value as Record<string, unknown>
+  const token = typeof raw.token === "string" ? raw.token.trim() : ""
+  if (!token) {
+    return undefined
+  }
+
+  const command =
+    typeof raw.command === "string" && raw.command.trim()
+      ? raw.command
+      : undefined
+  const reason =
+    typeof raw.reason === "string" && raw.reason.trim() ? raw.reason : undefined
+  const rawExpiresAt = raw.expires_at
+  const numericExpiresAt =
+    typeof rawExpiresAt === "number"
+      ? rawExpiresAt
+      : typeof rawExpiresAt === "string" && rawExpiresAt.trim()
+        ? Number(rawExpiresAt)
+        : Number.NaN
+  const expiresAt = Number.isFinite(numericExpiresAt)
+    ? numericExpiresAt
+    : undefined
+
+  return {
+    token,
+    ...(command ? { command } : {}),
+    ...(reason ? { reason } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+  }
 }
 
 function hasExplicitAssistantKindPayload(
@@ -70,11 +114,13 @@ export function parseAssistantMessageCreateState(
 ): AssistantMessageCreateState {
   const content = typeof payload.content === "string" ? payload.content : ""
   const toolCalls = parseAssistantToolCalls(payload, content)
+  const approval = parseApproval(payload.approval)
 
   return {
     content,
     kind: parseAssistantMessageKind(payload, toolCalls),
     toolCalls,
+    ...(approval ? { approval } : {}),
   }
 }
 

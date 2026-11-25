@@ -2,7 +2,10 @@ package seahorse
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 func TestGrepSearchSummaries(t *testing.T) {
@@ -68,5 +71,93 @@ func TestGrepToolSupportsAllConversations(t *testing.T) {
 	// GrepTool should accept all_conversations parameter
 	if _, ok := props["all_conversations"]; !ok {
 		t.Error("Parameters missing 'all_conversations' field")
+	}
+}
+
+func TestGrepToolScopesToCurrentSessionByDefault(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	current, _ := s.GetOrCreateConversation(ctx, "session:current")
+	other, _ := s.GetOrCreateConversation(ctx, "session:other")
+	s.AddMessage(ctx, current.ConversationID, "user", "shared needle from current topic", 5)
+	s.AddMessage(ctx, other.ConversationID, "user", "shared needle from other topic", 5)
+
+	tool := NewGrepTool(&RetrievalEngine{store: s})
+	toolCtx := tools.WithToolSessionContext(ctx, "agent", "session:current", nil)
+	result := tool.Execute(toolCtx, map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("Execute returned error: %s", result.ForLLM)
+	}
+
+	var output struct {
+		Messages []struct {
+			Snippet string `json:"snippet"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(result.ForLLM), &output); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(output.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1: %#v", len(output.Messages), output.Messages)
+	}
+	if output.Messages[0].Snippet != "shared needle from current topic" {
+		t.Fatalf("snippet = %q, want current topic message", output.Messages[0].Snippet)
+	}
+}
+
+func TestGrepToolCanSearchAllConversations(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	current, _ := s.GetOrCreateConversation(ctx, "session:current")
+	other, _ := s.GetOrCreateConversation(ctx, "session:other")
+	s.AddMessage(ctx, current.ConversationID, "user", "shared needle from current topic", 5)
+	s.AddMessage(ctx, other.ConversationID, "user", "shared needle from other topic", 5)
+
+	tool := NewGrepTool(&RetrievalEngine{store: s})
+	toolCtx := tools.WithToolSessionContext(ctx, "agent", "session:current", nil)
+	result := tool.Execute(toolCtx, map[string]any{
+		"pattern":           "needle",
+		"all_conversations": true,
+	})
+	if result.IsError {
+		t.Fatalf("Execute returned error: %s", result.ForLLM)
+	}
+
+	var output struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(result.ForLLM), &output); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(output.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(output.Messages))
+	}
+}
+
+func TestGrepToolUnknownSessionReturnsEmptyHint(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	conv, _ := s.GetOrCreateConversation(ctx, "session:current")
+	s.AddMessage(ctx, conv.ConversationID, "user", "shared needle", 5)
+
+	tool := NewGrepTool(&RetrievalEngine{store: s})
+	toolCtx := tools.WithToolSessionContext(ctx, "agent", "session:missing", nil)
+	result := tool.Execute(toolCtx, map[string]any{"pattern": "needle"})
+	if result.IsError {
+		t.Fatalf("Execute returned error: %s", result.ForLLM)
+	}
+
+	var output struct {
+		Messages []map[string]any `json:"messages"`
+		Hint     string           `json:"hint"`
+	}
+	if err := json.Unmarshal([]byte(result.ForLLM), &output); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(output.Messages) != 0 {
+		t.Fatalf("messages = %d, want 0", len(output.Messages))
+	}
+	if output.Hint == "" {
+		t.Fatal("expected hint for unknown current session")
 	}
 }

@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 支持对 model_list 配置条目中的 api_key 值进行加密。 加密后的密钥以 enc:// 字符串形式存储，并在启动时自动解密。"
+---
 > 返回 [README](../project/README.zh.md)
 
 # 凭据加密

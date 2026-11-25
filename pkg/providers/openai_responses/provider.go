@@ -67,6 +67,11 @@ func (p *Provider) SetSessionHeader(name, fallback string) {
 
 func (p *Provider) GetDefaultModel() string { return "" }
 
+// ReplaysReasoningContent reports that this provider does not resend the
+// stored ReasoningContent string. It replays encrypted reasoning items from
+// tool-call metadata instead, which the string estimator does not model.
+func (p *Provider) ReplaysReasoningContent() bool { return false }
+
 func (p *Provider) Chat(
 	ctx context.Context,
 	messages []Message,

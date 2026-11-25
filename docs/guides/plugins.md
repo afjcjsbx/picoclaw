@@ -1,3 +1,6 @@
+---
+description: "PicoClaw supports Agent Plugins 1.0.0, including skills, stdio MCP, Streamable HTTP MCP and legacy HTTP+SSE MCP. The 1.1.0 draft is not enabled."
+---
 # Agent Plugin Installation and Reference
 
 PicoClaw supports **Agent Plugins 1.0.0**, including skills, stdio MCP,
@@ -111,6 +114,9 @@ plugin in `config.json`, using the `name` from its `plugin.json` as the entry ID
 
 Restart PicoClaw or reload its configuration to activate the plugin. Review
 packages before enabling them; local plugin servers run as subprocesses.
+Skills published by an enabled plugin also appear on the Web UI **Skills**
+page with the `Plugin` origin; the dashboard discovers them from the package
+on disk, so it does not need to start the plugin to list them.
 
 The same steps from the command line: `picoclaw plugin add <name> --enable` writes
 the entry, `picoclaw plugin list` shows what is configured and what sits on disk, and
@@ -355,6 +361,13 @@ a stable hash suffix to fit provider limits and avoid ambiguous normalization.
 Use the emitted tool definitions to obtain exact names for a tool allowlist.
 Plugin tools never overwrite built-ins or existing tools.
 
+Plugin MCP servers always run tool calls sequentially. The
+`supports_parallel_tool_calls` field available for native MCP servers (see
+[MCP tools](../tools/mcp.md)) is not accepted in a plugin `mcp.json` or in
+`mcp_overrides`; specifying it there produces a validation error. If a server
+in a plugin must handle parallel calls, expose it as a native
+`tools.mcp.servers` entry instead.
+
 ## Skills and bundled resources
 
 Each immediate child of `skills/` containing a regular `SKILL.md` is a candidate.
@@ -471,7 +484,14 @@ Each action names a server and tool from `mcp.json` or the entry's
 `observe` runs it for a runtime event. Supported intercept stages are
 `before_llm`, `after_llm`, `before_tool`, `after_tool`, and `approve_tool`.
 Observe accepts PicoClaw runtime event names such as `agent.turn.end`; the
-`turn_completed` alias runs only for successfully completed turns.
+`turn_completed` alias runs only for successfully completed turns. The
+`post_compaction` alias runs after successful history summarization or context
+compression, covering both `agent.session.summarize` and
+`agent.context.compress` events. Additional short aliases include
+`subturn_spawn`, `subturn_end`, `subturn_result_delivered`, `subturn_orphan`,
+`follow_up_queued`, `llm_retry`, `context_compress`, and `session_summarize`.
+See [hook-json-protocol.md](../architecture/hooks/hook-json-protocol.md) for
+the full alias table.
 
 Arguments support the event's available `${user_message}` and
 `${assistant_message}` values, `${tool_name}`, `${tool_arguments}`,
@@ -687,7 +707,7 @@ protocol: `hook.hello`, `hook.runtime_event`, and the requested interception
 methods. `entries.<id>.config` is delivered as `config` in the hello payload.
 Only declared stages and allowed agents are forwarded.
 
-See [the hook protocol](../architecture/hooks/README.md). Hook failures use the
+See [the hook protocol](../architecture/hooks/). Hook failures use the
 existing hook manager's timeout and error policies. In particular, approval
 errors can deny a tool call; they do not crash the runtime. Trusted interception
 hooks can alter or short-circuit execution, so `allow_hooks` is a separate grant.
@@ -717,7 +737,7 @@ it is not a sandbox for arbitrary subprocess code. Enable only trusted packages.
 
 For isolated installations outside the instance filesystem, configure explicit
 read-only package and writable data/toolchain exposure as described in the
-[isolation documentation](https://github.com/afjcjsbx/picoclaw/blob/main/pkg/isolation/README.md).
+[subprocess isolation documentation](../security/isolation.md).
 The plugin loader never
 silently broadens those OS permissions.
 

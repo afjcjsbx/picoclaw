@@ -3,10 +3,28 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 )
+
+// eventAgentIDForSession resolves the agent that owns sessionKey for runtime
+// events emitted outside the normal turn flow. It prefers the active turn
+// carried by ctx and falls back to the session's resolved agent, so observers
+// scoped to a specific agent still receive the event.
+func (al *AgentLoop) eventAgentIDForSession(ctx context.Context, sessionKey string) string {
+	if al == nil {
+		return ""
+	}
+	if ts := turnStateFromContext(ctx); ts != nil && ts.agentID != "" {
+		return ts.agentID
+	}
+	if agent := al.agentForSession(sessionKey); agent != nil {
+		return agent.ID
+	}
+	return ""
+}
 
 func (al *AgentLoop) newTurnEventScope(agentID, sessionKey string, turnCtx *TurnContext) turnEventScope {
 	seq := al.turnSeq.Add(1)

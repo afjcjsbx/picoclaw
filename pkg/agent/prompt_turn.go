@@ -25,6 +25,7 @@ func promptBuildRequestForTurn(
 		ChatID:            ts.chatID,
 		SenderID:          ts.opts.Dispatch.SenderID(),
 		SenderDisplayName: ts.opts.SenderDisplayName,
+		SessionKey:        ts.sessionKey,
 		ActiveSkills:      activeSkillNames(ts.agent, ts.opts),
 		Overlays:          promptOverlaysForOptions(ts.opts),
 	}
@@ -161,10 +162,12 @@ func toolResultPromptMessage(content, toolCallID string, media []string) provide
 	return promptMessageWithMetadata(msg, PromptLayerTurn, PromptSlotToolResult, PromptSourceToolResult)
 }
 
+const toolImageFollowUpContent = "[Loaded image from tool result above]"
+
 func toolImageFollowUpPromptMessage(media []string) providers.Message {
 	msg := providers.Message{
 		Role:    "user",
-		Content: "[Loaded image from tool result above]",
+		Content: toolImageFollowUpContent,
 	}
 	if len(media) > 0 {
 		msg.Media = append([]string(nil), media...)

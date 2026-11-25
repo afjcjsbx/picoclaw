@@ -116,25 +116,75 @@ func TestBuildLinuxMountPlan(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("linux-only default mount set")
 	}
-	plan := BuildLinuxMountPlan("/rootdir", []config.ExposePath{{Source: "/src", Target: "/dst", Mode: "ro"}})
+	root := t.TempDir()
+	// Create the standard subdirectories so existingExposePaths includes them.
+	if err := PrepareInstanceRoot(root); err != nil {
+		t.Fatalf("PrepareInstanceRoot: %v", err)
+	}
+	plan := BuildLinuxMountPlan(root, []config.ExposePath{{Source: "/src", Target: "/dst", Mode: "ro"}})
 	if len(plan) == 0 {
 		t.Fatal("BuildLinuxMountPlan returned empty plan")
 	}
-	foundRoot := false
-	foundOverride := false
+	// The default Linux plan must NOT expose the whole instance root; only the
+	// narrow subdirectories are mounted.
 	for _, rule := range plan {
-		if rule.Source == "/rootdir" && rule.Target == "/rootdir" && rule.Mode == "rw" {
-			foundRoot = true
-		}
-		if rule.Source == "/src" && rule.Target == "/dst" && rule.Mode == "ro" {
-			foundOverride = true
+		if rule.Target == root {
+			t.Fatalf(
+				"BuildLinuxMountPlan default plan must not mount the full instance root (%s rw); found rule: %+v",
+				root,
+				rule,
+			)
 		}
 	}
-	if !foundRoot {
-		t.Fatal("BuildLinuxMountPlan missing root mapping")
+	// workspace and runtime-user-env must be writable by default.
+	foundWorkspace := false
+	foundRUE := false
+	foundOverride := false
+	for _, rule := range plan {
+		switch rule.Target {
+		case filepath.Join(root, pkg.WorkspaceName):
+			if rule.Mode != "rw" {
+				t.Fatalf("workspace must be rw, got: %+v", rule)
+			}
+			foundWorkspace = true
+		case filepath.Join(root, "runtime-user-env"):
+			if rule.Mode != "rw" {
+				t.Fatalf("runtime-user-env must be rw, got: %+v", rule)
+			}
+			foundRUE = true
+		case "/dst":
+			foundOverride = rule.Source == "/src" && rule.Mode == "ro"
+		}
+	}
+	if !foundWorkspace {
+		t.Fatal("BuildLinuxMountPlan missing workspace mapping")
+	}
+	if !foundRUE {
+		t.Fatal("BuildLinuxMountPlan missing runtime-user-env mapping")
 	}
 	if !foundOverride {
 		t.Fatal("BuildLinuxMountPlan missing override mapping")
+	}
+}
+
+func TestBuildLinuxMountPlan_OperatorRootExpose(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only")
+	}
+	root := t.TempDir()
+	if err := PrepareInstanceRoot(root); err != nil {
+		t.Fatalf("PrepareInstanceRoot: %v", err)
+	}
+	// Operator explicitly re-exposes the entire root rw.
+	plan := BuildLinuxMountPlan(root, []config.ExposePath{{Source: root, Target: root, Mode: "rw"}})
+	foundRoot := false
+	for _, rule := range plan {
+		if rule.Target == root && rule.Mode == "rw" {
+			foundRoot = true
+		}
+	}
+	if !foundRoot {
+		t.Fatal("BuildLinuxMountPlan: operator root expose_paths rule not in plan")
 	}
 }
 

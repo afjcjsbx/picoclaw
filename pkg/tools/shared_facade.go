@@ -13,6 +13,9 @@ type (
 	Tool                   = toolshared.Tool
 	AsyncCallback          = toolshared.AsyncCallback
 	AsyncExecutor          = toolshared.AsyncExecutor
+	ParallelAware          = toolshared.ParallelAware
+	ParallelSafety         = toolshared.ParallelSafety
+	PathAccess             = toolshared.PathAccess
 	PromptMetadata         = toolshared.PromptMetadata
 	PromptMetadataProvider = toolshared.PromptMetadataProvider
 	ToolResult             = toolshared.ToolResult

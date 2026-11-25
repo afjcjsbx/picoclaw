@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -20,36 +22,46 @@ import (
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	toolshared "github.com/sipeed/picoclaw/pkg/tools/shared"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
-	modelMu                   *sync.RWMutex
-	ID                        string
-	Name                      string
-	Model                     string
-	Fallbacks                 []string
-	Workspace                 string
-	MaxIterations             int
-	MaxTokens                 int
-	Temperature               float64
-	ThinkingLevel             ThinkingLevel
-	ThinkingLevelConfigured   bool
-	ContextWindow             int
-	SummarizeMessageThreshold int
-	SummarizeTokenPercent     int
-	LoopDetection             config.LoopDetectionConfig
-	Provider                  providers.LLMProvider
-	Sessions                  session.SessionStore
-	ContextBuilder            *ContextBuilder
-	Tools                     *tools.ToolRegistry
-	Definition                AgentContextDefinition
-	Subagents                 *config.SubagentsConfig
-	SkillsFilter              []string
-	MCPServerAllowlist        map[string]struct{}
-	Candidates                []providers.FallbackCandidate
-	ImageCandidates           []providers.FallbackCandidate
+	modelMu                 *sync.RWMutex
+	ID                      string
+	Name                    string
+	Model                   string
+	Fallbacks               []string
+	Workspace               string
+	MaxIterations           int
+	BudgetWarnAt            int           // iteration that triggers the budget checkpoint notice; 0 = never
+	RunBudget               time.Duration // wall-clock budget of one turn; 0 = off
+	RunBudgetWarnAfter      time.Duration // elapsed time that triggers the run-budget wrap-up notice
+	MaxTokens               int
+	Temperature             float64
+	ThinkingLevel           ThinkingLevel
+	ThinkingLevelConfigured bool
+	ContextWindow           int
+	SummarizeTokenPercent   int
+	LoopDetection           config.LoopDetectionConfig
+	Provider                providers.LLMProvider
+	Sessions                session.SessionStore
+	ContextBuilder          *ContextBuilder
+	Tools                   *tools.ToolRegistry
+	Definition              AgentContextDefinition
+	Subagents               *config.SubagentsConfig
+	SkillsFilter            []string
+	MCPServerAllowlist      map[string]struct{}
+	Candidates              []providers.FallbackCandidate
+	ImageCandidates         []providers.FallbackCandidate
+	// CompactionCandidates is the resolved auxiliary.compaction model; empty
+	// means summarization runs on the agent's own model.
+	CompactionCandidates []providers.FallbackCandidate
+
+	// Protection configures the legacy context manager's head/tail policy. It
+	// is resolved from agents.defaults at construction time.
+	Protection ContextProtection
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -101,12 +113,13 @@ func NewAgentInstance(
 		// Keep the subprocess isolation runtime aligned with the latest loaded config
 		// before any tools or providers start spawning child processes.
 		isolation.Configure(cfg)
+		toolshared.SetArtifactRetention(cfg.Tools.GetArtifactMaxAge(), cfg.Tools.GetArtifactMaxFiles())
 	}
 
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
 
-	definition := loadAgentDefinition(workspace)
+	definition := loadAgentDefinitionWithLimit(workspace, defaults.GetMaxBootstrapChars())
 
 	model := resolveAgentModel(agentCfg, defaults, definition)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -133,27 +146,48 @@ func NewAgentInstance(
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		switch cfg.Tools.ReadFile.EffectiveMode() {
 		case config.ReadFileModeLines:
-			toolsRegistry.Register(fstools.NewReadFileLinesTool(
+			readTool := fstools.NewReadFileLinesTool(
 				workspace, readRestrict, maxReadFileSize,
 				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
 				allowReadPaths,
-			))
-		default:
+			)
+			readTool.SetMaxInlineResultChars(cfg.Tools.GetMaxInlineResultChars())
+			toolsRegistry.Register(readTool)
+		case config.ReadFileModeBytes:
 			toolsRegistry.Register(fstools.NewReadFileTool(
 				workspace, readRestrict, maxReadFileSize, allowReadPaths,
 			))
+		default:
+			readTool := fstools.NewReadFileAutoTool(
+				workspace, readRestrict, maxReadFileSize,
+				cfg.Tools.ReadFile.GetMaxLines(), cfg.Tools.ReadFile.GetMaxLineLength(),
+				allowReadPaths,
+			)
+			readTool.SetMaxInlineResultChars(cfg.Tools.GetMaxInlineResultChars())
+			toolsRegistry.Register(readTool)
 		}
 	}
+	// MEMORY.md and USER.md belong to the memory tool, which enforces their
+	// limits; the file tools must not be a way around it.
+	var memoryFiles []string
+	if defaults.Memory.Enabled {
+		memoryFiles = tools.MemoryFilePaths(workspace)
+	}
 	if cfg.Tools.IsToolEnabled("edit_file") {
-		toolsRegistry.Register(fstools.NewEditFileTool(workspace, restrict, allowWritePaths))
+		editTool := fstools.NewEditFileTool(workspace, restrict, allowWritePaths)
+		editTool.SetMemoryFiles(memoryFiles)
+		toolsRegistry.Register(editTool)
 	}
 	if cfg.Tools.IsToolEnabled("append_file") {
-		toolsRegistry.Register(fstools.NewAppendFileTool(workspace, restrict, allowWritePaths))
+		appendTool := fstools.NewAppendFileTool(workspace, restrict, allowWritePaths)
+		appendTool.SetMemoryFiles(memoryFiles)
+		toolsRegistry.Register(appendTool)
 	}
 	// Build write_file's copy from the registered editors so it steers the agent
 	// to edit_file/append_file only when those tools are actually available.
 	if cfg.Tools.IsToolEnabled("write_file") {
 		writeTool := fstools.NewWriteFileTool(workspace, restrict, allowWritePaths)
+		writeTool.SetMemoryFiles(memoryFiles)
 		var altTools []string
 		if toolsRegistry.HasRegistered("append_file") {
 			altTools = append(altTools, "append_file")
@@ -171,7 +205,13 @@ func NewAgentInstance(
 		toolsRegistry.Register(fstools.NewSearchFilesTool(workspace, readRestrict, allowReadPaths))
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
-		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
+		// exec can write and delete paths, so it must not inherit the
+		// configured read-only allowlist. The internal media temp dir is the
+		// one intentional exception: attachment processing through exec needs
+		// access to files that live outside the workspace.
+		execAllowPaths := append([]*regexp.Regexp(nil), allowWritePaths...)
+		execAllowPaths = append(execAllowPaths, regexp.MustCompile(mediaTempDirPattern()))
+		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, execAllowPaths)
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 				map[string]any{"error": err.Error()})
@@ -181,7 +221,12 @@ func NewAgentInstance(
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
-	sessions := initSessionStore(sessionsDir, cfg.Session.DurableWritesEnabled())
+	sessions, err := initSessionStore(sessionsDir, cfg.Session.DurableWritesEnabled())
+	if err != nil {
+		logger.ErrorCF("agent", "Failed to initialize session store",
+			map[string]any{"dir": sessionsDir, "error": err.Error()})
+		panic(fmt.Sprintf("agent: initialize session store in %s: %v", sessionsDir, err))
+	}
 
 	mcpDiscoveryActive := agentHasDiscoverableMCPServers(cfg, agentMCPServerAllowlist)
 	contextBuilder := NewContextBuilder(workspace).
@@ -189,7 +234,19 @@ func NewAgentInstance(
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
 		).
-		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker)
+		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
+		WithMemoryConfig(defaults.Memory).
+		WithBootstrapLimits(defaults.GetMaxBootstrapChars(), defaults.GetMaxBootstrapTotalChars()).
+		WithIsolation(
+			cfg.Isolation,
+			defaults.RestrictToWorkspace,
+			defaults.AllowReadOutsideWorkspace,
+		)
+	if defaults.Memory.Enabled {
+		toolsRegistry.Register(tools.NewMemoryTool(
+			workspace, defaults.Memory.GetMemoryCharLimit(), defaults.Memory.GetUserCharLimit(),
+		))
+	}
 
 	agentID := routing.DefaultAgentID
 	agentName := ""
@@ -212,43 +269,32 @@ func NewAgentInstance(
 		maxIter = 20
 	}
 
-	maxTokens := defaults.MaxTokens
-	if maxTokens == 0 {
-		maxTokens = 8192
-	}
+	budgetWarnAt := budgetWarnIteration(maxIter, defaults.MaxToolBudgetWarningRatio)
+	runBudget, runBudgetWarnAfter := runBudgetDurations(defaults.RunBudgetSeconds, defaults.RunBudgetWarningThreshold)
 
-	contextWindow := defaults.ContextWindow
-	if contextWindow == 0 {
-		// Default heuristic: 4x the output token limit.
-		// Most models have context windows well above their output limits
-		// (e.g., GPT-4o 128k ctx / 16k out, Claude 200k ctx / 8k out).
-		// 4x is a conservative lower bound that avoids premature
-		// summarization while remaining safe — the reactive
-		// forceCompression handles any overshoot.
-		contextWindow = maxTokens * 4
+	// The primary model's entry may override max_tokens, temperature and
+	// context_window; anything it leaves unset falls back to agents.defaults.
+	var primaryCfg *config.ModelConfig
+	if mc, err := cfg.GetModelConfig(model); err == nil {
+		primaryCfg = mc
 	}
-
-	temperature := 0.7
-	if defaults.Temperature != nil {
-		temperature = *defaults.Temperature
-	}
+	maxTokens := resolveMaxTokens(defaults, primaryCfg)
+	contextWindow := resolveContextWindow(defaults, primaryCfg, maxTokens)
+	temperature := resolveTemperature(defaults, primaryCfg)
 
 	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
+	if primaryCfg != nil {
+		thinkingLevelStr = primaryCfg.ThinkingLevel
 	}
 	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
 	thinkingLevelConfigured := isConfiguredThinkingLevel(thinkingLevelStr)
-
-	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
-	if summarizeMessageThreshold == 0 {
-		summarizeMessageThreshold = 20
-	}
 
 	summarizeTokenPercent := defaults.SummarizeTokenPercent
 	if summarizeTokenPercent == 0 {
 		summarizeTokenPercent = 75
 	}
+
+	protection := resolveContextProtection(defaults, contextWindow, maxTokens)
 
 	// Resolve fallback candidates
 	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
@@ -268,7 +314,7 @@ func NewAgentInstance(
 	imageCandidates := resolveModelCandidates(
 		cfg,
 		defaults.Provider,
-		defaults.ImageModel,
+		defaults.GetImageModel(),
 		defaults.ImageModelFallbacks,
 	)
 
@@ -284,7 +330,7 @@ func NewAgentInstance(
 		)
 		populateCandidateProvidersFromCandidates(cfg, workspace, candidates[1:], candidateProviders)
 	}
-	if strings.TrimSpace(defaults.ImageModel) != "" {
+	if strings.TrimSpace(defaults.GetImageModel()) != "" {
 		if len(candidates) > 0 {
 			inheritPrimaryProviderForCandidates(
 				cfg,
@@ -297,6 +343,11 @@ func NewAgentInstance(
 		}
 		populateCandidateProvidersFromCandidates(cfg, workspace, imageCandidates, candidateProviders)
 	}
+
+	compactionCandidates := resolveAuxiliaryCandidates(
+		cfg, defaults, "compaction", defaults.Auxiliary.Compaction, workspace,
+		candidates, provider, candidateProviders,
+	)
 
 	// Model routing setup: pre-resolve light model candidates at creation time
 	// to avoid repeated model_list lookups on every incoming message.
@@ -324,8 +375,10 @@ func NewAgentInstance(
 						map[string]any{"light_model": rc.LightModel, "agent_id": agentID, "error": err.Error()})
 				} else {
 					router = routing.New(routing.RouterConfig{
-						LightModel: rc.LightModel,
-						Threshold:  rc.Threshold,
+						LightModel:               rc.LightModel,
+						Threshold:                rc.Threshold,
+						EscalationPromptTokens:   rc.EscalationPromptTokens,
+						EscalationToolIterations: rc.EscalationToolIterations,
 					})
 					lightCandidates = resolved
 					lightProvider = lp
@@ -339,35 +392,39 @@ func NewAgentInstance(
 	}
 
 	return &AgentInstance{
-		modelMu:                   &sync.RWMutex{},
-		ID:                        agentID,
-		Name:                      agentName,
-		Model:                     model,
-		Fallbacks:                 fallbacks,
-		Workspace:                 workspace,
-		MaxIterations:             maxIter,
-		MaxTokens:                 maxTokens,
-		Temperature:               temperature,
-		ThinkingLevel:             thinkingLevel,
-		ThinkingLevelConfigured:   thinkingLevelConfigured,
-		ContextWindow:             contextWindow,
-		SummarizeMessageThreshold: summarizeMessageThreshold,
-		SummarizeTokenPercent:     summarizeTokenPercent,
-		LoopDetection:             defaults.LoopDetection.Normalized(),
-		Provider:                  provider,
-		Sessions:                  sessions,
-		ContextBuilder:            contextBuilder,
-		Tools:                     toolsRegistry,
-		Definition:                definition,
-		Subagents:                 subagents,
-		SkillsFilter:              skillsFilter,
-		MCPServerAllowlist:        agentMCPServerAllowlist,
-		Candidates:                candidates,
-		ImageCandidates:           imageCandidates,
-		Router:                    router,
-		LightCandidates:           lightCandidates,
-		LightProvider:             lightProvider,
-		CandidateProviders:        candidateProviders,
+		modelMu:                 &sync.RWMutex{},
+		ID:                      agentID,
+		Name:                    agentName,
+		Model:                   model,
+		Fallbacks:               fallbacks,
+		Workspace:               workspace,
+		MaxIterations:           maxIter,
+		BudgetWarnAt:            budgetWarnAt,
+		RunBudget:               runBudget,
+		RunBudgetWarnAfter:      runBudgetWarnAfter,
+		MaxTokens:               maxTokens,
+		Temperature:             temperature,
+		ThinkingLevel:           thinkingLevel,
+		ThinkingLevelConfigured: thinkingLevelConfigured,
+		ContextWindow:           contextWindow,
+		SummarizeTokenPercent:   summarizeTokenPercent,
+		Protection:              protection,
+		LoopDetection:           defaults.LoopDetection.Normalized(),
+		Provider:                provider,
+		Sessions:                sessions,
+		ContextBuilder:          contextBuilder,
+		Tools:                   toolsRegistry,
+		Definition:              definition,
+		Subagents:               subagents,
+		SkillsFilter:            skillsFilter,
+		MCPServerAllowlist:      agentMCPServerAllowlist,
+		Candidates:              candidates,
+		ImageCandidates:         imageCandidates,
+		CompactionCandidates:    compactionCandidates,
+		Router:                  router,
+		LightCandidates:         lightCandidates,
+		LightProvider:           lightProvider,
+		CandidateProviders:      candidateProviders,
 	}
 }
 
@@ -778,28 +835,54 @@ func closeUnreferencedStatefulProviders(
 }
 
 // initSessionStore creates the session persistence backend.
-// It uses the JSONL store by default and auto-migrates legacy JSON sessions.
-// Falls back to SessionManager if the JSONL store cannot be initialized or
-// if migration fails (which indicates the store cannot write reliably).
-func initSessionStore(dir string, durableWrites bool) session.SessionStore {
+// It uses the JSONL store and auto-migrates legacy JSON sessions. There is no
+// fallback backend: if the store cannot be created or the migration fails,
+// history cannot be persisted safely, so the caller must abort startup instead
+// of running on a partial or legacy store.
+func initSessionStore(dir string, durableWrites bool) (session.SessionStore, error) {
 	store, err := memory.NewJSONLStore(dir, memory.WithDurableWrites(durableWrites))
 	if err != nil {
-		logger.WarnCF("agent", "Memory JSONL store init failed; falling back to json sessions",
-			map[string]any{"error": err.Error()})
-		return session.NewSessionManager(dir)
+		return nil, fmt.Errorf("create JSONL session store: %w", err)
 	}
 
-	if n, merr := memory.MigrateFromJSON(context.Background(), dir, store); merr != nil {
-		// Migration failure means the store could not write data.
-		// Fall back to SessionManager to avoid a split state where
-		// some sessions are in JSONL and others remain in JSON.
-		logger.WarnCF("agent", "Memory migration failed; falling back to json sessions",
-			map[string]any{"error": merr.Error()})
-		store.Close()
-		return session.NewSessionManager(dir)
-	} else if n > 0 {
+	n, err := memory.MigrateFromJSON(context.Background(), dir, store)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("migrate legacy JSON sessions: %w", err)
+	}
+	if n > 0 {
 		logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
 	}
 
-	return session.NewJSONLBackend(store)
+	return session.NewJSONLBackend(store), nil
+}
+
+// budgetWarnIteration returns the iteration at which the budget checkpoint
+// fires: ratio of maxIter, rounded, at least 1. An unset or out-of-range ratio
+// (config loading rejects those) uses the default. It returns 0 when the
+// threshold would not leave an iteration before the budget runs out.
+func budgetWarnIteration(maxIter int, ratio float64) int {
+	if !(ratio > 0 && ratio < 1) {
+		ratio = config.DefaultMaxToolBudgetWarningRatio
+	}
+	at := max(1, int(math.Round(ratio*float64(maxIter))))
+	if at >= maxIter {
+		return 0
+	}
+	return at
+}
+
+// runBudgetDurations converts agents.defaults.run_budget_seconds and
+// run_budget_warning_threshold into the budget and the elapsed time at which the
+// wrap-up notice fires. Seconds <= 0 turn the budget off; an unset or
+// out-of-range threshold (config loading rejects those) uses the default.
+func runBudgetDurations(seconds int, threshold float64) (budget, warnAfter time.Duration) {
+	if seconds <= 0 {
+		return 0, 0
+	}
+	if !(threshold > 0 && threshold < 1) {
+		threshold = config.DefaultRunBudgetWarningThreshold
+	}
+	budget = time.Duration(seconds) * time.Second
+	return budget, time.Duration(float64(budget) * threshold)
 }

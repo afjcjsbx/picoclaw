@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -69,9 +70,10 @@ func (p *Pipeline) CallLLM(
 		return ControlBreak, err
 	}
 
+	maxTokens, temperature := ts.agent.llmSampling(p.Cfg, exec.activeModelConfig)
 	exec.llmOpts = map[string]any{
-		"max_tokens":       ts.agent.MaxTokens,
-		"temperature":      ts.agent.Temperature,
+		"max_tokens":       maxTokens,
+		"temperature":      temperature,
 		"prompt_cache_key": ts.agent.ID,
 		"session_key":      ts.sessionKey,
 	}
@@ -81,7 +83,9 @@ func (p *Pipeline) CallLLM(
 	applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
 
 	exec.llmModel = exec.activeModel
-	nativeSearchBeforeHook := exec.useNativeSearch
+	if exec.escalatedToPrimary {
+		exec.llmModelName = resolvedCandidateModelName(exec.activeCandidates, exec.activeModel)
+	}
 
 	// BeforeLLM hook
 	if p.Hooks != nil {
@@ -120,29 +124,36 @@ func (p *Pipeline) CallLLM(
 			return ControlBreak, nil
 		}
 	}
-	exec.useNativeSearch = webSearchEnabled && al.cfg.Tools.Web.PreferNative &&
-		func() bool {
-			if ns, ok := exec.activeProvider.(providers.NativeSearchCapable); ok {
-				return ns.SupportsNativeSearch()
-			}
-			return false
-		}()
-	if nativeSearchBeforeHook && !exec.useNativeSearch {
-		exec.providerToolDefs = restoreToolDefinition(
-			exec.providerToolDefs,
-			filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile),
-			"web_search",
-		)
-	}
-	if exec.useNativeSearch {
-		exec.providerToolDefs = filterClientWebSearch(exec.providerToolDefs)
-		if exec.llmOpts == nil {
-			exec.llmOpts = make(map[string]any)
+	// refreshNativeSearch re-derives native search from the active provider and
+	// adjusts the tool definitions and options to match. It must run again
+	// whenever the active provider changes after the request was built.
+	refreshNativeSearch := func() {
+		wasNative := exec.useNativeSearch
+		exec.useNativeSearch = webSearchEnabled && al.cfg.Tools.Web.PreferNative &&
+			func() bool {
+				if ns, ok := exec.activeProvider.(providers.NativeSearchCapable); ok {
+					return ns.SupportsNativeSearch()
+				}
+				return false
+			}()
+		if wasNative && !exec.useNativeSearch && !exec.gracefulTerminal {
+			exec.providerToolDefs = restoreToolDefinition(
+				exec.providerToolDefs,
+				filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile),
+				"web_search",
+			)
 		}
-		exec.llmOpts["native_search"] = true
-	} else {
-		delete(exec.llmOpts, "native_search")
+		if exec.useNativeSearch {
+			exec.providerToolDefs = filterClientWebSearch(exec.providerToolDefs)
+			if exec.llmOpts == nil {
+				exec.llmOpts = make(map[string]any)
+			}
+			exec.llmOpts["native_search"] = true
+		} else {
+			delete(exec.llmOpts, "native_search")
+		}
 	}
+	refreshNativeSearch()
 
 	al.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
@@ -151,8 +162,8 @@ func (p *Pipeline) CallLLM(
 			Model:         exec.llmModel,
 			MessagesCount: len(exec.callMessages),
 			ToolsCount:    len(exec.providerToolDefs),
-			MaxTokens:     ts.agent.MaxTokens,
-			Temperature:   ts.agent.Temperature,
+			MaxTokens:     maxTokens,
+			Temperature:   temperature,
 		},
 	)
 
@@ -166,8 +177,8 @@ func (p *Pipeline) CallLLM(
 				"model":             exec.llmModel,
 				"messages_count":    len(exec.callMessages),
 				"tools_count":       len(exec.providerToolDefs),
-				"max_tokens":        ts.agent.MaxTokens,
-				"temperature":       ts.agent.Temperature,
+				"max_tokens":        maxTokens,
+				"temperature":       temperature,
 				"system_prompt_len": len(exec.callMessages[0].Content),
 			})
 		logger.DebugCF("agent", "Full LLM request",
@@ -224,6 +235,12 @@ func (p *Pipeline) CallLLM(
 			return response, streamErr
 		}
 
+		// The fallback chain treats any error as a candidate failure and moves
+		// to the next candidate. Keep the last response that was delivered but
+		// unusable so it can still be used as the final answer when every
+		// candidate returns nothing better.
+		var lastUnusableResponse *providers.LLMResponse
+
 		runCandidate := func(
 			ctx context.Context,
 			candidate providers.FallbackCandidate,
@@ -267,10 +284,42 @@ func (p *Pipeline) CallLLM(
 				candidate.Model,
 				p.Cfg.Agents.Defaults.Provider,
 			)
+			p.applyCandidateSampling(ts.agent, exec.activeModelConfig, candidateCfg, callOpts)
 			candidateThinking := thinkingSettingsFromModelConfig(candidateCfg)
 			applyThinkingOption(callOpts, candidateProvider, candidateThinking, true, ts.agent.ID)
 			exec.suppressReasoning = shouldSuppressReasoningFor(candidateThinking)
-			return candidateProvider.Chat(ctx, messagesForCall, candidateTools, candidate.Model, callOpts)
+
+			if d := ts.implicitCallTimeout(candidateCfg); d > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, d)
+				defer cancel()
+			}
+			resp, err := chatWithDuration(
+				ctx, candidateProvider, messagesForCall, candidateTools, candidate.Model, callOpts,
+			)
+			if err != nil {
+				return nil, err
+			}
+			// Reject an unusable response here, not after the chain returns:
+			// the chain only advances on an error, and a retry of the whole
+			// call would otherwise hit the same empty primary again.
+			if p.Cfg != nil {
+				if semanticErr := semanticRetryError(p.Cfg.Agents.Defaults, resp); semanticErr != nil {
+					// Prefer a candidate that returned partial text over an
+					// empty one: a cut-off answer is still better than losing
+					// it to a later candidate that returned nothing.
+					if lastUnusableResponse == nil ||
+						(strings.TrimSpace(lastUnusableResponse.Content) == "" &&
+							strings.TrimSpace(resp.Content) != "") {
+						lastUnusableResponse = resp
+					}
+					return nil, &providers.FailoverError{
+						Reason:  providers.FailoverUnusable,
+						Wrapped: semanticErr,
+					}
+				}
+			}
+			return resp, nil
 		}
 
 		if len(exec.activeCandidates) > 1 && p.Fallback != nil {
@@ -294,6 +343,12 @@ func (p *Pipeline) CallLLM(
 				)
 			}
 			if fbErr != nil {
+				// Every candidate was reachable but none returned anything
+				// usable: hand the last such response back so the retry loop
+				// keeps its usual budget and fallback messages.
+				if resp := unusableFallbackResponse(fbErr, lastUnusableResponse); resp != nil {
+					return resp, nil
+				}
 				return nil, fbErr
 			}
 			if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
@@ -316,206 +371,245 @@ func (p *Pipeline) CallLLM(
 			}
 			return fbResult.Response, nil
 		}
-		return exec.activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, exec.llmModel, exec.llmOpts)
+		return chatWithDuration(
+			providerCtx, exec.activeProvider, messagesForCall, toolDefsForCall, exec.llmModel, exec.llmOpts,
+		)
 	}
 
 	// Retry loop
 	var err error
-	maxRetries := p.Cfg.Agents.Defaults.MaxLLMRetries
-	if maxRetries <= 0 {
-		maxRetries = 2
-	}
-	backoffSecs := p.Cfg.Agents.Defaults.LLMRetryBackoffSecs
-	if backoffSecs <= 0 {
-		backoffSecs = 2
-	}
-	for retry := 0; retry <= maxRetries; retry++ {
-		exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
-		if err == nil {
-			break
-		}
-		if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
-			_ = ts.requestHardAbort()
-			exec.abortedByHardAbort = true
-			return ControlBreak, nil
-		}
-		if isConfiguredStreamingVisibleError(err) {
-			break
-		}
-
-		if hasMediaRefs(exec.callMessages) && isVisionUnsupportedError(err) {
-			return ControlBreak, visionUnsupportedModelError(
-				exec.llmModelName,
-				len(ts.agent.ImageCandidates) > 0,
-			)
-		}
-
-		errMsg := strings.ToLower(err.Error())
-		retryReason, isTransientError := transientLLMRetryReason(err)
-		isContextError := !isTransientError && (strings.Contains(errMsg, "context_length_exceeded") ||
-			strings.Contains(errMsg, "context window") ||
-			strings.Contains(errMsg, "context_window") ||
-			strings.Contains(errMsg, "maximum context length") ||
-			strings.Contains(errMsg, "token limit") ||
-			strings.Contains(errMsg, "too many tokens") ||
-			strings.Contains(errMsg, "max_tokens") ||
-			strings.Contains(errMsg, "invalidparameter") ||
-			strings.Contains(errMsg, "prompt is too long") ||
-			strings.Contains(errMsg, "request too large"))
-
-		if isTransientError && retry < maxRetries {
-			backoff := time.Duration(retry+1) * time.Duration(backoffSecs) * time.Second
-			al.emitEvent(
-				runtimeevents.KindAgentLLMRetry,
-				ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
-					Attempt:    retry + 1,
-					MaxRetries: maxRetries,
-					Reason:     retryReason,
-					Error:      err.Error(),
-					Backoff:    backoff,
-				},
-			)
-			logger.WarnCF("agent", "Transient LLM error, retrying after backoff", map[string]any{
-				"error":   err.Error(),
-				"reason":  retryReason,
-				"retry":   retry,
-				"backoff": backoff.String(),
-			})
-			if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
-				if ts.hardAbortRequested() {
-					_ = ts.requestHardAbort()
-					return ControlBreak, nil
+	llmRetrySettings := llmRetryFromConfig(p.Cfg)
+	maxRetries := llmRetrySettings.max
+	for {
+		skipPrimaryFallback := false
+		for retry := 0; retry <= maxRetries; retry++ {
+			exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
+			if err == nil {
+				// A provider can answer successfully with nothing usable:
+				// empty content or a truncating finish_reason. Retry those
+				// through the same budget as network errors, unless the model
+				// asked for a tool or the stream already reached the user
+				// (a second answer would duplicate it).
+				if !streamPublishedVisible(exec) && p.Cfg != nil {
+					err = semanticRetryError(p.Cfg.Agents.Defaults, exec.response)
 				}
-				err = sleepErr
+				if err == nil {
+					break
+				}
+				if retry >= maxRetries {
+					// Budget exhausted: keep the response and let the turn's
+					// normal empty/truncated fallback explain it, instead of
+					// turning a routine empty reply into a hard failure.
+					logger.WarnCF("agent", "LLM response still unusable after retries", map[string]any{
+						"agent_id":      ts.agent.ID,
+						"iteration":     iteration,
+						"finish_reason": exec.response.FinishReason,
+						"retries":       maxRetries,
+					})
+					err = nil
+					break
+				}
+			}
+			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
+				_ = ts.requestHardAbort()
+				exec.abortedByHardAbort = true
+				return ControlBreak, nil
+			}
+			if isConfiguredStreamingVisibleError(err) {
+				// The user already saw partial output; switching models now would
+				// duplicate or contradict it.
+				skipPrimaryFallback = true
 				break
 			}
-			continue
-		}
 
-		if isContextError && retry < maxRetries && !ts.opts.NoHistory {
-			al.emitEvent(
-				runtimeevents.KindAgentLLMRetry,
-				ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
-					Attempt:    retry + 1,
-					MaxRetries: maxRetries,
-					Reason:     "context_limit",
-					Error:      err.Error(),
-				},
-			)
-			logger.WarnCF(
-				"agent",
-				"Context window error detected, attempting compression",
-				map[string]any{
-					"error": err.Error(),
-					"retry": retry,
-				},
-			)
-
-			if retry == 0 && !constants.IsInternalChannel(ts.channel) {
-				al.bus.PublishOutbound(ctx, outboundMessageForTurn(
-					ts,
-					"Context window exceeded. Compressing history and retrying...",
-				))
-			}
-
-			if compactErr := p.ContextManager.Compact(ctx, &CompactRequest{
-				SessionKey: ts.sessionKey,
-				Reason:     ContextCompressReasonRetry,
-				Budget:     ts.agent.ContextWindow,
-			}); compactErr != nil {
-				logger.WarnCF("agent", "Context overflow compact failed", map[string]any{
-					"session_key": ts.sessionKey,
-					"error":       compactErr.Error(),
-				})
-			}
-			ts.refreshRestorePointFromSession(ts.agent)
-			if asmResp, asmErr := p.ContextManager.Assemble(ctx, &AssembleRequest{
-				SessionKey: ts.sessionKey,
-				Budget:     ts.agent.ContextWindow,
-				MaxTokens:  ts.agent.MaxTokens,
-			}); asmErr == nil && asmResp != nil {
-				exec.history = asmResp.History
-				exec.summary = asmResp.Summary
-			} else if asmErr != nil {
-				warnSessionStoreError(ts.sessionKey, "assemble", asmErr)
-			}
-			contextualSkills := ts.activeSkills
-			if ts.agent.ContextBuilder != nil {
-				contextualSkills = ts.agent.ContextBuilder.ResolveActiveSkillsForContext(ts.activeSkills)
-			}
-			ts.recordSkillContextSnapshot(skillContextTriggerContextRetryRebuild, contextualSkills)
-			stableHistory, protectedTurnTail := splitHistoryForActiveTurn(
-				exec.history,
-				ts.persistedMessagesSnapshot(),
-			)
-			buildMessages := func(trimmedHistory []providers.Message) []providers.Message {
-				fullHistory := append(append([]providers.Message(nil), trimmedHistory...), protectedTurnTail...)
-				rebuildPromptReq := promptBuildRequestForTurn(ts, fullHistory, exec.summary, "", nil, p.Cfg)
-				rebuildPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
-				rebuilt := ts.agent.ContextBuilder.BuildMessagesFromPrompt(rebuildPromptReq)
-				rebuilt = append(rebuilt, exec.loopWarnings...)
-				return resolveMediaRefsWithOptions(
-					rebuilt,
-					p.MediaStore,
-					mediaOpts,
-					len(rebuilt)-len(protectedTurnTail)-len(exec.loopWarnings),
+			if hasMediaRefs(exec.callMessages) && isVisionUnsupportedError(err) {
+				return ControlBreak, visionUnsupportedModelError(
+					exec.llmModelName,
+					len(ts.agent.ImageCandidates) > 0,
 				)
 			}
-			originalHistoryCount := len(exec.history)
-			var fit bool
-			var trimmedStableHistory []providers.Message //nolint:prealloc // Replaced by the slice returned from trimming below.
-			trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindow(
-				stableHistory,
-				func(trimmedHistory []providers.Message) []providers.Message {
-					rebuilt := buildMessages(trimmedHistory)
-					if exec.gracefulTerminal {
-						return append(append([]providers.Message(nil), rebuilt...), ts.interruptHintMessage())
+
+			errMsg := strings.ToLower(err.Error())
+			retryReason, isTransientError := transientLLMRetryReason(err)
+			isContextError := !isTransientError && (strings.Contains(errMsg, "context_length_exceeded") ||
+				strings.Contains(errMsg, "context window") ||
+				strings.Contains(errMsg, "context_window") ||
+				strings.Contains(errMsg, "maximum context length") ||
+				strings.Contains(errMsg, "token limit") ||
+				strings.Contains(errMsg, "too many tokens") ||
+				strings.Contains(errMsg, "max_tokens") ||
+				strings.Contains(errMsg, "invalidparameter") ||
+				strings.Contains(errMsg, "prompt is too long") ||
+				strings.Contains(errMsg, "request too large"))
+
+			if isTransientError && retry < maxRetries {
+				backoff := llmRetrySettings.wait(retry)
+				al.emitEvent(
+					runtimeevents.KindAgentLLMRetry,
+					ts.eventMeta("runTurn", "turn.llm.retry"),
+					LLMRetryPayload{
+						Attempt:    retry + 1,
+						MaxRetries: maxRetries,
+						Reason:     retryReason,
+						Error:      err.Error(),
+						Backoff:    backoff,
+					},
+				)
+				logger.WarnCF("agent", "Transient LLM error, retrying after backoff", map[string]any{
+					"error":   err.Error(),
+					"reason":  retryReason,
+					"retry":   retry,
+					"backoff": backoff.String(),
+				})
+				if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
+					if ts.hardAbortRequested() {
+						_ = ts.requestHardAbort()
+						return ControlBreak, nil
 					}
-					return rebuilt
-				},
-				ts.agent.ContextWindow,
-				exec.providerToolDefs,
-				ts.agent.MaxTokens,
-			)
-			exec.history = append(trimmedStableHistory, protectedTurnTail...)
-			exec.messages = buildMessages(trimmedStableHistory)
-			exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail) - len(exec.loopWarnings)
-			if exec.gracefulTerminal {
-				msgs := append([]providers.Message(nil), exec.messages...)
-				exec.callMessages = append(msgs, ts.interruptHintMessage())
+					err = sleepErr
+					break
+				}
+				continue
 			}
-			if dropped := originalHistoryCount - len(exec.history); dropped > 0 {
-				logger.WarnCF("agent", "Trimmed rebuilt history after context retry compaction", map[string]any{
-					"session_key":     ts.sessionKey,
-					"retry":           retry,
-					"dropped_msgs":    dropped,
-					"remaining_msgs":  len(exec.history),
-					"context_window":  ts.agent.ContextWindow,
-					"max_tokens":      ts.agent.MaxTokens,
-					"still_overlimit": !fit,
-				})
-			} else if !fit {
-				logger.WarnCF("agent", "Context still exceeds budget after retry compaction rebuild", map[string]any{
-					"session_key":         ts.sessionKey,
-					"retry":               retry,
-					"history_msgs":        len(exec.history),
-					"protected_turn_msgs": len(protectedTurnTail),
-					"context_window":      ts.agent.ContextWindow,
-					"max_tokens":          ts.agent.MaxTokens,
-				})
-			}
-			if !fit {
-				err = fmt.Errorf(
-					"context window still exceeded after retry compaction; refusing to drop active turn messages: %w",
-					err,
+
+			if isContextError && retry < maxRetries && !ts.opts.NoHistory {
+				al.emitEvent(
+					runtimeevents.KindAgentLLMRetry,
+					ts.eventMeta("runTurn", "turn.llm.retry"),
+					LLMRetryPayload{
+						Attempt:    retry + 1,
+						MaxRetries: maxRetries,
+						Reason:     "context_limit",
+						Error:      err.Error(),
+					},
 				)
-				break
+				logger.WarnCF(
+					"agent",
+					"Context window error detected, attempting compression",
+					map[string]any{
+						"error": err.Error(),
+						"retry": retry,
+					},
+				)
+
+				if retry == 0 && !constants.IsInternalChannel(ts.channel) {
+					al.bus.PublishOutbound(ctx, outboundMessageForTurn(
+						ts,
+						"Context window exceeded. Compressing history and retrying...",
+					))
+				}
+
+				if compactErr := p.ContextManager.Compact(ctx, &CompactRequest{
+					SessionKey:         ts.sessionKey,
+					Reason:             ContextCompressReasonRetry,
+					Budget:             usableContextTokens(ts.agent),
+					ActiveTurnMessages: activeTurnMessageCount(ts, exec),
+				}); compactErr != nil {
+					logger.WarnCF("agent", "Context overflow compact failed", map[string]any{
+						"session_key": ts.sessionKey,
+						"error":       compactErr.Error(),
+					})
+				} else {
+					p.invalidateUsageAnchor(ts)
+				}
+				rebuilt := p.reassembleActiveTurn(ctx, ts, exec, skillContextTriggerContextRetryRebuild)
+				stableHistory, protectedTurnTail, buildMessages := rebuilt.stable, rebuilt.protected, rebuilt.build
+				originalHistoryCount := len(exec.history)
+				trimProvider := exec.activeProvider
+				if trimProvider == nil {
+					trimProvider = ts.agent.Provider
+				}
+				var fit bool
+				var trimmedStableHistory []providers.Message //nolint:prealloc // Replaced by the slice returned from trimming below.
+				trimmedStableHistory, exec.callMessages, fit = trimHistoryToFitContextWindowForProvider(
+					trimProvider,
+					stableHistory,
+					func(trimmedHistory []providers.Message) []providers.Message {
+						rebuilt := buildMessages(trimmedHistory)
+						if exec.gracefulTerminal {
+							return append(append([]providers.Message(nil), rebuilt...), ts.interruptHintMessage())
+						}
+						return rebuilt
+					},
+					ts.agent.ContextWindow,
+					exec.providerToolDefs,
+					ts.agent.MaxTokens,
+				)
+				exec.history = append(trimmedStableHistory, protectedTurnTail...)
+				exec.messages = buildMessages(trimmedStableHistory)
+				exec.currentTurnStart = len(exec.messages) - len(protectedTurnTail) - len(exec.loopWarnings)
+				if exec.gracefulTerminal {
+					msgs := append([]providers.Message(nil), exec.messages...)
+					exec.callMessages = append(msgs, ts.interruptHintMessage())
+				}
+				if dropped := originalHistoryCount - len(exec.history); dropped > 0 {
+					logger.WarnCF("agent", "Trimmed rebuilt history after context retry compaction", map[string]any{
+						"session_key":     ts.sessionKey,
+						"retry":           retry,
+						"dropped_msgs":    dropped,
+						"remaining_msgs":  len(exec.history),
+						"context_window":  ts.agent.ContextWindow,
+						"max_tokens":      ts.agent.MaxTokens,
+						"still_overlimit": !fit,
+					})
+				} else if !fit {
+					logger.WarnCF(
+						"agent",
+						"Context still exceeds budget after retry compaction rebuild",
+						map[string]any{
+							"session_key":         ts.sessionKey,
+							"retry":               retry,
+							"history_msgs":        len(exec.history),
+							"protected_turn_msgs": len(protectedTurnTail),
+							"context_window":      ts.agent.ContextWindow,
+							"max_tokens":          ts.agent.MaxTokens,
+						},
+					)
+				}
+				if !fit {
+					err = fmt.Errorf(
+						"context window still exceeded after retry compaction; refusing to drop active turn messages: %w",
+						err,
+					)
+					break
+				}
+				continue
 			}
+			break
+		}
+
+		if err == nil || skipPrimaryFallback {
+			break
+		}
+		// A canceled call or turn is not a model failure; the next model
+		// would be canceled too.
+		if turnCtx.Err() != nil || errors.Is(err, context.Canceled) {
+			break
+		}
+		if baseModelName := p.degradeFromImageModel(ts, exec, err); baseModelName != "" {
+			exec.llmModel = exec.activeModel
+			exec.llmModelName = baseModelName
+			applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
+			refreshNativeSearch()
+			err = nil
 			continue
 		}
-		break
+		if !exec.usedLight {
+			break
+		}
+		if !p.promoteToPrimary(ts, exec, "light model candidates failed: "+err.Error()) {
+			break
+		}
+		exec.llmModel = exec.activeModel
+		exec.llmModelName = resolvedCandidateModelName(exec.activeCandidates, exec.activeModel)
+		applyTurnThinkingOptions(exec, ts.agent, exec.activeProvider, true)
+		refreshNativeSearch()
+		logger.WarnCF("agent", "Light model candidates failed; falling back to primary model", map[string]any{
+			"agent_id":  ts.agent.ID,
+			"iteration": iteration,
+			"error":     err.Error(),
+		})
+		err = nil
 	}
 
 	if err != nil {
@@ -562,18 +656,23 @@ func (p *Pipeline) CallLLM(
 		}
 	}
 
-	// Save finishReason and usage on the turn state. Use ts directly (the
-	// authoritative turn state for this call) rather than a context lookup:
+	// Save finishReason and accumulate usage on the turn state. Use ts directly
+	// (the authoritative turn state for this call) rather than a context lookup:
 	// the raw ctx passed to CallLLM is not seeded with turnState (only turnCtx
 	// is), so turnStateFromContext(ctx) returns nil here and silently dropped
 	// both the finish reason and the per-turn token usage. ts is also exactly
-	// what the streaming publisher reads via GetLastUsage at finalize.
+	// what the streaming publisher reads via GetTurnUsage at finalize.
 	if ts != nil {
 		ts.SetLastFinishReason(exec.response.FinishReason)
-		if exec.response.Usage != nil {
-			ts.SetLastUsage(exec.response.Usage)
-		}
+		ts.AddUsage(exec.llmModelName, exec.response.Usage)
 	}
+	// Remember the real prompt size so the next compaction decision extends it
+	// with only the appended messages instead of re-estimating all history.
+	p.recordUsageAnchor(ts, exec)
+
+	// Mid-turn routing guard: a light-model turn that grows too large or keeps
+	// requesting tools moves the remaining iterations to the primary model.
+	p.maybeEscalateLightModel(ts, exec)
 
 	if exec.suppressReasoning {
 		exec.response.Reasoning = ""
@@ -608,14 +707,20 @@ func (p *Pipeline) CallLLM(
 			al.targetReasoningChannelID(ts.channel),
 		)
 	}
+	llmResponsePayload := LLMResponsePayload{
+		ContentLen:   len(exec.response.Content),
+		ToolCalls:    len(exec.response.ToolCalls),
+		HasReasoning: exec.response.Reasoning != "" || exec.response.ReasoningContent != "",
+	}
+	if exec.response.Usage != nil {
+		llmResponsePayload.InputTokens = exec.response.Usage.PromptTokens
+		llmResponsePayload.OutputTokens = exec.response.Usage.CompletionTokens
+		llmResponsePayload.TotalTokens = exec.response.Usage.TotalTokens
+	}
 	al.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
 		ts.eventMeta("runTurn", "turn.llm.response"),
-		LLMResponsePayload{
-			ContentLen:   len(exec.response.Content),
-			ToolCalls:    len(exec.response.ToolCalls),
-			HasReasoning: exec.response.Reasoning != "" || exec.response.ReasoningContent != "",
-		},
+		llmResponsePayload,
 	)
 
 	llmResponseFields := map[string]any{
@@ -654,9 +759,10 @@ func (p *Pipeline) CallLLM(
 			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 			return ControlContinue, nil
 		}
-		// A SubTurn may not finish before its async children: let the model
-		// react to their results instead of orphaning them.
-		if ts.parentTurnState != nil && !exec.gracefulTerminal {
+		// A SubTurn (and a CLI root turn) may not finish before its async
+		// children: let the model react to their results instead of orphaning
+		// them.
+		if (ts.parentTurnState != nil || ts.joinSubTurns) && !exec.gracefulTerminal {
 			if msgs := ts.joinChildren(turnCtx, al.cfg.FilterSensitiveData); len(msgs) > 0 {
 				cancelConfiguredStreamingLLM(turnCtx, exec)
 				logger.InfoCF("agent", "Joined async children after direct LLM response; continuing turn",
@@ -875,6 +981,12 @@ func transientLLMRetryReason(err error) (string, bool) {
 		return "", false
 	}
 
+	// Semantic retries (empty content, retriable finish_reason) use the same
+	// budget and backoff as transport failures.
+	if errors.Is(err, errSemanticRetry) {
+		return "semantic", true
+	}
+
 	if failErr := providers.ClassifyError(err, "", ""); failErr != nil {
 		switch failErr.Reason {
 		case providers.FailoverTimeout:
@@ -910,4 +1022,113 @@ func transientLLMRetryReason(err error) (string, bool) {
 	}
 
 	return "", false
+}
+
+// errSemanticRetry marks a well-formed LLM response that should still be
+// retried: the model returned no usable answer, or stopped on a finish_reason
+// the operator listed in llm_retry_on_finish_reasons.
+var errSemanticRetry = errors.New("llm semantic retry")
+
+// semanticRetryError reports whether a successful LLM response should be
+// retried. It returns nil when the response is usable as-is.
+func semanticRetryError(defaults config.AgentDefaults, resp *providers.LLMResponse) error {
+	if resp == nil {
+		return nil
+	}
+	// A tool call carries no assistant text by design; retrying it would
+	// throw the call away.
+	if len(resp.ToolCalls) > 0 {
+		return nil
+	}
+	if defaults.LLMRetryOnEmptyContent && strings.TrimSpace(resp.Content) == "" {
+		return fmt.Errorf("%w: empty content (finish_reason=%q)", errSemanticRetry, resp.FinishReason)
+	}
+	for _, reason := range defaults.LLMRetryOnFinishReasons {
+		if finishReasonMatches(reason, resp.FinishReason) {
+			return fmt.Errorf("%w: finish_reason=%q", errSemanticRetry, resp.FinishReason)
+		}
+	}
+	return nil
+}
+
+// finishReasonMatches reports whether the response's finish_reason matches a
+// configured one. Providers spell truncation two ways: openai_compat rewrites
+// "length" to "truncated" on the non-streaming path, while the streaming path
+// and the other providers keep "length". Both mean the same thing, so a config
+// entry for either must match both.
+func finishReasonMatches(configured, actual string) bool {
+	if configured == "" || actual == "" {
+		return false
+	}
+	if configured == actual {
+		return true
+	}
+	return isTruncatedFinishReason(configured) && isTruncatedFinishReason(actual)
+}
+
+// chatWithDuration calls provider.Chat and stamps the elapsed time on the
+// response usage. Throughput reported to clients divides output tokens by this
+// duration, so it measures the provider call only: tool execution between calls
+// must not dilute the rate.
+func chatWithDuration(
+	ctx context.Context,
+	llm providers.LLMProvider,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
+	start := time.Now()
+	resp, err := llm.Chat(ctx, messages, tools, model, options)
+	recordProviderDuration(resp, time.Since(start))
+	return resp, err
+}
+
+// recordProviderDuration stamps the duration of one provider call so the turn
+// aggregate can report generation throughput.
+func recordProviderDuration(resp *providers.LLMResponse, elapsed time.Duration) {
+	if resp == nil || resp.Usage == nil {
+		return
+	}
+	resp.Usage.DurationMS = elapsed.Milliseconds()
+}
+
+// unusableFallbackResponse returns the last unusable response when the chain
+// failed solely because every attempted candidate returned one, and nil when
+// the error came from anything else (so real failures still surface).
+func unusableFallbackResponse(
+	err error,
+	last *providers.LLMResponse,
+) *providers.LLMResponse {
+	if last == nil {
+		return nil
+	}
+	var exhausted *providers.FallbackExhaustedError
+	if !errors.As(err, &exhausted) {
+		return nil
+	}
+	attempted := false
+	for _, attempt := range exhausted.Attempts {
+		if attempt.Skipped {
+			continue
+		}
+		attempted = true
+		if attempt.Reason != providers.FailoverUnusable &&
+			!errors.Is(attempt.Error, errSemanticRetry) {
+			return nil
+		}
+	}
+	if !attempted {
+		return nil
+	}
+	return last
+}
+
+// streamPublishedVisible reports whether the current call already pushed
+// content or reasoning to the user, in which case a retry would duplicate it.
+func streamPublishedVisible(exec *turnExecution) bool {
+	if exec == nil || exec.streamingPublisher == nil {
+		return false
+	}
+	return exec.streamingPublisher.Published() || exec.streamingPublisher.ReasoningPublished()
 }

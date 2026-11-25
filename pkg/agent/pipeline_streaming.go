@@ -77,6 +77,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	}
 	var response *providers.LLMResponse
 	var streamErr error
+	streamStart := time.Now()
 	if eventProvider, ok := exec.activeProvider.(providers.StreamingEventProvider); ok {
 		response, streamErr = eventProvider.ChatStreamEvents(
 			ctx,
@@ -107,6 +108,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			},
 		)
 	}
+	recordProviderDuration(response, time.Since(streamStart))
 	logConfiguredStreamingSummary(ts, exec, chunkCount, firstChunkAt, lastChunkAt, streamErr)
 	if streamErr == nil {
 		if updateErr := publisher.Err(); updateErr != nil {
@@ -122,8 +124,9 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			}
 			logger.WarnCF("agent", "ChatStream update failed before visible output; retrying with Chat", logFields)
 			publisher.Cancel(ctx)
-			fallbackResponse, err := exec.activeProvider.Chat(
+			fallbackResponse, err := chatWithDuration(
 				ctx,
+				exec.activeProvider,
 				messagesForCall,
 				toolDefsForCall,
 				exec.llmModel,
@@ -144,8 +147,9 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 				"error":    streamErr.Error(),
 			})
 			publisher.Cancel(ctx)
-			fallbackResponse, err := exec.activeProvider.Chat(
+			fallbackResponse, err := chatWithDuration(
 				ctx,
+				exec.activeProvider,
 				messagesForCall,
 				toolDefsForCall,
 				exec.llmModel,
@@ -447,9 +451,11 @@ func (p *streamingChunkPublisher) Finalize(ctx context.Context, content string, 
 	if setter, ok := p.streamer.(interface{ SetModelName(modelName string) }); ok {
 		setter.SetModelName(p.modelName)
 	}
-	if usage := p.ts.GetLastUsage(); usage != nil {
-		if setter, ok := p.streamer.(interface{ SetTurnUsage(in, out int) }); ok {
-			setter.SetTurnUsage(usage.PromptTokens, usage.CompletionTokens)
+	if usage := p.ts.GetTurnUsage(); usage != nil {
+		if tokenUsage := tokenUsageFromProviders(usage); tokenUsage != nil {
+			if setter, ok := p.streamer.(interface{ SetTurnUsage(usage bus.TokenUsage) }); ok {
+				setter.SetTurnUsage(*tokenUsage)
+			}
 		}
 	}
 	var err error

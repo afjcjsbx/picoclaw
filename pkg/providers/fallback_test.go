@@ -152,6 +152,104 @@ func TestFallback_NonRetriableError(t *testing.T) {
 	}
 }
 
+func TestFallback_Billing400ContinuesToNextCandidate(t *testing.T) {
+	ct := NewCooldownTracker()
+	fc := NewFallbackChain(ct, nil)
+
+	candidates := []FallbackCandidate{
+		makeCandidate("anthropic-messages", "claude-sonnet-5-5"),
+		makeCandidate("openai", "gpt-4"),
+	}
+
+	attempt := 0
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		attempt++
+		if attempt == 1 {
+			return nil, errors.New(
+				`bad request (400): {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}`,
+			)
+		}
+		return &LLMResponse{Content: "fallback", FinishReason: "stop"}, nil
+	}
+
+	result, err := fc.Execute(context.Background(), candidates, run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if attempt != 2 {
+		t.Fatalf("attempts = %d, want 2", attempt)
+	}
+	if result.Provider != "openai" {
+		t.Fatalf("provider = %q, want openai", result.Provider)
+	}
+	if len(result.Attempts) != 1 || result.Attempts[0].Reason != FailoverBilling {
+		t.Fatalf("attempts = %#v, want one billing failure", result.Attempts)
+	}
+}
+
+func TestFallback_AmbiguousBillingUsesStandardCooldown(t *testing.T) {
+	now := time.Now()
+	ct, current := newTestTracker(now)
+	fc := NewFallbackChain(ct, nil)
+
+	candidates := []FallbackCandidate{
+		makeCandidate("anthropic", "claude-sonnet-5-5"),
+		makeCandidate("openai", "gpt-4"),
+	}
+
+	attempt := 0
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		attempt++
+		if attempt == 1 {
+			return nil, errors.New(
+				`bad request (400): {"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage. Add more at claude.ai/settings/usage and keep going."}}`,
+			)
+		}
+		return &LLMResponse{Content: "fallback", FinishReason: "stop"}, nil
+	}
+
+	if _, err := fc.Execute(context.Background(), candidates, run); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Ambiguous billing uses the standard cooldown, not the multi-hour billing bench.
+	*current = now.Add(2 * time.Minute)
+	if !ct.IsAvailable(ModelKey("anthropic", "claude-sonnet-5-5")) {
+		t.Fatal("ambiguous billing should not trigger the billing cooldown")
+	}
+}
+
+func TestFallback_ConfirmedBillingUsesBillingCooldown(t *testing.T) {
+	now := time.Now()
+	ct, current := newTestTracker(now)
+	fc := NewFallbackChain(ct, nil)
+
+	candidates := []FallbackCandidate{
+		makeCandidate("anthropic", "claude-sonnet-5-5"),
+		makeCandidate("openai", "gpt-4"),
+	}
+
+	attempt := 0
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		attempt++
+		if attempt == 1 {
+			return nil, errors.New(
+				`bad request (400): {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}`,
+			)
+		}
+		return &LLMResponse{Content: "fallback", FinishReason: "stop"}, nil
+	}
+
+	if _, err := fc.Execute(context.Background(), candidates, run); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	*current = now.Add(2 * time.Minute)
+	if ct.IsAvailable(ModelKey("anthropic", "claude-sonnet-5-5")) {
+		t.Fatal("confirmed billing should keep the billing cooldown")
+	}
+}
+
 func TestFallback_CooldownSkip(t *testing.T) {
 	now := time.Now()
 	ct, _ := newTestTracker(now)
@@ -762,5 +860,34 @@ func TestFallbackChain_AcquireNilChainIsNoop(t *testing.T) {
 	var fc *FallbackChain
 	if err := fc.Acquire(context.Background(), "any"); err != nil {
 		t.Fatalf("nil chain Acquire() error = %v, want nil", err)
+	}
+}
+
+func TestFallback_UnusableResponseFallsBack(t *testing.T) {
+	assertFallbackErrorFallsBack(
+		t,
+		"openai",
+		"gpt-4",
+		&FailoverError{Reason: FailoverUnusable, Wrapped: errors.New("empty content")},
+		"fallback ok",
+		FailoverUnusable,
+	)
+}
+
+func TestFallback_UnusableResponseDoesNotCooldownCandidate(t *testing.T) {
+	ct := NewCooldownTracker()
+	fc := NewFallbackChain(ct, nil)
+	candidate := makeCandidate("openai", "gpt-4")
+
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		return nil, &FailoverError{Reason: FailoverUnusable, Wrapped: errors.New("empty content")}
+	}
+	if _, err := fc.Execute(context.Background(), []FallbackCandidate{candidate}, run); err == nil {
+		t.Fatal("expected the chain to report exhaustion")
+	}
+	// A provider that answered but produced nothing usable is still healthy:
+	// the next request must try it again instead of skipping it on cooldown.
+	if !ct.IsAvailable(candidate.StableKey()) {
+		t.Fatal("unusable response must not put the candidate into cooldown")
 	}
 }

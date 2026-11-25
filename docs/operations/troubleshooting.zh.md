@@ -1,3 +1,8 @@
+---
+lang: zh
+title: "疑难解答"
+description: "PicoClaw 常见故障排查：model_list 缺失、OpenRouter 免费层路由、通道连接失败、日志定位与调试步骤。"
+---
 # 🐛 疑难解答
 
 > 返回 [README](../project/README.zh.md)
@@ -50,3 +55,25 @@
 ```
 
 在 [OpenRouter Keys](https://openrouter.ai/keys) 获取你的密钥。
+
+## OpenCode Go 返回 400 "Model is unavailable"
+
+**症状：** 模型条目显式设置了 `provider`，但 `model` 中又重复了 provider 名称：
+
+```json
+{"provider": "opencode-go", "model": "opencode-go/glm-5.3-flash"}
+```
+
+OpenCode Go 返回 `400 Upstream request failed: Model is unavailable`。
+
+**原因：** OpenCode Go 的模型 ID 是扁平命名。重复 provider 名称会同时破坏
+PicoClaw 的端点路由（厂商前缀用于选择协议）和上游的模型查找。
+
+**修复方法：** 使用裸模型 ID：
+
+```json
+{"provider": "opencode-go", "model": "glm-5.3-flash"}
+```
+
+当前版本会在路由前去掉多余的 `opencode-go/` 前缀，因此带前缀的写法也能工作。
+如果模型 ID 确实不存在，仍会看到这条上游错误。

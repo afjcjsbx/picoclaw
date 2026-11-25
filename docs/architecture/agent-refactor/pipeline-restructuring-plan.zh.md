@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "将 1400 行的 agent/pipeline.go 按职责拆分为多个逻辑文件，并说明拆分后的结构、迁移顺序与验证方式。"
+---
 # Pipeline 重构文档
 
 ## 目标

@@ -130,6 +130,15 @@ func successUserResponse(t *testing.T, user *telego.User) *ta.Response {
 	return &ta.Response{Ok: true, Result: b}
 }
 
+// telegramAPIErrorResponse builds the API error Telegram returns for a failed method.
+func telegramAPIErrorResponse(code int, description string, retryAfter int) *ta.Response {
+	apiErr := &ta.Error{ErrorCode: code, Description: description}
+	if retryAfter > 0 {
+		apiErr.Parameters = &ta.ResponseParameters{RetryAfter: retryAfter}
+	}
+	return &ta.Response{Ok: false, Error: apiErr}
+}
+
 // newTestChannel creates a TelegramChannel with a mocked bot for unit testing.
 func newTestChannel(t *testing.T, caller *stubCaller) *TelegramChannel {
 	return newTestChannelWithConstructor(t, caller, &stubConstructor{})
@@ -215,6 +224,19 @@ func TestSendMedia_ImageFallbacksToDocumentOnInvalidDimensions(t *testing.T) {
 	assert.Equal(t, "caption", constructor.calls[1].Parameters["caption"])
 }
 
+func TestBlockPrivateMediaDownloads(t *testing.T) {
+	assert.True(t, (*TelegramChannel)(nil).blockPrivateMediaDownloads())
+
+	ch := &TelegramChannel{}
+	assert.True(t, ch.blockPrivateMediaDownloads())
+
+	ch.tgCfg = &config.TelegramSettings{}
+	assert.True(t, ch.blockPrivateMediaDownloads())
+
+	ch.tgCfg.BaseURL = "http://127.0.0.1:8081"
+	assert.False(t, ch.blockPrivateMediaDownloads())
+}
+
 func TestDownloadFileWithInfo_AllowsLocalConfiguredBaseURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.URL.Path, "/file/bot"+testToken+"/photos/image"; got != want {
@@ -275,6 +297,42 @@ func TestSendMedia_ImageNonDimensionErrorDoesNotFallback(t *testing.T) {
 	assert.Contains(t, caller.calls[0].URL, "sendPhoto")
 	require.Len(t, constructor.calls, 1)
 	assert.NotContains(t, caller.calls[0].URL, "sendDocument")
+}
+
+func TestSendMedia_RateLimitClassifiedForRetry(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			if !strings.Contains(url, "sendPhoto") {
+				t.Fatalf("unexpected API call: %s", url)
+			}
+			return telegramAPIErrorResponse(429, "Too Many Requests: retry after 14", 14), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+
+	tmpDir := t.TempDir()
+	localPath := filepath.Join(tmpDir, "image.png")
+	require.NoError(t, os.WriteFile(localPath, []byte("fake-png-content"), 0o644))
+
+	ref, err := store.Store(localPath, media.MediaMeta{Filename: "image.png", ContentType: "image/png"}, "scope-1")
+	require.NoError(t, err)
+
+	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "12345",
+		Parts:  []bus.MediaPart{{Type: "image", Ref: ref}},
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, channels.ErrRateLimit)
+	assert.False(t, errors.Is(err, channels.ErrTemporary))
+
+	var rateErr *channels.RateLimitError
+	require.ErrorAs(t, err, &rateErr)
+	assert.Equal(t, 14*time.Second, rateErr.RetryAfter)
+	assert.Len(t, caller.calls, 1)
 }
 
 func TestSendMedia_MultipleImagesUseMediaGroup(t *testing.T) {
@@ -782,7 +840,7 @@ func TestSend_HTMLFallback_PerChunk(t *testing.T) {
 			callCount++
 			// Fail on odd calls (HTML attempt), succeed on even calls (plain text fallback)
 			if callCount%2 == 1 {
-				return nil, errors.New("Bad Request: can't parse entities")
+				return telegramAPIErrorResponse(400, "Bad Request: can't parse entities", 0), nil
 			}
 			return successResponse(t), nil
 		},
@@ -802,7 +860,7 @@ func TestSend_HTMLFallback_PerChunk(t *testing.T) {
 func TestSend_HTMLFallback_BothFail(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
-			return nil, errors.New("send failed")
+			return telegramAPIErrorResponse(400, "Bad Request: can't parse entities", 0), nil
 		},
 	}
 	ch := newTestChannel(t, caller)
@@ -813,8 +871,70 @@ func TestSend_HTMLFallback_BothFail(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, channels.ErrTemporary), "error should wrap ErrTemporary")
+	assert.ErrorIs(t, err, channels.ErrSendFailed, "400 after fallback should be permanent")
 	assert.Equal(t, 2, len(caller.calls), "should have HTML attempt + plain text attempt")
+}
+
+func TestSend_RateLimitClassifiedForRetry(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return telegramAPIErrorResponse(429, "Too Many Requests: retry after 14", 14), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "Hello",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, channels.ErrRateLimit, "429 must reach Manager as a rate limit")
+	assert.False(t, errors.Is(err, channels.ErrTemporary), "429 must not be flattened to ErrTemporary")
+
+	var rateErr *channels.RateLimitError
+	require.ErrorAs(t, err, &rateErr)
+	assert.Equal(t, 14*time.Second, rateErr.RetryAfter)
+
+	// No immediate plain-text fallback: it would burn another token inside the
+	// same rate-limit window.
+	assert.Len(t, caller.calls, 1, "429 must not trigger the plain-text fallback")
+}
+
+func TestSend_ServerErrorDoesNotFallbackToPlainText(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return telegramAPIErrorResponse(500, "Internal Server Error", 0), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "Hello",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, channels.ErrTemporary)
+	assert.Len(t, caller.calls, 1, "transient failures must not trigger the plain-text fallback")
+}
+
+func TestSend_NetworkErrorDoesNotFallbackToPlainText(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return nil, errors.New("connection reset by peer")
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "Hello",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, channels.ErrTemporary)
+	assert.Len(t, caller.calls, 1, "network errors must not trigger the plain-text fallback")
 }
 
 func TestSend_LongMessage_HTMLFallback_StopsOnError(t *testing.T) {
@@ -822,7 +942,7 @@ func TestSend_LongMessage_HTMLFallback_StopsOnError(t *testing.T) {
 	// plain text fail on the first chunk, Send should return early.
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
-			return nil, errors.New("send failed")
+			return telegramAPIErrorResponse(400, "Bad Request: can't parse entities", 0), nil
 		},
 	}
 	ch := newTestChannel(t, caller)
@@ -955,6 +1075,83 @@ func TestSend_InvalidChatID(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, channels.ErrSendFailed), "error should wrap ErrSendFailed")
+	assert.Empty(t, caller.calls)
+}
+
+func TestReactToMessage_AddsReactionAndUndoIsIdempotent(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return &ta.Response{Ok: true, Result: []byte("true")}, nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	undo, err := ch.ReactToMessage(context.Background(), "-1001234567890/42", "678")
+	require.NoError(t, err)
+	require.NotNil(t, undo)
+
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "setMessageReaction")
+
+	var setParams struct {
+		ChatID    int64 `json:"chat_id"`
+		MessageID int   `json:"message_id"`
+		Reaction  []struct {
+			Type  string `json:"type"`
+			Emoji string `json:"emoji"`
+		} `json:"reaction"`
+	}
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &setParams))
+	assert.Equal(t, int64(-1001234567890), setParams.ChatID)
+	assert.Equal(t, 678, setParams.MessageID)
+	require.Len(t, setParams.Reaction, 1)
+	assert.Equal(t, "emoji", setParams.Reaction[0].Type)
+	assert.Equal(t, "👀", setParams.Reaction[0].Emoji)
+
+	undo()
+	require.Len(t, caller.calls, 2)
+	assert.Contains(t, caller.calls[1].URL, "setMessageReaction")
+
+	var clearParams map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[1].Data.BodyRaw, &clearParams))
+	assert.NotContains(t, clearParams, "reaction", "undo must clear reactions with an empty list")
+
+	undo()
+	assert.Len(t, caller.calls, 2, "undo must be idempotent")
+}
+
+func TestReactToMessage_APIErrorKeepsUndoNoop(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return nil, errors.New(`api: 400 "Bad Request: REACTION_INVALID"`)
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	undo, err := ch.ReactToMessage(context.Background(), "12345", "678")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "REACTION_INVALID")
+	require.NotNil(t, undo)
+
+	undo()
+	assert.Len(t, caller.calls, 1, "failed reaction setup must not issue an undo request")
+}
+
+func TestReactToMessage_InvalidTargets(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			t.Fatal("should not be called")
+			return nil, nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.ReactToMessage(context.Background(), "not-a-number", "678")
+	assert.Error(t, err)
+
+	_, err = ch.ReactToMessage(context.Background(), "12345", "not-a-number")
+	assert.Error(t, err)
+
 	assert.Empty(t, caller.calls)
 }
 
@@ -1511,6 +1708,124 @@ func TestQuotedTelegramMediaRefs_ReportsFailedDownloads(t *testing.T) {
 
 	assert.Equal(t, []string{"ref://audio.mp3"}, refs)
 	assert.Equal(t, []string{"voice"}, failed)
+}
+
+func TestQuotedTelegramMediaRefs_ResolvesQuotedDocument(t *testing.T) {
+	msg := &telego.Message{
+		Document: &telego.Document{
+			FileID:   "doc-file",
+			FileName: "log.txt",
+		},
+	}
+
+	var calls []string
+	refs, failed := quotedTelegramMediaRefs(msg, func(fileID, ext, filename string) string {
+		calls = append(calls, fileID+"|"+ext+"|"+filename)
+		return "ref://" + filename
+	})
+
+	assert.Equal(t, []string{"doc-file||log.txt"}, calls)
+	assert.Equal(t, []string{"ref://log.txt"}, refs)
+	assert.Empty(t, failed)
+}
+
+func TestQuotedTelegramMediaRefs_QuotedDocumentWithoutFilename(t *testing.T) {
+	msg := &telego.Message{
+		Document: &telego.Document{FileID: "doc-file"},
+	}
+
+	refs, failed := quotedTelegramMediaRefs(msg, func(fileID, ext, filename string) string {
+		return "ref://" + filename
+	})
+
+	assert.Equal(t, []string{"ref://document"}, refs)
+	assert.Empty(t, failed)
+}
+
+func TestQuotedTelegramMediaRefs_QuotedDocumentDownloadFailureReported(t *testing.T) {
+	msg := &telego.Message{
+		Document: &telego.Document{FileID: "doc-file", FileName: "log.txt"},
+	}
+
+	refs, failed := quotedTelegramMediaRefs(msg, func(fileID, ext, filename string) string {
+		return ""
+	})
+
+	assert.Empty(t, refs)
+	assert.Equal(t, []string{"file"}, failed)
+}
+
+func TestHandleMessage_GroupMentionOnly_ReplyToOwnBotMessageTriggers(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "e adesso?",
+		MessageID: 44,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        7,
+			FirstName: "Alice",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 43,
+			Text:      "resposta anterior do bot",
+			From: &telego.User{
+				ID:        555,
+				IsBot:     true,
+				FirstName: "Test",
+				Username:  "testbot",
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	inbound, ok := <-messageBus.InboundChan()
+	require.True(t, ok)
+	assert.Equal(t, "43", inbound.Context.ReplyToMessageID)
+	assert.True(t, inbound.Context.Mentioned)
+	assert.Contains(t, inbound.Content, "[quoted assistant message from testbot]: resposta anterior do bot")
+	assert.Contains(t, inbound.Content, "e adesso?")
+}
+
+func TestHandleMessage_GroupMentionOnly_ReplyToOtherUserDoesNotTrigger(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "mensagem comum para outro membro",
+		MessageID: 45,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        7,
+			FirstName: "Alice",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 44,
+			Text:      "mensagem de outro usuario",
+			From: &telego.User{
+				ID:        8,
+				FirstName: "Bob",
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("message should have been ignored, got: %+v", inbound.Content)
+	default:
+	}
 }
 
 func TestHandleMessage_EmptyContent_Ignored(t *testing.T) {

@@ -201,7 +201,7 @@ Follow the body prompt.
 	}
 }
 
-func TestLoadBootstrapFilesIncludesWorkspaceUserMarkdown(t *testing.T) {
+func TestWorkspaceUserMarkdownIsMemorySnapshotNotBootstrap(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": "# Agent\nFollow the new structure.",
 		"SOUL.md":  "# Soul\nSpeak plainly.",
@@ -210,13 +210,13 @@ func TestLoadBootstrapFilesIncludesWorkspaceUserMarkdown(t *testing.T) {
 	defer cleanupWorkspace(t, tmpDir)
 
 	cb := NewContextBuilder(tmpDir)
-	bootstrap := cb.LoadBootstrapFiles()
 
-	if !strings.Contains(bootstrap, "Shared profile") {
-		t.Fatalf("expected workspace USER.md in bootstrap, got %q", bootstrap)
+	if bootstrap := cb.LoadBootstrapFiles(); strings.Contains(bootstrap, "Shared profile") {
+		t.Fatalf("USER.md belongs to the memory snapshot, not the cached bootstrap, got %q", bootstrap)
 	}
-	if !strings.Contains(bootstrap, "## USER.md") {
-		t.Fatalf("expected USER.md heading in bootstrap, got %q", bootstrap)
+	snapshot := cb.memory.Snapshot()
+	if !strings.Contains(snapshot, "Shared profile") || !strings.Contains(snapshot, "## USER.md") {
+		t.Fatalf("expected USER.md in the memory snapshot, got %q", snapshot)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestStructuredAgentIgnoresIdentityChanges(t *testing.T) {
 	}
 }
 
-func TestStructuredAgentUserChangesInvalidateCache(t *testing.T) {
+func TestStructuredAgentUserChangesApplyFromNextSession(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": "# Agent\nFollow the new structure.",
 		"SOUL.md":  "# Soul\nVersion one.",
@@ -266,10 +266,13 @@ func TestStructuredAgentUserChangesInvalidateCache(t *testing.T) {
 	defer cleanupWorkspace(t, tmpDir)
 
 	cb := NewContextBuilder(tmpDir)
+	system := func(session string) string {
+		msgs := cb.BuildMessagesFromPrompt(PromptBuildRequest{SessionKey: session, CurrentMessage: "hi"})
+		return msgs[0].Content
+	}
 
-	promptV1 := cb.BuildSystemPromptWithCache()
-	if !strings.Contains(promptV1, "Initial workspace preferences") {
-		t.Fatalf("expected workspace USER.md in prompt, got %q", promptV1)
+	if !strings.Contains(system("s1"), "Initial workspace preferences") {
+		t.Fatal("expected workspace USER.md in the session prompt")
 	}
 
 	userPath := filepath.Join(tmpDir, "USER.md")
@@ -281,16 +284,15 @@ func TestStructuredAgentUserChangesInvalidateCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cb.systemPromptMutex.RLock()
-	changed := cb.sourceFilesChangedLocked()
-	cb.systemPromptMutex.RUnlock()
-	if !changed {
-		t.Fatal("workspace USER.md changes should invalidate cache")
+	if got := system("s1"); !strings.Contains(got, "Initial workspace preferences") {
+		t.Fatalf("running session must keep its frozen USER.md, got %q", got)
 	}
-
-	promptV2 := cb.BuildSystemPromptWithCache()
-	if !strings.Contains(promptV2, "Updated workspace preferences") {
-		t.Fatalf("expected updated workspace USER.md in prompt, got %q", promptV2)
+	if got := system("s2"); !strings.Contains(got, "Updated workspace preferences") {
+		t.Fatalf("new session must see the updated USER.md, got %q", got)
+	}
+	cb.ForgetMemorySnapshot("s1")
+	if got := system("s1"); !strings.Contains(got, "Updated workspace preferences") {
+		t.Fatalf("a cleared session must re-snapshot, got %q", got)
 	}
 }
 

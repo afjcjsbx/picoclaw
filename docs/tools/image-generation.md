@@ -1,3 +1,6 @@
+---
+description: "PicoClaw can generate images through the image_generate tool using a model configured in model_list. The generated image is sent to the current chat."
+---
 # Image generation
 
 PicoClaw can generate images through the `image_generate` tool using a model configured in `model_list`. The generated image is sent to the current chat.

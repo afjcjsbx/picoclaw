@@ -75,16 +75,19 @@ func (t *TodoTool) Description() string {
 		"- \"How do I print Hello World?\", \"Add a comment to calculateTotal\", \"Run npm install\" -> skip."
 }
 
+// Parameters returns the tool schema without "additionalProperties": Google's
+// native Gemini API rejects that keyword in function declarations. The local
+// validator already rejects unknown properties when the key is absent.
 func (t *TodoTool) Parameters() map[string]any {
 	return map[string]any{
-		"type": "object", "additionalProperties": false,
+		"type": "object",
 		"properties": map[string]any{
 			"action": map[string]any{"type": "string", "enum": []string{"read", "write"}},
 			"todos": map[string]any{
 				"type": "array", "maxItems": maxTodos,
 				"description": "Required for write: the full replacement list. An empty array clears it.",
 				"items": map[string]any{
-					"type": "object", "additionalProperties": false,
+					"type": "object",
 					"properties": map[string]any{
 						"id":      map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
 						"content": map[string]any{"type": "string", "minLength": 1, "maxLength": 1024},

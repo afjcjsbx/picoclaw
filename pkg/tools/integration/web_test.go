@@ -275,6 +275,14 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 			len(longContent),
 		)
 	}
+	// ...and it forces persistence even when the full page would fit under
+	// max_inline_result_chars, because the preview was explicitly cut.
+	if !result.ForceArtifact {
+		t.Fatal("expected ForceArtifact for a truncated preview")
+	}
+	if result.ArtifactMaxRunes != maxArtifactChars {
+		t.Fatalf("ArtifactMaxRunes = %d, want %d", result.ArtifactMaxRunes, maxArtifactChars)
+	}
 }
 
 // TestWebTool_WebFetch_DefaultKeepsLargeContentIntact verifies the default cap
@@ -318,6 +326,45 @@ func TestWebTool_WebFetch_DefaultKeepsLargeContentIntact(t *testing.T) {
 	}
 	if result.FullText != "" {
 		t.Fatalf("expected no FullText for untruncated content, got %d chars", len(result.FullText))
+	}
+	if result.ForceArtifact {
+		t.Fatal("expected ForceArtifact=false for untruncated content")
+	}
+	if result.ArtifactMaxRunes != maxArtifactChars {
+		t.Fatalf("ArtifactMaxRunes = %d, want %d", result.ArtifactMaxRunes, maxArtifactChars)
+	}
+}
+
+// TestWebFetchTool_PromptStaysConcise verifies the tool schema stays minimal:
+// maxChars keeps only a functional description, while preview-size and
+// source-selection advice live in the docs and recovery is driven by the
+// runtime result warning.
+func TestWebFetchTool_PromptStaysConcise(t *testing.T) {
+	tool, err := NewWebFetchTool(0, format, testFetchLimit)
+	if err != nil {
+		t.Fatalf("NewWebFetchTool() error: %v", err)
+	}
+
+	const wantDescription = "Fetch a URL and extract readable content (HTML to text). " +
+		"Use this to get weather info, news, articles, or any web content."
+	if got := tool.Description(); got != wantDescription {
+		t.Fatalf("Description() = %q, want %q", got, wantDescription)
+	}
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("Parameters() has no properties map")
+	}
+	maxChars, ok := properties["maxChars"].(map[string]any)
+	if !ok {
+		t.Fatal("Parameters() has no maxChars property")
+	}
+	const wantParamDescription = "Maximum characters to extract"
+	if got, _ := maxChars["description"].(string); got != wantParamDescription {
+		t.Fatalf("maxChars description = %q, want %q", got, wantParamDescription)
+	}
+	if got, ok := maxChars["minimum"].(float64); !ok || got != float64(minMaxChars) {
+		t.Fatalf("maxChars minimum = %v, want %d", maxChars["minimum"], minMaxChars)
 	}
 }
 
@@ -972,18 +1019,9 @@ func TestWebFetch_BlocksISATAPWithPrivateEmbed(t *testing.T) {
 
 // TestWebFetch_Allows6to4WithPublicEmbed verifies 6to4 with public embedded IPv4 is NOT blocked
 func TestWebFetch_Allows6to4WithPublicEmbed(t *testing.T) {
-	tool, err := NewWebFetchTool(50000, format, testFetchLimit)
-	if err != nil {
-		t.Fatalf("Failed to create web fetch tool: %v", err)
-	}
-	// 2002:0801:0101::1 embeds 8.1.1.1 (public) — pre-flight should pass,
-	// connection will fail (no listener) but that's after the SSRF check.
-	result := tool.Execute(context.Background(), map[string]any{
-		"url": "http://[2002:0801:0101::1]:0",
-	})
-
-	// Should NOT be blocked by SSRF check — error should be connection failure, not "private"
-	if result.IsError && strings.Contains(result.ForLLM, "private") {
+	// 2002:0801:0101::1 embeds 8.1.1.1 (public). Assert the pre-flight guard
+	// accepts it without opening a real connection to the 6to4 address.
+	if utils.IsObviousPrivateHost("2002:0801:0101::1", nil, nil) {
 		t.Error("6to4 with public embedded IPv4 should not be blocked as private")
 	}
 }
@@ -1356,6 +1394,75 @@ func TestWebTool_TavilySearch_Success(t *testing.T) {
 	// Should mention via Tavily
 	if !strings.Contains(result.ForUser, "via Tavily") {
 		t.Errorf("Expected 'via Tavily' in output, got: %s", result.ForUser)
+	}
+}
+
+func TestNormalizeSearchSnippet(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"whitespace only", " \t\n\n ", ""},
+		{"plain", "plain text", "plain text"},
+		{"single newline preserved", "a\nb", "a\nb"},
+		{"repeated newlines collapsed", "a\n\nb\n\n\nc", "a\nb\nc"},
+		{"blank lines with spaces and tabs", "a\n \n\t\nb", "a\nb"},
+		{"internal spaces preserved", "a   b", "a   b"},
+		{"tabs preserved", "a\tb\t\tc", "a\tb\t\tc"},
+		{"markdown list preserved", "- one\n- two\n\n\n- three", "- one\n- two\n- three"},
+		{"crlf normalized", "a\r\n\r\nb", "a\nb"},
+		{"leading and trailing blank lines trimmed", "\n\na\n\nb\n\n", "a\nb"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSearchSnippet(tt.input); got != tt.want {
+				t.Fatalf("normalizeSearchSnippet(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWebTool_TavilySearch_CollapsesBlankLines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{
+				{
+					"title":   "Test\nResult 1",
+					"url":     "https://example.com/1",
+					"content": "First passage.\n\nSecond\tpassage.\n\n\nThird passage.",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		TavilyEnabled:    true,
+		TavilyAPIKeys:    []string{"test-key"},
+		TavilyBaseURL:    server.URL,
+		TavilyMaxResults: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"query": "test query"})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	want := "Results for: test query (via Tavily)\n" +
+		"1. Test Result 1\n" +
+		"   https://example.com/1\n" +
+		"   First passage.\n" +
+		"Second\tpassage.\n" +
+		"Third passage."
+	if result.ForUser != want {
+		t.Fatalf("ForUser = %q, want %q", result.ForUser, want)
 	}
 }
 
@@ -2703,7 +2810,7 @@ func TestWebTool_KeenableSearch_Endpoints(t *testing.T) {
 				"Snippet for result 1",
 				"Test Result 2",
 				"Description for result 2",
-				"3. Test Result 3\n   https://example.com/3\n   First passage. Second passage.",
+				"3. Test Result 3\n   https://example.com/3\n   First passage.\nSecond   passage.",
 			} {
 				if !strings.Contains(result.ForUser, want) {
 					t.Errorf("output missing %q:\n%s", want, result.ForUser)
@@ -2895,12 +3002,427 @@ func TestWebTool_WebFetch_PerCallMaxCharsCannotDisableFloodGuard(t *testing.T) {
 		t.Error("expected truncated=true in result")
 	}
 
-	// A smaller per-call value is still honored.
+	// A per-call value is still capped by the configured budget.
 	smaller := tool.Execute(context.Background(), map[string]any{
 		"url":      server.URL,
 		"maxChars": float64(200),
 	})
 	if smaller.IsError {
 		t.Fatalf("unexpected error: %s", smaller.ForLLM)
+	}
+}
+
+// TestWebTool_WebFetch_PerCallMaxCharsFloor verifies the 1500-character floor:
+// a smaller request is raised to the floor, while the configured budget still
+// wins when it is below the floor.
+func TestWebTool_WebFetch_PerCallMaxCharsFloor(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	body := strings.Repeat("a", 3000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	fetch := func(t *testing.T, configured int, requested float64) string {
+		t.Helper()
+		tool, err := NewWebFetchTool(configured, "plaintext", testFetchLimit)
+		if err != nil {
+			t.Fatalf("NewWebFetchTool() error: %v", err)
+		}
+		result := tool.Execute(context.Background(), map[string]any{
+			"url":      server.URL,
+			"maxChars": requested,
+		})
+		if result.IsError {
+			t.Fatalf("unexpected error: %s", result.ForLLM)
+		}
+		var resultMap map[string]any
+		if err := json.Unmarshal([]byte(result.ForLLM), &resultMap); err != nil {
+			t.Fatalf("failed to unmarshal result JSON: %v", err)
+		}
+		text, _ := resultMap["text"].(string)
+		return text
+	}
+
+	// A request below the floor is raised to the floor.
+	text := fetch(t, 5000, 100)
+	if !strings.Contains(text, "[CONTENT TRUNCATED - ") {
+		t.Fatalf("expected the floor to truncate the page, got %q", text)
+	}
+	if len(text) > minMaxChars+100 {
+		t.Fatalf("expected ~%d chars plus the notice, got %d", minMaxChars, len(text))
+	}
+
+	// The floor itself is accepted.
+	if text = fetch(t, 5000, float64(minMaxChars)); len(text) > minMaxChars+100 {
+		t.Fatalf("expected ~%d chars plus the notice, got %d", minMaxChars, len(text))
+	}
+
+	// A value above the floor is honored.
+	if text = fetch(t, 5000, 2000); len(text) < 2000 {
+		t.Fatalf("expected the requested 2000 chars, got %d", len(text))
+	}
+
+	// A configured budget below the floor still wins: maxChars may only lower it.
+	if text = fetch(t, 1000, 100); len(text) > 1100 {
+		t.Fatalf("expected the configured 1000-char cap, got %d", len(text))
+	}
+}
+
+func TestLooksLikeHTMLPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{"<!DOCTYPE html><html><body>x</body></html>", true},
+		{"<HTML><body>x</body></HTML>", true},
+		{"<html>", true},
+		{"<htmlx>", true},
+		{"<htm>", false},
+		{"plain text", false},
+		{"", false},
+	} {
+		if got := looksLikeHTML(tc.body); got != tc.want {
+			t.Errorf("looksLikeHTML(%q) = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+}
+
+func TestHasTagPrefixFold(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    string
+		tag  string
+		want bool
+	}{
+		{"lowercase", "<script>x", "script", true},
+		{"uppercase", "<SCRIPT>x", "script", true},
+		{"mixed case", "<ScRiPt>x", "script", true},
+		{"space delimiter", "<script src=x>", "script", true},
+		{"tab delimiter", "<script\tx>", "script", true},
+		{"newline delimiter", "<script\nx>", "script", true},
+		{"closing delimiter", "<script>", "script", true},
+		{"self closing", "<script/>", "script", true},
+		{"prefix of a longer name", "<scripture>", "script", false},
+		{"other tag", "<style>", "script", false},
+		{"no tag", "script", "script", false},
+		{"empty", "", "script", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasTagPrefixFold(tc.s, tc.tag); got != tc.want {
+				t.Errorf("hasTagPrefixFold(%q, %q) = %v, want %v", tc.s, tc.tag, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIndexClosingTag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    string
+		tag  string
+		want int
+	}{
+		{"lowercase", "<script>x</script>", "script", 9},
+		{"uppercase close", "<script>x</SCRIPT>", "script", 9},
+		{"mixed case close", "<script>x</ScRiPt>", "script", 9},
+		{"missing", "<script>x", "script", -1},
+		{"wrong name", "<script>x</style>", "script", -1},
+		{"extra suffix", "<script>x</scripture>", "script", -1},
+		{"empty", "", "script", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := indexClosingTag(tc.s, tc.tag); got != tc.want {
+				t.Errorf("indexClosingTag(%q, %q) = %d, want %d", tc.s, tc.tag, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWebFetchTool_extractText_ExactOutput(t *testing.T) {
+	tool := &WebFetchTool{}
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "blocks keep one line each",
+			input: "<html><body><h1>Title</h1>\n<p>P1</p>\n<p>P2</p></body></html>",
+			want:  "Title\nP1\nP2",
+		},
+		{
+			name:  "script and style bodies removed",
+			input: "<script>alert('x');</script><style>body{}</style><p>Keep this</p>",
+			want:  "Keep this",
+		},
+		{
+			name:  "uppercase script and style removed",
+			input: "<SCRIPT>alert(1)</SCRIPT><STYLE>x{}</STYLE><p>x</p>",
+			want:  "x",
+		},
+		{
+			name:  "mixed case script removed",
+			input: "<ScRiPt>alert(1)</ScRiPt><p>y</p>",
+			want:  "y",
+		},
+		{
+			name:  "script prefix of a longer tag is not a script body",
+			input: "<scripture>holy</script><p>x</p>",
+			want:  "holyx",
+		},
+		{
+			name:  "unclosed script keeps its body as text",
+			input: "<script>unclosed <p>x</p>",
+			want:  "unclosed x",
+		},
+		{
+			name:  "unclosed script does not hide a later closed style",
+			input: "<script>a<style>b</style>c",
+			want:  "ac",
+		},
+		{
+			name:  "unclosed style keeps its body as text",
+			input: "<style>unclosed <p>x</p>",
+			want:  "unclosed x",
+		},
+		{
+			name:  "script attributes may contain a greater-than sign",
+			input: `<script type="a>b">x</script><p>y</p>`,
+			want:  "y",
+		},
+		{
+			name:  "empty tag pair is kept as text",
+			input: "a <> b",
+			want:  "a <> b",
+		},
+		{
+			name:  "less-than without a greater-than is kept as text",
+			input: "a < b",
+			want:  "a < b",
+		},
+		{
+			name:  "tag-like text is removed",
+			input: "5 < 10 > 3",
+			want:  "5 3",
+		},
+		{
+			name:  "comment removed",
+			input: "<!-- comment -->x",
+			want:  "x",
+		},
+		{
+			name:  "entity references are left untouched",
+			input: "<p>&amp; &lt; &gt;</p>",
+			want:  "&amp; &lt; &gt;",
+		},
+		{
+			name:  "whitespace collapses across tags",
+			input: "<p>a <b> </b> b</p>",
+			want:  "a b",
+		},
+		{
+			name:  "blank lines are dropped",
+			input: "<p>A</p>\n\n\n\n<p>B</p>",
+			want:  "A\nB",
+		},
+		{
+			name:  "crlf is normalised",
+			input: "<p>a</p>\r\n<p>b</p>",
+			want:  "a\nb",
+		},
+		{
+			name:  "vertical tab collapses like horizontal whitespace",
+			input: "a\vb",
+			want:  "a b",
+		},
+		{
+			name:  "non-ascii text preserved",
+			input: "<p>caffè</p>",
+			want:  "caffè",
+		},
+		{
+			name:  "plain text unchanged",
+			input: "plain text\nsecond line",
+			want:  "plain text\nsecond line",
+		},
+		{
+			name:  "empty input",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tool.extractText(tt.input); got != tt.want {
+				t.Errorf("extractText(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWebFetchTool_extractTextManyUnclosedTags guards against the quadratic
+// rescan of the remaining document for every unclosed <script>/<style> tag.
+func TestWebFetchTool_extractTextManyUnclosedTags(t *testing.T) {
+	tool := &WebFetchTool{}
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "many unclosed scripts",
+			input: strings.Repeat("<script>", 50000) + "visible",
+			want:  "visible",
+		},
+		{
+			name:  "many unclosed styles",
+			input: strings.Repeat("<style>", 50000) + "visible",
+			want:  "visible",
+		},
+		{
+			name:  "many unclosed scripts followed by a closed style",
+			input: strings.Repeat("<script>", 50000) + "<style>x{}</style>tail",
+			want:  "tail",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tool.extractText(tt.input); got != tt.want {
+				t.Errorf("extractText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWebFetchTool_extractTextUnclosedTagsLinear fails if the walk rescans the
+// remaining document for every unclosed opening tag. The previous
+// implementation took tens of seconds on this input; a linear walk takes
+// milliseconds, so the two-second ceiling leaves a wide margin for slow CI.
+func TestWebFetchTool_extractTextUnclosedTagsLinear(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing regression test in short mode")
+	}
+
+	tool := &WebFetchTool{}
+	input := strings.Repeat("<script>", 100000) + "visible"
+
+	start := time.Now()
+	got := tool.extractText(input)
+	elapsed := time.Since(start)
+
+	if got != "visible" {
+		t.Fatalf("extractText() = %q, want %q", got, "visible")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("extractText() took %s for %d bytes, want linear time", elapsed, len(input))
+	}
+}
+
+func TestWebTool_WebFetch_JSONPreservesDocument(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	tests := []struct {
+		name          string
+		body          string
+		wantText      string
+		wantExtractor string
+	}{
+		{
+			name: "key order, big integers and duplicate keys are preserved",
+			body: `{"z":1,"a":12345678901234567890,"dup":1,"dup":2}`,
+			wantText: "{\n" +
+				"  \"z\": 1,\n" +
+				"  \"a\": 12345678901234567890,\n" +
+				"  \"dup\": 1,\n" +
+				"  \"dup\": 2\n" +
+				"}",
+			wantExtractor: "json",
+		},
+		{
+			name:          "invalid json falls back to raw",
+			body:          `{"a":`,
+			wantText:      `{"a":`,
+			wantExtractor: "raw",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			tool, err := NewWebFetchTool(50000, format, testFetchLimit)
+			if err != nil {
+				t.Fatalf("NewWebFetchTool() error: %v", err)
+			}
+
+			result := tool.Execute(context.Background(), map[string]any{"url": server.URL})
+			if result.IsError {
+				t.Fatalf("unexpected error: %s", result.ForLLM)
+			}
+
+			var envelope map[string]any
+			if err := json.Unmarshal([]byte(result.ForLLM), &envelope); err != nil {
+				t.Fatalf("failed to unmarshal result JSON: %v", err)
+			}
+			if got := envelope["extractor"]; got != tt.wantExtractor {
+				t.Errorf("extractor = %v, want %q", got, tt.wantExtractor)
+			}
+			text, ok := envelope["text"].(string)
+			if !ok {
+				t.Fatal("missing 'text' field in result")
+			}
+			if text != tt.wantText {
+				t.Errorf("text = %q, want %q", text, tt.wantText)
+			}
+		})
+	}
+}
+
+func BenchmarkWebFetchToolExtractText1MiB(b *testing.B) {
+	tool := &WebFetchTool{}
+	unit := "<div><p>Hello world this is a test paragraph with some text.</p><script>var x=1;</script></div>\n"
+	input := strings.Repeat(unit, (1<<20)/len(unit))
+
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = tool.extractText(input)
+	}
+}
+
+func BenchmarkWebFetchToolExtractTextManyUnclosedTags(b *testing.B) {
+	tool := &WebFetchTool{}
+	input := strings.Repeat("<script>", 10000)
+
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = tool.extractText(input)
+	}
+}
+
+func BenchmarkLooksLikeHTML10MiB(b *testing.B) {
+	input := strings.Repeat("a", 10<<20)
+
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = looksLikeHTML(input)
 	}
 }

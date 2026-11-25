@@ -1,4 +1,3 @@
-import { IconPlus, IconTrash } from "@tabler/icons-react"
 import { useState } from "react"
 import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
@@ -7,8 +6,6 @@ import {
   type CoreConfigForm,
   DM_SCOPE_OPTIONS,
   type LauncherForm,
-  type MCPServerForm,
-  type MCPServerType,
   type TurnProfileForm,
   type TurnProfileMode,
 } from "@/components/config/form-model"
@@ -72,12 +69,14 @@ interface AgentDefaultsSectionProps {
     key: K,
     value: TurnProfileForm[K],
   ) => void
+  children?: ReactNode
 }
 
 export function AgentDefaultsSection({
   form,
   onFieldChange,
   onTurnProfileFieldChange,
+  children,
 }: AgentDefaultsSectionProps) {
   const { t } = useTranslation()
   const renderModeSelect = ({
@@ -224,21 +223,6 @@ export function AgentDefaultsSection({
       </Field>
 
       <Field
-        label={t("pages.config.summarize_threshold")}
-        hint={t("pages.config.summarize_threshold_hint")}
-        layout="setting-row"
-      >
-        <Input
-          type="number"
-          min={1}
-          value={form.summarizeMessageThreshold}
-          onChange={(e) =>
-            onFieldChange("summarizeMessageThreshold", e.target.value)
-          }
-        />
-      </Field>
-
-      <Field
         label={t("pages.config.summarize_token_percent")}
         hint={t("pages.config.summarize_token_percent_hint")}
         layout="setting-row"
@@ -363,25 +347,140 @@ export function AgentDefaultsSection({
           </div>
         </div>
       </Field>
+
+      {children}
     </ConfigSectionCard>
+  )
+}
+
+const AUXILIARY_INHERIT_VALUE = "__inherit__"
+
+interface AuxiliaryModelFieldsProps {
+  form: CoreConfigForm
+  onFieldChange: UpdateCoreField
+  modelNames: string[]
+  primaryModelName: string
+  modelsLoading: boolean
+  modelsError: boolean
+}
+
+export function AuxiliaryModelFields({
+  form,
+  onFieldChange,
+  modelNames,
+  primaryModelName,
+  modelsLoading,
+  modelsError,
+}: AuxiliaryModelFieldsProps) {
+  const { t } = useTranslation()
+  const disabled = modelsLoading
+
+  const slotOptions = (value: string) =>
+    value && !modelNames.includes(value) ? [value, ...modelNames] : modelNames
+
+  const slotError = (value: string) => {
+    if (!value.trim() || modelsLoading || modelsError) return undefined
+    if (primaryModelName && value === primaryModelName) {
+      return t("pages.config.auxiliary_primary_warning")
+    }
+    if (!modelNames.includes(value)) {
+      return t("pages.config.auxiliary_missing_warning")
+    }
+    return undefined
+  }
+
+  const hintFor = (key: string) => {
+    if (modelsError) return t("pages.config.auxiliary_models_load_error")
+    if (modelsLoading) return t("pages.config.auxiliary_models_loading")
+    return t(key)
+  }
+
+  return (
+    <>
+      <div className="space-y-1 py-4">
+        <div className="text-sm font-medium">
+          {t("pages.config.sections.auxiliary")}
+        </div>
+        <p className="text-muted-foreground text-xs leading-relaxed">
+          {t("pages.config.auxiliary_description")}
+        </p>
+      </div>
+      <Field
+        label={t("pages.config.auxiliary_compaction")}
+        hint={hintFor("pages.config.auxiliary_compaction_hint")}
+        error={slotError(form.auxiliaryCompaction)}
+        layout="setting-row"
+      >
+        <Select
+          value={form.auxiliaryCompaction || AUXILIARY_INHERIT_VALUE}
+          onValueChange={(next) =>
+            onFieldChange(
+              "auxiliaryCompaction",
+              next === AUXILIARY_INHERIT_VALUE ? "" : next,
+            )
+          }
+          disabled={disabled}
+        >
+          <SelectTrigger
+            className="h-9"
+            aria-label={t("pages.config.auxiliary_compaction")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUXILIARY_INHERIT_VALUE}>
+              {t("pages.config.auxiliary_inherit")}
+            </SelectItem>
+            {slotOptions(form.auxiliaryCompaction).map((name) => (
+              <SelectItem key={name} value={name}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+
+      <Field
+        label={t("pages.config.auxiliary_vision")}
+        hint={hintFor("pages.config.auxiliary_vision_hint")}
+        error={slotError(form.auxiliaryVision)}
+        layout="setting-row"
+      >
+        <Select
+          value={form.auxiliaryVision || AUXILIARY_INHERIT_VALUE}
+          onValueChange={(next) =>
+            onFieldChange(
+              "auxiliaryVision",
+              next === AUXILIARY_INHERIT_VALUE ? "" : next,
+            )
+          }
+          disabled={disabled}
+        >
+          <SelectTrigger
+            className="h-9"
+            aria-label={t("pages.config.auxiliary_vision")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUXILIARY_INHERIT_VALUE}>
+              {t("pages.config.auxiliary_inherit")}
+            </SelectItem>
+            {slotOptions(form.auxiliaryVision).map((name) => (
+              <SelectItem key={name} value={name}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+    </>
   )
 }
 
 interface ExecSectionProps {
   form: CoreConfigForm
   onFieldChange: UpdateCoreField
-}
-
-interface MCPSectionProps {
-  form: CoreConfigForm
-  onFieldChange: UpdateCoreField
-  onAddServer: () => void
-  onRemoveServer: (id: string) => void
-  onServerFieldChange: <K extends keyof MCPServerForm>(
-    id: string,
-    key: K,
-    value: MCPServerForm[K],
-  ) => void
 }
 
 interface EvolutionSectionProps {
@@ -530,331 +629,6 @@ export function EvolutionSection({
   )
 }
 
-export function MCPSection({
-  form,
-  onFieldChange,
-  onAddServer,
-  onRemoveServer,
-  onServerFieldChange,
-}: MCPSectionProps) {
-  const { t } = useTranslation()
-
-  return (
-    <ConfigSectionCard
-      title={t("pages.config.sections.mcp")}
-      description={t("pages.config.mcp_section_hint")}
-    >
-      <SwitchCardField
-        label={t("pages.config.mcp_enabled")}
-        hint={t("pages.config.mcp_enabled_hint")}
-        layout="setting-row"
-        checked={form.mcpEnabled}
-        onCheckedChange={(checked) => onFieldChange("mcpEnabled", checked)}
-      />
-
-      {form.mcpEnabled && (
-        <>
-          <SwitchCardField
-            label={t("pages.config.mcp_discovery_enabled")}
-            hint={t("pages.config.mcp_discovery_enabled_hint")}
-            layout="setting-row"
-            checked={form.mcpDiscoveryEnabled}
-            onCheckedChange={(checked) =>
-              onFieldChange("mcpDiscoveryEnabled", checked)
-            }
-          />
-
-          {form.mcpDiscoveryEnabled && (
-            <>
-              <Field
-                label={t("pages.config.mcp_discovery_ttl")}
-                hint={t("pages.config.mcp_discovery_ttl_hint")}
-                layout="setting-row"
-              >
-                <Input
-                  type="number"
-                  min={1}
-                  value={form.mcpDiscoveryTTL}
-                  onChange={(e) =>
-                    onFieldChange("mcpDiscoveryTTL", e.target.value)
-                  }
-                />
-              </Field>
-
-              <Field
-                label={t("pages.config.mcp_discovery_max_results")}
-                hint={t("pages.config.mcp_discovery_max_results_hint")}
-                layout="setting-row"
-              >
-                <Input
-                  type="number"
-                  min={1}
-                  value={form.mcpDiscoveryMaxSearchResults}
-                  onChange={(e) =>
-                    onFieldChange(
-                      "mcpDiscoveryMaxSearchResults",
-                      e.target.value,
-                    )
-                  }
-                />
-              </Field>
-
-              <SwitchCardField
-                label={t("pages.config.mcp_discovery_use_bm25")}
-                hint={t("pages.config.mcp_discovery_use_bm25_hint")}
-                layout="setting-row"
-                checked={form.mcpDiscoveryUseBM25}
-                disabled={
-                  form.mcpDiscoveryUseBM25 && !form.mcpDiscoveryUseRegex
-                }
-                onCheckedChange={(checked) =>
-                  onFieldChange("mcpDiscoveryUseBM25", checked)
-                }
-              />
-
-              <SwitchCardField
-                label={t("pages.config.mcp_discovery_use_regex")}
-                hint={t("pages.config.mcp_discovery_use_regex_hint")}
-                layout="setting-row"
-                checked={form.mcpDiscoveryUseRegex}
-                disabled={
-                  form.mcpDiscoveryUseRegex && !form.mcpDiscoveryUseBM25
-                }
-                onCheckedChange={(checked) =>
-                  onFieldChange("mcpDiscoveryUseRegex", checked)
-                }
-              />
-            </>
-          )}
-
-          <Field
-            label={t("pages.config.mcp_servers")}
-            hint={t("pages.config.mcp_servers_hint")}
-            layout="setting-row"
-            controlClassName="md:max-w-2xl"
-          >
-            <div className="flex flex-col gap-3">
-              {form.mcpServers.map((server) => (
-                <div
-                  key={server.id}
-                  className="border-border rounded-md border p-3"
-                >
-                  <div className="mb-3 flex items-center justify-between">
-                    <div className="text-sm font-medium">
-                      {server.name.trim() || t("pages.config.mcp_server_new")}
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onRemoveServer(server.id)}
-                    >
-                      <IconTrash className="size-4" />
-                      {t("pages.config.mcp_server_remove")}
-                    </Button>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <Input
-                      value={server.name}
-                      placeholder={t(
-                        "pages.config.mcp_server_name_placeholder",
-                      )}
-                      aria-label={t("pages.config.mcp_server_name_placeholder")}
-                      onChange={(e) =>
-                        onServerFieldChange(server.id, "name", e.target.value)
-                      }
-                    />
-
-                    <Select
-                      value={server.type}
-                      onValueChange={(value) =>
-                        onServerFieldChange(
-                          server.id,
-                          "type",
-                          value as MCPServerType,
-                        )
-                      }
-                    >
-                      <SelectTrigger
-                        aria-label={t("pages.config.mcp_server_discovery_mode")}
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="stdio">stdio</SelectItem>
-                        <SelectItem value="sse">sse</SelectItem>
-                        <SelectItem value="http">http</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <SwitchCardField
-                      label={t("pages.config.mcp_server_enabled")}
-                      layout="setting-row"
-                      checked={server.enabled}
-                      onCheckedChange={(checked) =>
-                        onServerFieldChange(server.id, "enabled", checked)
-                      }
-                    />
-
-                    <Select
-                      value={
-                        server.deferredOverride === null
-                          ? "inherit"
-                          : server.deferredOverride
-                            ? "deferred"
-                            : "eager"
-                      }
-                      onValueChange={(value) =>
-                        onServerFieldChange(
-                          server.id,
-                          "deferredOverride",
-                          value === "inherit" ? null : value === "deferred",
-                        )
-                      }
-                    >
-                      <SelectTrigger
-                        aria-label={t("pages.config.mcp_server_discovery_mode")}
-                      >
-                        <SelectValue
-                          placeholder={t(
-                            "pages.config.mcp_server_discovery_mode",
-                          )}
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="inherit">
-                          {t("pages.config.mcp_server_discovery_mode_inherit")}
-                        </SelectItem>
-                        <SelectItem value="deferred">
-                          {t("pages.config.mcp_server_discovery_mode_deferred")}
-                        </SelectItem>
-                        <SelectItem value="eager">
-                          {t("pages.config.mcp_server_discovery_mode_eager")}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {server.type !== "stdio" ? (
-                    <div className="mt-3 grid gap-3">
-                      <Input
-                        value={server.url}
-                        placeholder={t(
-                          "pages.config.mcp_server_url_placeholder",
-                        )}
-                        aria-label={t(
-                          "pages.config.mcp_server_url_placeholder",
-                        )}
-                        onChange={(e) =>
-                          onServerFieldChange(server.id, "url", e.target.value)
-                        }
-                      />
-                      <Textarea
-                        value={server.headersText}
-                        placeholder={t(
-                          "pages.config.mcp_server_headers_placeholder",
-                        )}
-                        aria-label={t(
-                          "pages.config.mcp_server_headers_placeholder",
-                        )}
-                        className="min-h-[88px] font-mono text-xs"
-                        onChange={(e) =>
-                          onServerFieldChange(
-                            server.id,
-                            "headersText",
-                            e.target.value,
-                          )
-                        }
-                      />
-                    </div>
-                  ) : (
-                    <div className="mt-3 grid gap-3">
-                      <Input
-                        value={server.command}
-                        placeholder={t(
-                          "pages.config.mcp_server_command_placeholder",
-                        )}
-                        aria-label={t(
-                          "pages.config.mcp_server_command_placeholder",
-                        )}
-                        onChange={(e) =>
-                          onServerFieldChange(
-                            server.id,
-                            "command",
-                            e.target.value,
-                          )
-                        }
-                      />
-                      <Input
-                        value={server.envFile}
-                        placeholder={t(
-                          "pages.config.mcp_server_env_file_placeholder",
-                        )}
-                        aria-label={t(
-                          "pages.config.mcp_server_env_file_placeholder",
-                        )}
-                        onChange={(e) =>
-                          onServerFieldChange(
-                            server.id,
-                            "envFile",
-                            e.target.value,
-                          )
-                        }
-                      />
-                      <Textarea
-                        value={server.argsText}
-                        placeholder={t(
-                          "pages.config.mcp_server_args_placeholder",
-                        )}
-                        aria-label={t(
-                          "pages.config.mcp_server_args_placeholder",
-                        )}
-                        className="min-h-[88px] font-mono text-xs"
-                        onChange={(e) =>
-                          onServerFieldChange(
-                            server.id,
-                            "argsText",
-                            e.target.value,
-                          )
-                        }
-                      />
-                      <Textarea
-                        value={server.envText}
-                        placeholder={t(
-                          "pages.config.mcp_server_env_placeholder",
-                        )}
-                        aria-label={t(
-                          "pages.config.mcp_server_env_placeholder",
-                        )}
-                        className="min-h-[88px] font-mono text-xs"
-                        onChange={(e) =>
-                          onServerFieldChange(
-                            server.id,
-                            "envText",
-                            e.target.value,
-                          )
-                        }
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              <div>
-                <Button type="button" variant="outline" onClick={onAddServer}>
-                  <IconPlus className="size-4" />
-                  {t("pages.config.mcp_server_add")}
-                </Button>
-              </div>
-            </div>
-          </Field>
-        </>
-      )}
-    </ConfigSectionCard>
-  )
-}
-
 export function ExecSection({ form, onFieldChange }: ExecSectionProps) {
   const { t } = useTranslation()
   const [testCommand, setTestCommand] = useState("")
@@ -876,18 +650,19 @@ export function ExecSection({ form, onFieldChange }: ExecSectionProps) {
       .split("\n")
       .map((p) => p.trim())
       .filter((p) => p.length > 0)
-    const denyPatterns = form.enableDenyPatterns
-      ? form.customDenyPatternsText
-          .split("\n")
-          .map((p) => p.trim())
-          .filter((p) => p.length > 0)
-      : []
+    const denyPatterns = form.customDenyPatternsText
+      .split("\n")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
 
     setIsLoading(true)
     try {
       const res = await fetch("/api/config/test-command-patterns", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+        },
         body: JSON.stringify({
           allow_patterns: allowPatterns,
           deny_patterns: denyPatterns,
@@ -938,23 +713,21 @@ export function ExecSection({ form, onFieldChange }: ExecSectionProps) {
             }
           />
 
-          {form.enableDenyPatterns && (
-            <Field
-              label={t("pages.config.custom_deny_patterns")}
-              hint={t("pages.config.custom_deny_patterns_hint")}
-              layout="setting-row"
-              controlClassName="md:max-w-md"
-            >
-              <Textarea
-                value={form.customDenyPatternsText}
-                placeholder={t("pages.config.custom_patterns_placeholder")}
-                className="min-h-[88px]"
-                onChange={(e) =>
-                  onFieldChange("customDenyPatternsText", e.target.value)
-                }
-              />
-            </Field>
-          )}
+          <Field
+            label={t("pages.config.custom_deny_patterns")}
+            hint={t("pages.config.custom_deny_patterns_hint")}
+            layout="setting-row"
+            controlClassName="md:max-w-md"
+          >
+            <Textarea
+              value={form.customDenyPatternsText}
+              placeholder={t("pages.config.custom_patterns_placeholder")}
+              className="min-h-[88px]"
+              onChange={(e) =>
+                onFieldChange("customDenyPatternsText", e.target.value)
+              }
+            />
+          </Field>
 
           <Field
             label={t("pages.config.custom_allow_patterns")}

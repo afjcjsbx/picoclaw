@@ -65,6 +65,8 @@ func newLoginCommand() *cobra.Command {
 			if timeout <= 0 {
 				return fmt.Errorf("timeout must be positive")
 			}
+			// This deadline drives the login flow; pkg/mcp only applies a
+			// default when the context has no deadline of its own.
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 			if err := loginOAuth(

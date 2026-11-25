@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/health"
 )
 
 func TestRun_StartupFailuresReturnErrorAndEmitStructuredLog(t *testing.T) {
@@ -343,6 +344,7 @@ func TestExecuteReload_RejectsInvalidConfigAndResetsFlag(t *testing.T) {
 
 	runningServices := &services{}
 	runningServices.reloading.Store(true)
+	runningServices.HealthServer = health.NewServer("127.0.0.1", 0, "")
 
 	badCfg := config.DefaultConfig()
 	badCfg.Gateway.Port = 0
@@ -356,5 +358,16 @@ func TestExecuteReload_RejectsInvalidConfigAndResetsFlag(t *testing.T) {
 	}
 	if runningServices.reloading.Load() {
 		t.Fatal("reloading flag was not reset after a rejected reload")
+	}
+
+	status := runningServices.HealthServer.GetReloadStatus()
+	if status.Generation != 1 {
+		t.Fatalf("reload generation = %d, want 1", status.Generation)
+	}
+	if status.InProgress {
+		t.Fatal("reload status still in progress after executeReload returned")
+	}
+	if !strings.Contains(status.LastError, "config pre-check failed") {
+		t.Fatalf("reload last_error = %q, want config pre-check failure", status.LastError)
 	}
 }

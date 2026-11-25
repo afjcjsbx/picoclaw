@@ -1,3 +1,6 @@
+---
+description: "PicoClaw CLI reference: chat, Gateway, model and credential management, channels, skills, MCP servers, and scheduled tasks."
+---
 # CLI Reference
 
 `picoclaw` is the main binary: chat with the agent, start the Gateway, and manage models, credentials, channels, skills, MCP servers, and scheduled tasks from the command line. The browser-based Web UI is served by a separate binary — see the [Web UI & Launcher Guide](../guides/webui.md).
@@ -13,12 +16,14 @@ Every command accepts the global `--no-color` flag, which disables ANSI colors i
 | [`onboard`](#onboard) | Initialize configuration and workspace |
 | [`config reset`](#config-reset) | Reset configuration to factory defaults |
 | [`status`](#status--version--update) / [`version`](#status--version--update) / [`update`](#status--version--update) | Inspect and update the installation |
+| [`usage`](#usage) | Show token usage and cost per session |
 | [`agent`](#agent) | Interact with the agent directly |
 | [`gateway`](#gateway) | Start the Gateway service |
 | [`model`](#model) / [`model add`](#model-add) | Show, set, and add models |
 | [`auth`](#auth) | OAuth login, credentials, and QR channel setup |
 | [`skills`](#skills) | Install and manage skills |
 | [`cron`](#cron) | Manage scheduled tasks |
+| [`plugin`](#plugin) | Manage agent plugins |
 | [`mcp`](#mcp) | Manage MCP servers |
 | [`migrate`](#migrate) | Migrate from OpenClaw |
 
@@ -52,8 +57,16 @@ picoclaw config reset --force
 ```bash
 picoclaw status    # Show configuration, model, and runtime status (alias: s)
 picoclaw version   # Show version information (alias: v)
-picoclaw update    # Check and apply updates from GitHub releases
+picoclaw update    # Check for a newer release and ask before applying it
 ```
+
+`update` queries the latest GitHub release first and prints the current and
+latest versions. When no newer release exists, it exits without downloading.
+When one exists, it asks for confirmation before downloading and replacing the
+binary; a non-interactive stdin (for example in a script) applies the update
+without prompting. Development builds created by the Makefile (`v0.5.4-128-g…`)
+are compared by the tag they are based on. Do not restart or power off the
+device while the update is downloading or being applied.
 
 `update` flags:
 
@@ -62,6 +75,29 @@ picoclaw update    # Check and apply updates from GitHub releases
 | `--platform` | Target platform (default: current `GOOS`) |
 | `--arch` | Target architecture (default: current `GOARCH`) |
 | `-u, --url` | Direct URL to a release asset or release page |
+| `--check` | Only check for a newer release; never download or apply it |
+| `-y, --yes` | Apply the update without asking for confirmation |
+
+## Usage
+
+Reports the provider-reported token usage and cost recorded for each session under `<workspace>/sessions`.
+
+```bash
+picoclaw usage                 # Top 20 sessions by total tokens
+picoclaw usage --limit 0       # All sessions
+picoclaw usage -s cli:default  # One session, with the per-model breakdown
+picoclaw usage --json          # Machine-readable output
+```
+
+| Flag | Description |
+| --- | --- |
+| `-s, --session` | Session key or alias to inspect. An alias must name one session; pass the key when several sessions share it. |
+| `-n, --limit` | Maximum sessions to list (default 20, `0` shows all). Also applies to `--json`. |
+| `--json` | Emit JSON instead of a table. Log lines go to stderr, so stdout stays parseable. |
+
+Each session keeps running totals in its metadata, updated as messages are written. Truncating, compacting, or clearing a session's history does not reduce its totals. The command only reads metadata, so it can run while the gateway is active. Pruning a session also deletes its totals. Sessions written before this version have no totals yet: the gateway counts them from their files when it starts, and `picoclaw usage` counts them on the fly until then.
+
+Input tokens are split into fresh prompt tokens, cache reads, and cache writes, each shown with its percentage of all input tokens. Percentages are rounded to one decimal and may not add up to exactly 100%. Costs are the amounts providers report; a session whose provider reports no cost shows `-` in tables.
 
 ## Agent
 
@@ -150,11 +186,20 @@ Manages credentials and channel QR flows. Providers and `model_list` setup are c
 | `--no-browser` | Do not auto-open a browser during OAuth login |
 | `--setup-token` | Use the setup-token flow for Anthropic (from `claude setup-token`) |
 
+`auth weixin` flags:
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--timeout` | `300` | Login timeout in seconds |
+| `--proxy` | *(none)* | HTTP proxy URL (e.g. `http://localhost:7890`) |
+| `--base-url` | `https://ilinkai.weixin.qq.com/` | iLink API base URL |
+
 ```bash
 picoclaw auth login --provider anthropic
 picoclaw auth login --provider openai --device-code
 picoclaw auth wecom
 picoclaw auth weixin --timeout 300
+picoclaw auth weixin --proxy http://localhost:7890
 ```
 
 ## Skills
@@ -179,7 +224,7 @@ picoclaw skills install --registry clawhub github
 
 ## Cron
 
-Manages scheduled tasks that deliver agent-generated messages to a channel. Job behavior, delivery modes, and storage are documented in [Scheduled Tasks and Cron Jobs](cron.md).
+Manages scheduled tasks that deliver agent-generated messages to a channel. Alias: `c`. Job behavior, delivery modes, and storage are documented in [Scheduled Tasks and Cron Jobs](cron.md).
 
 | Subcommand | Purpose |
 | --- | --- |
@@ -204,6 +249,22 @@ picoclaw cron add --name "Morning brief" --message "Summarize my calendar" --cro
 picoclaw cron list
 picoclaw cron disable 1
 ```
+
+## Plugin
+
+Manages agent plugin entries in `config.json`. Full reference: [Plugin CLI](plugins-cli.md).
+
+| Subcommand | Purpose |
+| --- | --- |
+| `plugin list` | List installed plugins |
+| `plugin show <name>` | Show plugin details |
+| `plugin add <name> <path-or-url>` | Add or update a plugin |
+| `plugin remove <name>` | Remove a plugin (alias: `rm`) |
+| `plugin enable <name>` / `plugin disable <name>` | Enable or disable a plugin |
+| `plugin edit` | Open the plugin config in `$EDITOR` |
+| `plugin init` | Scaffold a new plugin package |
+| `plugin validate <path>` | Validate a plugin package |
+| `plugin test <name>` | Test a plugin |
 
 ## MCP
 

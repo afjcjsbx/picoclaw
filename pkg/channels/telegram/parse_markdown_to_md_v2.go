@@ -65,15 +65,12 @@ var allEntityPatterns = []entityPattern{
 }
 
 // verbatimEntities are entity types whose inner content must never be
-// touched (code blocks, URLs, quotes, custom emoji).
+// touched (code blocks, custom emoji).
 // Their content is passed through completely unchanged.
 var verbatimEntities = map[string]bool{
 	"```": true,
 	"`":   true,
-	"**>": true,
-	">":   true,
 	"!":   true,
-	"[":   true,
 }
 
 // markdownToTelegramMarkdownV2 converts a Markdown string into a string safe
@@ -150,8 +147,45 @@ func processText(text string) string {
 	matched := text[bestStart:bestEnd]
 
 	if verbatimEntities[bestPat.open] {
-		// Code blocks, URLs, quotes: pass through completely untouched.
-		b.WriteString(matched)
+		switch bestPat.open {
+		case "```", "`":
+			// Code entities are verbatim for Markdown, but Telegram still
+			// treats backslash and backtick as escape characters inside them.
+			delim := bestPat.open
+			inner := matched[len(delim) : len(matched)-len(delim)]
+			b.WriteString(delim)
+			b.WriteString(escapeMarkdownV2Code(inner))
+			b.WriteString(delim)
+		default:
+			// Custom emoji: pass through completely untouched.
+			b.WriteString(matched)
+		}
+	} else if bestPat.open == "[" {
+		// Inline link [label](url): escape the label (displayed text) but
+		// keep the URL verbatim (#3426).
+		if idx := strings.Index(matched, "]("); idx >= 0 {
+			label := matched[1:idx]
+			url := matched[idx+2 : len(matched)-1]
+			b.WriteString("[")
+			b.WriteString(processText(label))
+			b.WriteString("](")
+			b.WriteString(url)
+			b.WriteString(")")
+		} else {
+			b.WriteString(matched)
+		}
+	} else if bestPat.open == ">" || bestPat.open == "**>" {
+		// Blockquote: process the quoted text (escape specials, keep nested
+		// entities), but preserve a trailing || expandable terminator (#3426).
+		b.WriteString(bestPat.open)
+		quoteText := matched[len(bestPat.open):]
+		suffix := ""
+		if strings.HasSuffix(quoteText, "||") {
+			suffix = "||"
+			quoteText = quoteText[:len(quoteText)-2]
+		}
+		b.WriteString(processText(quoteText))
+		b.WriteString(suffix)
 	} else {
 		// Inline formatting (bold, italic, underline, strikethrough, spoiler):
 		// keep the delimiters and recursively process the inner content so that
@@ -168,6 +202,21 @@ func processText(text string) string {
 	// Continue with the remainder of the string.
 	b.WriteString(processText(text[bestEnd:]))
 
+	return b.String()
+}
+
+// escapeMarkdownV2Code escapes the characters that Telegram requires to be
+// escaped inside pre and code entities. Backslashes must survive because
+// Telegram treats them as escape characters even inside code blocks.
+func escapeMarkdownV2Code(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, ch := range s {
+		if ch == '\\' || ch == '`' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(ch)
+	}
 	return b.String()
 }
 

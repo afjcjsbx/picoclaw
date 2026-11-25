@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -117,9 +116,13 @@ func NewProcessHook(ctx context.Context, name string, opts ProcessHookOptions) (
 	cmd := exec.Command(opts.Command[0], opts.Command[1:]...)
 	cmd.Dir = opts.Dir
 	if opts.ExactEnv {
+		// Plugin host: use exactly the declared env, no parent inheritance.
 		cmd.Env = append([]string{}, opts.Env...)
-	} else if len(opts.Env) > 0 {
-		cmd.Env = append(os.Environ(), opts.Env...)
+	} else {
+		// Non-exact: start from the filtered (or full when disabled) parent
+		// env, then append caller-supplied overrides. Explicit values in
+		// opts.Env always take effect because they appear last in the slice.
+		cmd.Env = append(isolation.InheritedEnv(), opts.Env...)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

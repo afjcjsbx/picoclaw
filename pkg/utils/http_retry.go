@@ -3,12 +3,16 @@ package utils
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
 )
 
-const maxRetries = 3
+const (
+	maxRetries         = 3
+	maxRetryDrainBytes = 8 << 10
+)
 
 var (
 	retryDelayUnit        = time.Second
@@ -20,15 +24,29 @@ func shouldRetry(statusCode int) bool {
 		statusCode >= 500
 }
 
+// drainAndCloseBody reads a small prefix before closing so net/http can often
+// reuse the connection.
+//
+// The body is only read when its size is known and fits the cap. A chunked or
+// oversized error body can be streamed slowly or stall outright, and draining
+// it would spend the request budget before the backoff, so the retry would
+// never run. Closing without reading is enough to let net/http drop the
+// connection.
+func drainAndCloseBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	if resp.ContentLength > 0 && resp.ContentLength <= maxRetryDrainBytes {
+		_, _ = io.CopyN(io.Discard, resp.Body, maxRetryDrainBytes)
+	}
+	_ = resp.Body.Close()
+}
+
 func DoRequestWithRetry(client *http.Client, req *http.Request) (*http.Response, error) {
 	var resp *http.Response
 	var err error
 
 	for i := range maxRetries {
-		if i > 0 && resp != nil {
-			_ = resp.Body.Close()
-		}
-
 		resp, err = client.Do(req)
 		if err == nil {
 			if resp.StatusCode == http.StatusOK {
@@ -40,10 +58,8 @@ func DoRequestWithRetry(client *http.Client, req *http.Request) (*http.Response,
 		}
 
 		if i < maxRetries-1 {
+			drainAndCloseBody(resp)
 			if err = sleepWithCtx(req.Context(), retryDelayForAttempt(resp, i)); err != nil {
-				if resp != nil {
-					_ = resp.Body.Close()
-				}
 				return nil, fmt.Errorf("failed to sleep: %w", err)
 			}
 		}

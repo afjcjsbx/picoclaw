@@ -18,9 +18,11 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
 
 const (
+	anthropicAPIVersion           = "2023-06-01"
 	modelProbeTimeout             = 800 * time.Millisecond
 	modelProbeSuccessBaseInterval = 2 * time.Second
 	modelProbeSuccessMaxInterval  = 60 * time.Second
@@ -241,6 +243,11 @@ func runLocalModelProbe(m *config.ModelConfig) bool {
 	case "vllm", "lmstudio", "gpt4free":
 		return probeOpenAICompatibleModelFunc(apiBase, modelID, m.APIKey())
 	case "github-copilot":
+		return probeTCPServiceFunc(apiBase)
+	case "anthropic", "anthropic-messages", "alibaba-coding-anthropic":
+		// Anthropic APIs do not expose the OpenAI-style GET /models contract for
+		// Bearer-authenticated probes. For a local endpoint (for example a proxy)
+		// a TCP check is enough to decide whether the gateway can start.
 		return probeTCPServiceFunc(apiBase)
 	case "claude-cli":
 		return probeCommandAvailableFunc("claude")
@@ -613,6 +620,126 @@ func probeOpenAICompatibleModel(apiBase, modelID, apiKey string) bool {
 	return false
 }
 
+// probeAnthropicModel verifies an Anthropic-compatible endpoint with the
+// headers the native API expects. The OpenAI-style Bearer probe is rejected by
+// Anthropic.
+func probeAnthropicModel(apiBase, modelID, apiKey string) bool {
+	apiKey = strings.TrimSpace(apiKey)
+	if strings.TrimSpace(apiBase) == "" || apiKey == "" {
+		return false
+	}
+
+	base := common.NormalizeBaseURL(apiBase, "https://api.anthropic.com/v1", true)
+	var respEnvelope struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := getJSONAnthropic(base+"/models?limit=1000", &respEnvelope, apiKey); err != nil {
+		return false
+	}
+
+	for _, model := range respEnvelope.Data {
+		if strings.EqualFold(strings.TrimSpace(model.ID), modelID) {
+			return true
+		}
+	}
+	return false
+}
+
+func probeGeminiModel(apiBase, modelID, apiKey string) bool {
+	if strings.TrimSpace(apiBase) == "" {
+		return false
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return false
+	}
+
+	// Gemini uses x-goog-api-key header or query parameter, not Bearer token.
+	// The models endpoint is /v1beta/models?key=API_KEY (or using x-goog-api-key header)
+	baseURL := strings.TrimRight(strings.TrimSpace(apiBase), "/")
+
+	// Try with x-goog-api-key header first (more secure, doesn't log key in URLs)
+	var respEnvelope struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	fetchURL := baseURL + "/models"
+	if err := getJSONGemini(fetchURL, &respEnvelope, apiKey); err == nil {
+		for _, model := range respEnvelope.Models {
+			if strings.EqualFold(strings.TrimSpace(model.Name), modelID) ||
+				strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(model.Name, "models/")), modelID) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Fallback: try with key as query parameter
+	fetchURL = baseURL + "/models?key=" + url.QueryEscape(apiKey)
+	if err := getJSONRaw(fetchURL, &respEnvelope); err == nil {
+		for _, model := range respEnvelope.Models {
+			if strings.EqualFold(strings.TrimSpace(model.Name), modelID) ||
+				strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(model.Name, "models/")), modelID) {
+				return true
+			}
+		}
+		return false
+	}
+
+	return false
+}
+
+func getJSONGemini(rawURL string, out any, apiKey string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	if apiKey = strings.TrimSpace(apiKey); apiKey != "" {
+		req.Header.Set("X-Goog-Api-Key", apiKey)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func getJSONRaw(rawURL string, out any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 func getJSON(rawURL string, out any, apiKey string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
 	defer cancel()
@@ -624,6 +751,31 @@ func getJSON(rawURL string, out any, apiKey string) error {
 	if apiKey = strings.TrimSpace(apiKey); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func getJSONAnthropic(rawURL string, out any, apiKey string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("Anthropic-Version", anthropicAPIVersion)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)

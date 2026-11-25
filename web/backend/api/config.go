@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -41,7 +42,7 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(cfg); err != nil {
+	if err := json.NewEncoder(w).Encode(redactMCPConfigForWeb(cfg)); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }
@@ -81,6 +82,12 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if execAllowRemoteOmitted(body) {
 		cfg.Tools.Exec.AllowRemote = config.DefaultConfig().Tools.Exec.AllowRemote
 	}
+	existingCfg, loadErr := config.LoadConfig(h.configPath)
+	if loadErr != nil {
+		http.Error(w, fmt.Sprintf("Failed to load existing config: %v", loadErr), http.StatusInternalServerError)
+		return
+	}
+	preserveMCPConfigRedactions(&cfg, existingCfg)
 
 	// Load existing config and copy security credentials before validation,
 	// so that security-managed fields (e.g. pico token) are available.
@@ -199,6 +206,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	newCfg.Session.ApplyDmScope()
 	newCfg.Session.DeriveDmScope()
+	preserveMCPConfigRedactions(&newCfg, cfg)
 
 	// Restore security fields (tokens/keys) from the loaded config before validation,
 	// because private fields are lost during JSON round-trip.
@@ -334,6 +342,10 @@ func validateConfig(cfg *config.Config) []string {
 		errs = append(errs, err.Error())
 	}
 
+	if err := cfg.ValidateBudgetWarningRatio(); err != nil {
+		errs = append(errs, err.Error())
+	}
+
 	// Gateway port range
 	if cfg.Gateway.Port != 0 && (cfg.Gateway.Port < 1 || cfg.Gateway.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("gateway.port %d is out of valid range (1-65535)", cfg.Gateway.Port))
@@ -388,6 +400,32 @@ func validateConfig(cfg *config.Config) []string {
 		}
 	}
 
+	// A2A: a dedicated listener may only be exposed with bearer tokens.
+	{
+		bc := cfg.Channels.Get(config.ChannelA2A)
+		if bc != nil && bc.Enabled {
+			if decoded, err := bc.GetDecoded(); err == nil && decoded != nil {
+				if c, ok := decoded.(*config.A2ASettings); ok {
+					if c.Port < 0 || c.Port > 65535 {
+						errs = append(errs, "channels.a2a.settings.port must be between 1 and 65535")
+					}
+					host := c.Host
+					if host == "" {
+						host = "127.0.0.1"
+					}
+					ip := net.ParseIP(host)
+					loopback := host == "localhost" || (ip != nil && ip.IsLoopback())
+					if !loopback && len(c.Tokens.Values()) == 0 {
+						errs = append(
+							errs,
+							"channels.a2a.settings.tokens is required when binding A2A to a non-loopback host",
+						)
+					}
+				}
+			}
+		}
+	}
+
 	{
 		bc := cfg.Channels.GetByType(config.ChannelWeCom)
 		if bc != nil && bc.Enabled {
@@ -405,11 +443,9 @@ func validateConfig(cfg *config.Config) []string {
 	}
 
 	if cfg.Tools.Exec.Enabled {
-		if cfg.Tools.Exec.EnableDenyPatterns {
-			errs = append(
-				errs,
-				validateRegexPatterns("tools.exec.custom_deny_patterns", cfg.Tools.Exec.CustomDenyPatterns)...)
-		}
+		errs = append(
+			errs,
+			validateRegexPatterns("tools.exec.custom_deny_patterns", cfg.Tools.Exec.CustomDenyPatterns)...)
 		errs = append(
 			errs,
 			validateRegexPatterns("tools.exec.custom_allow_patterns", cfg.Tools.Exec.CustomAllowPatterns)...)
@@ -752,6 +788,21 @@ func applySecureStringsToStruct(rv reflect.Value, rawMap map[string]any) {
 			}
 			sf := rv.Field(i)
 			if !sf.CanSet() {
+				continue
+			}
+			// SecureStrings arrays replace the whole list. An omitted field (or
+			// the JSON redaction placeholder) leaves the security-loaded values
+			// untouched; an explicit empty array clears them.
+			if f.Type == reflect.TypeOf(config.SecureStrings{}) {
+				if rawSlice, ok := rawVal.([]any); ok {
+					values := make([]string, 0, len(rawSlice))
+					for _, item := range rawSlice {
+						if value, ok := item.(string); ok {
+							values = append(values, value)
+						}
+					}
+					sf.Set(reflect.ValueOf(config.SimpleSecureStrings(values...)))
+				}
 				continue
 			}
 			// Direct SecureString field

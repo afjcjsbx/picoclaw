@@ -1,6 +1,10 @@
+---
+description: "Connect PicoClaw to chat apps: Telegram, Discord, Slack, Matrix, Feishu, WeCom, Weixin, QQ, LINE, MQTT, and more."
+title: "Chat Apps Configuration"
+---
 # 💬 Chat Apps Configuration
 
-> Back to [README](../README.md)
+> Back to [Guides](./)
 
 ## 💬 Chat Apps
 
@@ -10,23 +14,94 @@ Talk to your picoclaw through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk,
 
 | Channel              | Difficulty         | Description                                           | Documentation                                                                                                    |
 | -------------------- | ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Telegram**         | ⭐ Easy            | Recommended, voice-to-text, long polling (no public IP needed) | [Docs](../channels/telegram/README.md)                                                                  |
-| **Discord**          | ⭐ Easy            | Socket Mode, group/DM support, rich bot ecosystem     | [Docs](../channels/discord/README.md)                                                                           |
+| **Telegram**         | ⭐ Easy            | Recommended, voice-to-text, long polling (no public IP needed) | [Docs](../channels/telegram/)                                                                  |
+| **Discord**          | ⭐ Easy            | Socket Mode, group/DM support, rich bot ecosystem     | [Docs](../channels/discord/)                                                                           |
 | **WhatsApp**         | ⭐ Easy            | Native (QR scan) or Bridge URL                        | [Docs](#whatsapp)                                                                                                |
 | **Weixin**           | ⭐ Easy            | Native QR scan (Tencent iLink API)                    | [Docs](#weixin)                                                                            |
-| **Slack**            | ⭐ Easy            | **Socket Mode** (no public IP needed), enterprise     | [Docs](../channels/slack/README.md)                                                                             |
-| **Matrix**           | ⭐⭐ Medium        | Federated protocol, self-hosting supported            | [Docs](../channels/matrix/README.md)                                                                            |
-| **QQ**               | ⭐⭐ Medium        | Official bot API, Chinese community                   | [Docs](../channels/qq/README.md)                                                                                |
-| **DingTalk**         | ⭐⭐ Medium        | Stream mode (no public IP needed), enterprise         | [Docs](../channels/dingtalk/README.md)                                                                          |
-| **LINE**             | ⭐⭐⭐ Advanced    | HTTPS Webhook required                                | [Docs](../channels/line/README.md)                                                                              |
-| **WeCom (企业微信)** | ⭐⭐⭐ Advanced    | Official AI Bot over WebSocket, streaming + media     | [Docs](../channels/wecom/README.md) |
-| **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](../channels/feishu/README.md)                                                                            |
+| **Slack**            | ⭐ Easy            | **Socket Mode** (no public IP needed), enterprise     | [Docs](../channels/slack/)                                                                             |
+| **Matrix**           | ⭐⭐ Medium        | Federated protocol, self-hosting supported            | [Docs](../channels/matrix/)                                                                            |
+| **QQ**               | ⭐⭐ Medium        | Official bot API, Chinese community                   | [Docs](../channels/qq/)                                                                                |
+| **DingTalk**         | ⭐⭐ Medium        | Stream mode (no public IP needed), enterprise         | [Docs](../channels/dingtalk/)                                                                          |
+| **LINE**             | ⭐⭐⭐ Advanced    | HTTPS Webhook required                                | [Docs](../channels/line/)                                                                              |
+| **WeCom (企业微信)** | ⭐⭐⭐ Advanced    | Official AI Bot over WebSocket, streaming + media     | [Docs](../channels/wecom/) |
+| **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](../channels/feishu/)                                                                            |
 | **IRC**              | ⭐⭐ Medium        | Server + TLS configuration                            | [Docs](#irc)                                                                                                     |
-| **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](../channels/onebot/README.md)                                                                            |
-| **Mail**             | ⭐⭐ Medium        | Custom build (`channel_mail`): IMAP (IDLE) + SMTP, threaded replies, attachments | [Docs](../channels/mail/README.md)                                                                              |
-| **MQTT**             | ⭐ Easy            | Any MQTT client via broker pub/sub                    | [Docs](../channels/mqtt/README.md)                                                                              |
-| **MaixCam**          | ⭐ Easy            | Hardware integration channel for Sipeed AI cameras    | [Docs](../channels/maixcam/README.md)                                                                           |
-| **Pico**             | ⭐ Easy            | Native PicoClaw protocol channel                      |                                                                                                                  |
+| **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](../channels/onebot/)                                                                            |
+| **Mail**             | ⭐⭐ Medium        | Custom build (`channel_mail`): IMAP (IDLE) + SMTP, threaded replies, attachments | [Docs](../channels/mail/)                                                                              |
+| **MQTT**             | ⭐ Easy            | Any MQTT client via broker pub/sub                    | [Docs](../channels/mqtt/)                                                                              |
+| **MaixCam**          | ⭐ Easy            | Hardware integration channel for Sipeed AI cameras    | [Docs](../channels/maixcam/)                                                                           |
+| **Pico**             | ⭐ Easy            | Native PicoClaw protocol channel                      | [Docs](../channels/pico/)                                                                                        |
+
+## Outbound-only channels
+
+An **outbound-only channel** is an enabled channel that PicoClaw can use as a `message` target but that never starts an agent turn for incoming messages. Use it when one chat app is your control surface (for example Telegram) and another is only a destination (for example a Discord announcements channel).
+
+### Supported channels
+
+The pattern applies to channels that:
+
+- enforce `allow_from` on inbound messages, and
+- have an outbound sender, so the `message` tool can deliver to them.
+
+Check the channel page under `docs/channels/<name>/README.md`: if it documents `allow_from`, inbound traffic can be blocked. Bidirectional chat channels that can deliver replies generally also expose an outbound sender, so the `message` tool can deliver proactively, subject to platform limits. Some channels are outbound-only by design, such as the optional `slack_webhook` and `teams_webhook` channels; they have no inbound path and do not need this workaround. See [Custom Builds](custom-builds.md) for those build tags.
+
+### Make a bidirectional channel outbound-only
+
+Keep the channel enabled so its worker and sender stay available, then set `allow_from` to an ID that cannot match a real sender. Do **not** use an empty list: empty means "allow everyone".
+
+```json
+{
+  "channel_list": {
+    "telegram": {
+      "enabled": true,
+      "type": "telegram",
+      "allow_from": ["YOUR_TELEGRAM_USER_ID"],
+      "settings": {
+        "token": "YOUR_TELEGRAM_BOT_TOKEN"
+      }
+    },
+    "discord": {
+      "enabled": true,
+      "type": "discord",
+      "allow_from": ["0"],
+      "settings": {
+        "token": "YOUR_DISCORD_BOT_TOKEN"
+      }
+    }
+  }
+}
+```
+
+In this example:
+
+- Telegram is the control channel. Only your Telegram user ID can trigger the agent.
+- Discord stays connected and can send messages, but every inbound Discord message is dropped by the allowlist before it reaches the agent. `"0"` is not a valid Discord user ID, so no real user matches it.
+
+If you want only yourself to be able to trigger the bot on the destination channel, use your own platform user ID instead of `"0"`.
+
+### Send to the outbound-only channel
+
+From the control channel, ask the agent to use the `message` tool with the destination channel and chat ID:
+
+```json
+{
+  "content": "Deploy finished.",
+  "channel": "discord",
+  "chat_id": "123456789012345678"
+}
+```
+
+`channel` is the key under `channel_list`, not necessarily the channel `type` (custom channel names can differ). `chat_id` is the platform-specific destination: a Discord channel ID, a Slack channel ID, a Telegram chat ID, or a webhook target name for native output-only webhook channels. The gateway must be running, and the `message` tool must be enabled (`tools.message.enabled`, default `true`). See [Messaging tools](../tools/messaging.md) for the full `message` tool reference.
+
+### Caveats
+
+- `allow_from: []` means "allow all", not "deny all". Use a non-matching sentinel such as `"0"` on numeric-ID platforms.
+- `allow_from` filters inbound messages only. It does not restrict outbound sends, but the bot still needs the permissions required to post in the destination.
+- Inbound messages are dropped, not queued. The agent cannot use them as context.
+- Some channels may still answer protocol-level interactions (for example Discord slash commands) with a denial message. For absolute silence, use a native output-only channel or do not grant the interaction scope.
+- `group_trigger.mention_only` is not a substitute: it filters group messages and still responds when the bot is mentioned or receives a DM.
+- `enabled: false` disables both directions. The channel must stay enabled for outbound delivery.
+
 
 <a id="telegram"></a>
 <details>
@@ -77,6 +152,12 @@ You can also inspect skills and MCP servers directly from Telegram:
 - `/use <skill> <message>`
 - `/use <skill>` and then send the actual request in the next message
 - `/use clear`
+
+When you send a command that needs a sub-command (for example `/list`), the usage reply includes inline-keyboard buttons for the sub-commands that can run without arguments. Tapping one runs the equivalent slash command, so you do not have to type it again.
+
+Sending `/use` without arguments replies with a paginated skill picker. Tapping a skill runs `/use <skill>` and arms that skill for your next message.
+
+Sending `/switch model` (or `/list models`) replies with a paginated model picker. Tapping a model runs `/switch model <index>` and switches to it immediately.
 
 **4. Advanced Formatting**
 You can set use_markdown_v2: true to enable enhanced formatting options. This allows the bot to utilize the full range of Telegram MarkdownV2 features, including nested styles, spoilers, and custom fixed-width blocks.
@@ -334,7 +415,7 @@ picoclaw gateway
 picoclaw gateway
 ```
 
-For full options (`device_id`, `join_on_invite`, `group_trigger`, `placeholder`, `reasoning_channel_id`), see [Matrix Channel Configuration Guide](../channels/matrix/README.md).
+For full options (`device_id`, `join_on_invite`, `group_trigger`, `placeholder`, `reasoning_channel_id`), see [Matrix Channel Configuration Guide](../channels/matrix/).
 
 </details>
 
@@ -395,7 +476,7 @@ picoclaw gateway
 PicoClaw now exposes WeCom as a single AI Bot channel over WebSocket.
 No public webhook callback URL is required.
 
-See [WeCom Configuration Guide](../channels/wecom/README.md) for the full configuration reference and migration notes.
+See [WeCom Configuration Guide](../channels/wecom/) for the full configuration reference and migration notes.
 
 **Quick Setup - Recommended**
 
@@ -475,7 +556,7 @@ picoclaw gateway
 
 Open Feishu, search for your bot name, and start chatting. You can also add the bot to a group — use `group_trigger.mention_only: true` to only respond when @mentioned.
 
-For full options, see [Feishu Channel Configuration Guide](../channels/feishu/README.md).
+For full options, see [Feishu Channel Configuration Guide](../channels/feishu/).
 
 </details>
 
@@ -526,18 +607,39 @@ picoclaw gateway
     "irc": {
       "enabled": true,
       "type": "irc",
-      "server": "irc.libera.chat:6697",
-      "tls": true,
-      "nick": "picoclaw-bot",
-      "channels": ["#your-channel"],
-      "password": "",
+      "settings": {
+        "server": "irc.libera.chat:6697",
+        "tls": true,
+        "nick": "picoclaw-bot",
+        "user": "",
+        "real_name": "",
+        "channels": ["#your-channel"],
+        "password": "",
+        "nickserv_password": "",
+        "sasl_user": "",
+        "sasl_password": "",
+        "request_caps": []
+      },
       "allow_from": []
     }
   }
 }
 ```
 
-Optional: `nickserv_password` for NickServ authentication, `sasl_user`/`sasl_password` for SASL auth.
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `server` | Yes | — | IRC server address in `host:port` format |
+| `tls` | No | `false` | Enable TLS. Recommended for port 6697 |
+| `nick` | Yes | — | Bot's IRC nickname |
+| `user` | No | same as `nick` | IRC username (the ident field). Defaults to `nick` when empty |
+| `real_name` | No | `""` | Real name field shown in `/whois`. Defaults to `nick` when empty |
+| `channels` | Yes | — | List of IRC channels to join on connect (e.g. `["#general"]`) |
+| `password` | No | — | Server password (for password-protected servers). Stored in `.security.yml` |
+| `nickserv_password` | No | — | NickServ identify password sent on connect. Stored in `.security.yml` |
+| `sasl_user` | No | — | SASL PLAIN username for SASL authentication |
+| `sasl_password` | No | — | SASL PLAIN password. Stored in `.security.yml` |
+| `request_caps` | No | `[]` | Additional IRCv3 capability names to request during capability negotiation |
+| `allow_from` | No | `[]` | Allowlist of IRC nicks; empty means all nicks are allowed |
 
 **2. Run**
 
@@ -545,7 +647,7 @@ Optional: `nickserv_password` for NickServ authentication, `sasl_user`/`sasl_pas
 picoclaw gateway
 ```
 
-The bot will connect to the IRC server and join the specified channels.
+The bot connects to the IRC server, negotiates capabilities, authenticates (if configured), and joins the listed channels.
 
 </details>
 
@@ -651,6 +753,144 @@ mosquitto_pub -t "/picoclaw/assistant/device1/request" \
 mosquitto_sub -t "/picoclaw/assistant/device1/response"
 ```
 
-For full configuration options see [MQTT Channel Docs](../channels/mqtt/README.md).
+For full configuration options see [MQTT Channel Docs](../channels/mqtt/).
+
+</details>
+
+<a id="slack_webhook"></a>
+<details>
+<summary><b>Slack Webhook (outbound-only)</b></summary>
+
+`slack_webhook` is an **outbound-only** channel. PicoClaw can deliver messages to Slack via Incoming Webhooks, but it never receives or processes inbound messages from Slack. Use it as a notification destination alongside a bidirectional control channel.
+
+**1. Create a Slack Incoming Webhook**
+
+1. Go to [Slack API apps](https://api.slack.com/apps), create or open your app.
+2. Navigate to **Incoming Webhooks** and enable it.
+3. Click **Add New Webhook to Workspace**, select the target channel, and copy the HTTPS URL.
+
+**2. Configure**
+
+```json
+{
+  "channel_list": {
+    "slack_webhook": {
+      "enabled": true,
+      "type": "slack_webhook",
+      "settings": {
+        "webhooks": {
+          "default": {
+            "webhook_url": "NOT_HERE",
+            "username": "PicoClaw",
+            "icon_emoji": ":robot_face:"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Store the actual webhook URL in `~/.picoclaw/.security.yml`:
+
+```yaml
+channel_list:
+  slack_webhook:
+    settings:
+      webhooks:
+        default:
+          webhook_url: "https://hooks.slack.com/services/..."
+```
+
+**Configuration fields**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `webhooks` | Yes | Map of named webhook targets. A `default` target is required |
+| `webhooks.<name>.webhook_url` | Yes | HTTPS Incoming Webhook URL (must use `https://`) |
+| `webhooks.<name>.username` | No | Display name override for the bot in Slack |
+| `webhooks.<name>.icon_emoji` | No | Emoji override for the bot icon in Slack (e.g. `:robot_face:`) |
+
+**3. Send a message to Slack**
+
+Use the `message` tool from any control channel and pass the webhook target name as `chat_id` (defaults to `default` when omitted):
+
+```
+Send the deployment summary to slack_webhook
+```
+
+**4. Run**
+
+```bash
+picoclaw gateway
+```
+
+</details>
+
+<a id="teams_webhook"></a>
+<details>
+<summary><b>Teams Webhook (outbound-only)</b></summary>
+
+`teams_webhook` is an **outbound-only** channel. PicoClaw can deliver messages to Microsoft Teams via Power Automate workflow webhooks, but it never receives or processes inbound messages from Teams.
+
+**1. Create a Teams Incoming Webhook**
+
+1. In Microsoft Teams, open the channel or chat you want to post to.
+2. Go to **Connectors** (or use Power Automate to create a workflow with an HTTP trigger) and add an **Incoming Webhook**.
+3. Copy the generated HTTPS URL.
+
+**2. Configure**
+
+```json
+{
+  "channel_list": {
+    "teams_webhook": {
+      "enabled": true,
+      "type": "teams_webhook",
+      "settings": {
+        "webhooks": {
+          "default": {
+            "webhook_url": "NOT_HERE",
+            "title": "PicoClaw Notification"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Store the actual webhook URL in `~/.picoclaw/.security.yml`:
+
+```yaml
+channel_list:
+  teams_webhook:
+    settings:
+      webhooks:
+        default:
+          webhook_url: "https://prod-xx.westeurope.logic.azure.com/..."
+```
+
+**Configuration fields**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `webhooks` | Yes | Map of named webhook targets. A `default` target is required |
+| `webhooks.<name>.webhook_url` | Yes | HTTPS Power Automate webhook URL (must use `https://`) |
+| `webhooks.<name>.title` | No | Card title shown in the Teams message. Defaults to `PicoClaw Notification` |
+
+**3. Send a message to Teams**
+
+Use the `message` tool from any control channel and pass the webhook target name as `chat_id` (defaults to `default` when omitted):
+
+```
+Send the alert to teams_webhook
+```
+
+**4. Run**
+
+```bash
+picoclaw gateway
+```
 
 </details>

@@ -3,7 +3,9 @@ package channels
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestFormatAnimatedToolFeedbackContent(t *testing.T) {
@@ -117,5 +119,79 @@ func TestToolFeedbackAnimator_UpdateFailureRestoresTracking(t *testing.T) {
 	}
 	if currentID, ok := animator.Current("chat-1"); !ok || currentID != "msg-1" {
 		t.Fatalf("Current() after failed Update = (%q, %v), want (msg-1, true)", currentID, ok)
+	}
+}
+
+func TestToolFeedbackAnimator_TakeRejectsStaleEntry(t *testing.T) {
+	animator := NewToolFeedbackAnimator(nil)
+	animator.Record("chat-stale", "msg-old", "🔧 `exec`")
+
+	// Age the tracked card past the reuse window: a leftover notice from an
+	// earlier turn must never be edited into a later reply.
+	animator.mu.Lock()
+	if entry, ok := animator.entries["chat-stale"]; ok {
+		entry.createdAt = time.Now().Add(-maxTrackedToolFeedbackAge - time.Second)
+	}
+	animator.mu.Unlock()
+
+	if msgID, _, ok := animator.Take("chat-stale"); ok {
+		t.Fatalf("Take() returned stale card %q, want rejected", msgID)
+	}
+	if _, ok := animator.Current("chat-stale"); ok {
+		t.Fatal("stale entry should be detached after Take")
+	}
+}
+
+func waitForAnimationEdits(t *testing.T, edits *atomic.Int32) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for edits.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("animation made no edits")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestToolFeedbackAnimator_StopsAfterMaximumDuration(t *testing.T) {
+	var edits atomic.Int32
+	animator := NewToolFeedbackAnimator(func(context.Context, string, string, string) error {
+		edits.Add(1)
+		return nil
+	})
+	animator.animationInterval = 5 * time.Millisecond
+	animator.maxDuration = 30 * time.Millisecond
+	defer animator.StopAll()
+
+	animator.Record("chat-1", "msg-1", "🔧 `read_file`\nChecking config")
+	waitForAnimationEdits(t, &edits)
+
+	time.Sleep(animator.maxDuration + 3*animator.animationInterval)
+	editsAtStop := edits.Load()
+	time.Sleep(2 * animator.animationInterval)
+	if got := edits.Load(); got != editsAtStop {
+		t.Fatalf("animation made %d edits after maximum duration, want 0", got-editsAtStop)
+	}
+	if currentID, ok := animator.Current("chat-1"); !ok || currentID != "msg-1" {
+		t.Fatalf("Current() after animation expiry = (%q, %v), want (msg-1, true)", currentID, ok)
+	}
+}
+
+func TestToolFeedbackAnimator_StopsAfterEditFailure(t *testing.T) {
+	var edits atomic.Int32
+	animator := NewToolFeedbackAnimator(func(context.Context, string, string, string) error {
+		edits.Add(1)
+		return errors.New("edit failed")
+	})
+	animator.animationInterval = 5 * time.Millisecond
+	animator.maxDuration = time.Second
+	defer animator.StopAll()
+
+	animator.Record("chat-1", "msg-1", "🔧 `read_file`\nChecking config")
+	waitForAnimationEdits(t, &edits)
+
+	time.Sleep(2 * animator.animationInterval)
+	if got := edits.Load(); got != 1 {
+		t.Fatalf("animation made %d edits after a failed edit, want 1", got)
 	}
 }

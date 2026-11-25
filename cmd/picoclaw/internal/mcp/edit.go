@@ -48,7 +48,23 @@ func newEditCommand() *cobra.Command {
 				return fmt.Errorf("failed to start editor: %w", err)
 			}
 
-			return nil
+			// The editor may have left an invalid document behind; report it
+			// now, while the user is still in front of the command, instead of
+			// failing on the next start.
+			return validateEditedConfig()
 		},
 	}
+}
+
+// validateEditedConfig re-reads the config file written by the editor and
+// validates it against the same document schema used before saving.
+func validateEditedConfig() error {
+	data, err := os.ReadFile(internal.GetConfigPath())
+	if err != nil {
+		return fmt.Errorf("failed to read edited config: %w", err)
+	}
+	if err := validateConfigDocument(data); err != nil {
+		return fmt.Errorf("edited config is not valid: %w", err)
+	}
+	return nil
 }

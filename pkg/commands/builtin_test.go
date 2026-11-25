@@ -17,6 +17,72 @@ func findDefinitionByName(t *testing.T, defs []Definition, name string) Definiti
 	return Definition{}
 }
 
+func TestBuiltinDefinitions_ReadOnlyClassification(t *testing.T) {
+	readOnly := map[string]bool{
+		"start":     true,
+		"help":      true,
+		"show":      true,
+		"list":      true,
+		"check":     true,
+		"context":   true,
+		"usage":     true,
+		"subagents": true,
+		"stop":      false,
+		"clear":     false,
+		"compact":   false,
+		"switch":    false,
+		"reload":    false,
+		"use":       false,
+		"voice":     false,
+	}
+
+	defs := BuiltinDefinitions()
+	if len(defs) != len(readOnly) {
+		t.Fatalf("builtin definitions = %d, want %d", len(defs), len(readOnly))
+	}
+	for _, def := range defs {
+		want, ok := readOnly[def.Name]
+		if !ok {
+			t.Fatalf("unexpected builtin command /%s", def.Name)
+		}
+		if def.ReadOnly != want {
+			t.Errorf("/%s ReadOnly = %v, want %v", def.Name, def.ReadOnly, want)
+		}
+	}
+}
+
+func TestBuiltinNewAlias_ClearsHistory(t *testing.T) {
+	cleared := false
+	rt := &Runtime{
+		ClearHistory: func() error {
+			cleared = true
+			return nil
+		},
+	}
+	ex := NewExecutor(NewRegistry(BuiltinDefinitions()), rt)
+
+	var reply string
+	res := ex.Execute(context.Background(), Request{
+		Text: "/new",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	})
+	if res.Outcome != OutcomeHandled {
+		t.Fatalf("/new: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
+	}
+	if res.Command != "clear" {
+		t.Fatalf("/new: command=%q, want=%q", res.Command, "clear")
+	}
+	if !cleared {
+		t.Fatal("/new did not clear chat history")
+	}
+	if reply != "Chat history cleared!" {
+		t.Fatalf("/new reply=%q, want cleared message", reply)
+	}
+}
+
 func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 	defs := BuiltinDefinitions()
 	helpDef := findDefinitionByName(t, defs, "help")

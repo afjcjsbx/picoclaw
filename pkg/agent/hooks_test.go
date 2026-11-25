@@ -86,6 +86,63 @@ func TestHookManager_SortsInProcessBeforeProcess(t *testing.T) {
 	}
 }
 
+func TestHookManager_NoHooksReturnsInputWithoutCloning(t *testing.T) {
+	hm := NewHookManager(nil)
+	defer hm.Close()
+
+	llmReq := &LLMHookRequest{
+		Model:    "test-model",
+		Messages: []providers.Message{{Role: "user", Content: "hello"}},
+	}
+	gotReq, decision := hm.BeforeLLM(context.Background(), llmReq)
+	if gotReq != llmReq || decision.Action != HookActionContinue {
+		t.Fatalf("BeforeLLM() = (%p, %v), want original request and continue", gotReq, decision)
+	}
+
+	llmResp := &LLMHookResponse{
+		Model:    "test-model",
+		Response: &providers.LLMResponse{Content: "ok"},
+	}
+	gotResp, decision := hm.AfterLLM(context.Background(), llmResp)
+	if gotResp != llmResp || decision.Action != HookActionContinue {
+		t.Fatalf("AfterLLM() = (%p, %v), want original response and continue", gotResp, decision)
+	}
+
+	call := &ToolCallHookRequest{Tool: "echo", Arguments: map[string]any{"text": "hello"}}
+	gotCall, decision := hm.BeforeTool(context.Background(), call)
+	if gotCall != call || decision.Action != HookActionContinue {
+		t.Fatalf("BeforeTool() = (%p, %v), want original call and continue", gotCall, decision)
+	}
+
+	result := &ToolResultHookResponse{Tool: "echo", Result: &tools.ToolResult{}}
+	gotResult, decision := hm.AfterTool(context.Background(), result)
+	if gotResult != result || decision.Action != HookActionContinue {
+		t.Fatalf("AfterTool() = (%p, %v), want original result and continue", gotResult, decision)
+	}
+
+	if approval := hm.ApproveTool(context.Background(), &ToolApprovalRequest{Tool: "echo"}); !approval.Approved {
+		t.Fatalf("ApproveTool() = %+v, want approved", approval)
+	}
+}
+
+func TestHookManager_NonMatchingHooksReturnInputWithoutCloning(t *testing.T) {
+	hm := NewHookManager(nil)
+	defer hm.Close()
+
+	if err := hm.Mount(HookRegistration{Name: "observer-only", Hook: struct{}{}}); err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+
+	req := &LLMHookRequest{
+		Model:    "test-model",
+		Messages: []providers.Message{{Role: "user", Content: "hello"}},
+	}
+	got, decision := hm.BeforeLLM(context.Background(), req)
+	if got != req || decision.Action != HookActionContinue {
+		t.Fatalf("BeforeLLM() = (%p, %v), want original request and continue", got, decision)
+	}
+}
+
 type llmHookTestProvider struct {
 	mu        sync.Mutex
 	lastModel string

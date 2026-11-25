@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "PicoClaw exposes WeCom as a single channels.wecom channel built on the official WeCom AI Bot WebSocket API."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # WeCom
 
@@ -25,7 +28,7 @@ This replaces the legacy `wecom`, `wecom_app`, and `wecom_aibot` split with one 
 Open the Web UI, navigate to **Channels → WeCom**, and click the QR binding button. Scan the QR code with WeCom and confirm in the app — credentials are saved automatically.
 
 <p align="center">
-<img src="../../../assets/wecom-qr-binding.jpg" alt="WeCom QR binding in Web UI" width="600">
+<img src="https://raw.githubusercontent.com/afjcjsbx/picoclaw/main/assets/wecom-qr-binding.jpg" alt="WeCom QR binding in Web UI" width="600">
 </p>
 
 ### Option 2: CLI QR Login
@@ -84,6 +87,9 @@ If you already have a `bot_id` and `secret` from the WeCom AI Bot platform, conf
 | `send_thinking_message` | bool | `true` | Send a `Processing...` message before the streamed reply begins. |
 | `allow_from` | array | `[]` | Sender allowlist. Empty means allow all senders. |
 | `reasoning_channel_id` | string | `""` | Optional chat ID to route reasoning/thinking output to a separate conversation. |
+| `streaming.enabled` | bool | `false` | Enable streaming replies that progressively update the message in WeCom. |
+| `streaming.throttle_seconds` | int | `0` | Minimum seconds between streaming updates. |
+| `streaming.min_growth_chars` | int | `0` | Minimum character growth before a streaming update is sent. |
 
 ### Environment Variables
 

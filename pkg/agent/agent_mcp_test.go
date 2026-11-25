@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -19,8 +20,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	agenttools "github.com/sipeed/picoclaw/pkg/tools"
 )
-
-func boolPtr(b bool) *bool { return &b }
 
 func TestMCPRuntimeResetClearsState(t *testing.T) {
 	var rt mcpRuntime
@@ -76,66 +75,6 @@ func TestReloadProviderAndConfig_ResetsMCPRuntime(t *testing.T) {
 	al.mcp.initOnce.Do(func() { reran = true })
 	if !reran {
 		t.Fatal("expected MCP initOnce to be reset after reload")
-	}
-}
-
-func TestServerIsDeferred(t *testing.T) {
-	tests := []struct {
-		name             string
-		discoveryEnabled bool
-		serverDeferred   *bool
-		want             bool
-	}{
-		// --- global false always wins: per-server deferred is ignored ---
-		{
-			name:             "global false: per-server deferred=true is ignored",
-			discoveryEnabled: false,
-			serverDeferred:   boolPtr(true),
-			want:             false,
-		},
-		{
-			name:             "global false: per-server deferred=false stays false",
-			discoveryEnabled: false,
-			serverDeferred:   boolPtr(false),
-			want:             false,
-		},
-		// --- global true: per-server override applies ---
-		{
-			name:             "global true: per-server deferred=false opts out",
-			discoveryEnabled: true,
-			serverDeferred:   boolPtr(false),
-			want:             false,
-		},
-		{
-			name:             "global true: per-server deferred=true stays true",
-			discoveryEnabled: true,
-			serverDeferred:   boolPtr(true),
-			want:             true,
-		},
-		// --- no per-server override: fall back to global ---
-		{
-			name:             "no per-server field, global discovery enabled",
-			discoveryEnabled: true,
-			serverDeferred:   nil,
-			want:             true,
-		},
-		{
-			name:             "no per-server field, global discovery disabled",
-			discoveryEnabled: false,
-			serverDeferred:   nil,
-			want:             false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			serverCfg := config.MCPServerConfig{Deferred: tt.serverDeferred}
-			got := serverIsDeferred(tt.discoveryEnabled, serverCfg)
-			if got != tt.want {
-				t.Errorf("serverIsDeferred(discoveryEnabled=%v, deferred=%v) = %v, want %v",
-					tt.discoveryEnabled, tt.serverDeferred, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -400,5 +339,76 @@ func TestDiscoveryToolTTLOneUsableWithinDiscoveryTurn(t *testing.T) {
 			"hidden tool executed %d times, want 1: ttl=1 must remain callable within the discovery turn",
 			got,
 		)
+	}
+}
+
+func TestAgentLoopRun_DoesNotExitOnMCPInitFailure(t *testing.T) {
+	al, cfg, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+
+	cfg.Tools = config.ToolsConfig{
+		MCP: config.MCPConfig{
+			ToolConfig: config.ToolConfig{Enabled: true},
+			Servers: map[string]config.MCPServerConfig{
+				"broken": {
+					Enabled: true,
+					Command: "picoclaw-command-that-does-not-exist-for-mcp-tests",
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- al.Run(ctx)
+	}()
+
+	// MCP initialization fails (broken server), but the loop must keep running
+	// instead of returning the error and leaving the chat without a consumer.
+	select {
+	case err := <-runErr:
+		t.Fatalf("Run() returned before context cancel: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// The loop must still reply to messages even though MCP is unavailable.
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Channel:  "telegram",
+		ChatID:   "chat1",
+		SenderID: "user1",
+		Content:  "hello",
+	}
+	if err := msgBus.PublishInbound(context.Background(), msg); err != nil {
+		t.Fatalf("PublishInbound failed: %v", err)
+	}
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.Content == "" {
+			t.Fatal("empty response published after MCP init failure")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for agent reply after MCP init failure")
+	}
+
+	// Canceling the context must stop the loop cleanly.
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run() error after cancel = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for Run() to return after cancel")
 	}
 }

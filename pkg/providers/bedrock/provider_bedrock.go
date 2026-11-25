@@ -144,29 +144,24 @@ type converseParams struct {
 }
 
 // modelDeprecatesTemperature reports whether the given Bedrock model rejects the
-// temperature inference parameter. Newer Claude models (Opus 4.8 and later) treat
-// temperature as deprecated and return a ValidationException if it is supplied:
-//
-//	ValidationException: The model returned the following errors:
-//	temperature is deprecated for this model.
-//
-// The match is intentionally loose: Bedrock model IDs and inference-profile ARNs
-// embed the model name (e.g. "us.anthropic.claude-opus-4-8-20260514-v1:0"), so a
-// substring check covers both bare IDs and region-prefixed inference profiles.
+// temperature inference parameter. The shared capability check matches both bare
+// model IDs and region-prefixed inference profiles.
 func modelDeprecatesTemperature(model string) bool {
-	m := strings.ToLower(model)
-	return strings.Contains(m, "claude-opus-4-8")
+	return common.ModelDeprecatesTemperature(model)
 }
 
-func buildConverseParams(messages []Message, tools []ToolDefinition, model string, options map[string]any) converseParams {
+func buildConverseParams(
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+) converseParams {
 	bedrockMessages, systemPrompts := convertMessages(messages)
 
 	var inferenceConfig *types.InferenceConfiguration
 
 	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok && maxTokens > 0 {
-		if inferenceConfig == nil {
-			inferenceConfig = &types.InferenceConfiguration{}
-		}
+		inferenceConfig = &types.InferenceConfiguration{}
 		if maxTokens > math.MaxInt32 {
 			maxTokens = math.MaxInt32
 		}

@@ -41,13 +41,19 @@ const (
 	providerReloadTimeout   = 30 * time.Second
 	gracefulShutdownTimeout = 15 * time.Second
 
+	// configWatcherPollInterval is deliberately coarse: hot reload is opt-in
+	// and a one-minute check keeps an idle low-power gateway from waking every
+	// two seconds just to stat the config file.
+	configWatcherPollInterval = time.Minute
+
 	logPath   = "logs"
 	panicFile = "gateway_panic.log"
 	logFile   = "gateway.log"
 )
 
 type services struct {
-	CronService      *cron.CronService
+	cronMu           sync.RWMutex
+	cronService      *cron.CronService
 	HeartbeatService *heartbeat.HeartbeatService
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
@@ -57,6 +63,21 @@ type services struct {
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 	authToken        string
+}
+
+// setCronService swaps the running cron service. The health HTTP server keeps
+// serving while a config reload replaces the scheduler, so readers must go
+// through getCronService instead of capturing the pointer once.
+func (s *services) setCronService(cs *cron.CronService) {
+	s.cronMu.Lock()
+	s.cronService = cs
+	s.cronMu.Unlock()
+}
+
+func (s *services) getCronService() *cron.CronService {
+	s.cronMu.RLock()
+	defer s.cronMu.RUnlock()
+	return s.cronService
 }
 
 type startupBlockedProvider struct {
@@ -188,9 +209,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 		return fmt.Errorf("error creating provider: %w", err)
 	}
 
-	if modelID != "" {
-		cfg.Agents.Defaults.ModelName = modelID
-	}
+	cfg.Agents.Defaults.ModelName = providers.DefaultModelRef(cfg, modelID)
 
 	msgBus := bus.NewMessageBus()
 	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
@@ -249,7 +268,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
 		configReloadChan, stopWatch = setupConfigWatcherPolling(
-			configPath, debug, cfg.Power.ScalePollInterval(2*time.Second),
+			configPath, debug, cfg.Power.ScalePollInterval(configWatcherPollInterval),
 		)
 		logger.Info("Config hot reload enabled")
 	}
@@ -363,8 +382,15 @@ func executeReload(
 ) (err error) {
 	startedAt := time.Now()
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReloadStarted, startedAt, nil)
+	var reloadGeneration uint64
+	if runningServices.HealthServer != nil {
+		reloadGeneration = runningServices.HealthServer.BeginReload()
+	}
 	defer runningServices.reloading.Store(false)
 	defer func() {
+		if runningServices.HealthServer != nil {
+			runningServices.HealthServer.FinishReload(reloadGeneration, err)
+		}
 		if err != nil {
 			publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReloadFailed, startedAt, err)
 			return
@@ -414,7 +440,7 @@ func setupAndStartServices(
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
-	runningServices.CronService, err = setupCronTool(
+	cronService, err := setupCronTool(
 		agentLoop,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -425,7 +451,8 @@ func setupAndStartServices(
 	if err != nil {
 		return nil, fmt.Errorf("error setting up cron service: %w", err)
 	}
-	if err = runningServices.CronService.Start(); err != nil {
+	runningServices.setCronService(cronService)
+	if err = cronService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting cron service: %w", err)
 	}
 	fmt.Println("✓ Cron service started")
@@ -485,6 +512,9 @@ func setupAndStartServices(
 
 	runningServices.authToken = authToken
 	runningServices.HealthServer = health.NewServer(listenResult.ProbeHost, cfg.Gateway.Port, authToken)
+	runningServices.HealthServer.RegisterProtectedHandler(mcpStatusPath, mcpStatusHandler(agentLoop))
+	runningServices.HealthServer.RegisterProtectedHandler(subagentsStatusPath, subagentsStatusHandler(agentLoop))
+	registerCronHandlers(runningServices.HealthServer, runningServices.getCronService)
 
 	var listenAddr string
 	if len(listenResult.Listeners) > 0 {
@@ -550,8 +580,8 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.HeartbeatService != nil {
 		runningServices.HeartbeatService.Stop()
 	}
-	if runningServices.CronService != nil {
-		runningServices.CronService.Stop()
+	if cs := runningServices.getCronService(); cs != nil {
+		cs.Stop()
 	}
 	if runningServices.MediaStore != nil {
 		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
@@ -614,9 +644,7 @@ func handleConfigReload(
 		return fmt.Errorf("error creating new provider: %w", err)
 	}
 
-	if newModelID != "" {
-		newCfg.Agents.Defaults.ModelName = newModelID
-	}
+	newCfg.Agents.Defaults.ModelName = providers.DefaultModelRef(newCfg, newModelID)
 
 	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), providerReloadTimeout)
 	defer reloadCancel()
@@ -663,7 +691,7 @@ func restartServices(
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
-	runningServices.CronService, err = setupCronTool(
+	cronService, err := setupCronTool(
 		al,
 		msgBus,
 		cfg.WorkspacePath(),
@@ -674,7 +702,8 @@ func restartServices(
 	if err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
 	}
-	if err = runningServices.CronService.Start(); err != nil {
+	runningServices.setCronService(cronService)
+	if err = cronService.Start(); err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
 	}
 	fmt.Println("  ✓ Cron service restarted")
@@ -780,7 +809,7 @@ func setupConfigWatcherPolling(configPath string, debug bool, interval time.Dura
 		}
 
 		if interval <= 0 {
-			interval = 2 * time.Second
+			interval = configWatcherPollInterval
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()

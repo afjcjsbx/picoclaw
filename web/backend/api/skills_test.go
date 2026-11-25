@@ -254,6 +254,162 @@ func TestHandleGetSkillUsesResolvedPath(t *testing.T) {
 	}
 }
 
+func TestHandleListSkillsIncludesPluginSkills(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	pluginRoot := filepath.Join(t.TempDir(), "demo-plugin")
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Plugins = config.PluginsConfig{
+		Enabled: true,
+		Entries: map[string]config.PluginEntryConfig{
+			"demo-plugin": {Enabled: true, Path: pluginRoot},
+		},
+	}
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "skills", "greet"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginRoot, "plugin.json"),
+		[]byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo-plugin"}`),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(plugin.json) error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginRoot, "skills", "greet", "SKILL.md"),
+		[]byte("---\nname: greet\ndescription: Greet plugin skill\n---\n# Greet\n\nHello from the plugin.\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp skillSupportResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(resp.Skills) != 1 {
+		t.Fatalf("skills count = %d, want 1: %#v", len(resp.Skills), resp.Skills)
+	}
+	got := resp.Skills[0]
+	if got.Name != "demo-plugin:greet" {
+		t.Fatalf("Name = %q", got.Name)
+	}
+	if got.Source != "plugin:demo-plugin" {
+		t.Fatalf("Source = %q", got.Source)
+	}
+	if got.OriginKind != "plugin" {
+		t.Fatalf("OriginKind = %q", got.OriginKind)
+	}
+	if got.PluginID != "demo-plugin" {
+		t.Fatalf("PluginID = %q", got.PluginID)
+	}
+	if got.Path != "skills/greet/SKILL.md" {
+		t.Fatalf("Path = %q", got.Path)
+	}
+	if got.Description != "Greet plugin skill" {
+		t.Fatalf("Description = %q", got.Description)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/skills/demo-plugin:greet", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var detail skillDetailResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("Unmarshal(detail) error = %v", err)
+	}
+	if detail.Content != "# Greet\n\nHello from the plugin.\n" {
+		t.Fatalf("content = %q", detail.Content)
+	}
+}
+
+func TestHandleListSkillsSkipsDisabledPlugins(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	pluginRoot := filepath.Join(t.TempDir(), "demo-plugin")
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Plugins = config.PluginsConfig{
+		Enabled: true,
+		Entries: map[string]config.PluginEntryConfig{
+			"demo-plugin": {Enabled: false, Path: pluginRoot},
+		},
+	}
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "skills", "greet"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginRoot, "plugin.json"),
+		[]byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo-plugin"}`),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(plugin.json) error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginRoot, "skills", "greet", "SKILL.md"),
+		[]byte("---\nname: greet\ndescription: Greet plugin skill\n---\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp skillSupportResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(resp.Skills) != 0 {
+		t.Fatalf("skills count = %d, want 0: %#v", len(resp.Skills), resp.Skills)
+	}
+}
+
 func TestHandleImportSkill(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
@@ -661,6 +817,7 @@ func TestHandleSearchSkills(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -876,6 +1033,7 @@ func TestHandleSearchSkillsPagination(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -951,6 +1109,7 @@ func TestHandleSearchSkillsClampsRegistryFanout(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -1034,6 +1193,7 @@ func TestHandleInstallSkill(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
+	setGithubBaseURL(cfg, server.URL)
 	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
 		t.Fatalf("SaveConfig() error = %v", saveErr)
 	}
@@ -1860,4 +2020,31 @@ func buildSkillZip(t *testing.T, files map[string]string) []byte {
 		t.Fatalf("Close() error = %v", err)
 	}
 	return buf.Bytes()
+}
+
+func TestIsWithinDir(t *testing.T) {
+	tmp := t.TempDir()
+	parent := filepath.Join(tmp, "workspace")
+	child := filepath.Join(parent, "skills", "my-skill")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	if !isWithinDir(child, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = false, want true", child, parent)
+	}
+	if !isWithinDir(parent, parent) {
+		t.Fatalf("isWithinDir(parent) = false, want true for exact match")
+	}
+	outside := filepath.Join(tmp, "other")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside): %v", err)
+	}
+	if isWithinDir(outside, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = true, want false", outside, parent)
+	}
+	sibling := parent + "-other"
+	if isWithinDir(sibling, parent) {
+		t.Fatalf("isWithinDir(%q, %q) = true, want false for sibling prefix", sibling, parent)
+	}
 }

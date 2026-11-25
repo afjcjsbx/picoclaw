@@ -42,6 +42,7 @@ type InboundMessage struct {
 	Media      []string       `json:"media,omitempty"`
 	MediaScope string         `json:"media_scope,omitempty"` // media lifecycle scope
 	SessionKey string         `json:"session_key"`
+	AgentID    string         `json:"agent_id,omitempty"`
 
 	// Convenience mirrors derived from Context for runtime consumers.
 	Channel   string `json:"channel"`
@@ -66,10 +67,32 @@ type OutboundScope struct {
 type ContextUsage struct {
 	UsedTokens        int `json:"used_tokens"`
 	TotalTokens       int `json:"total_tokens"`        // model context window
-	HistoryTokens     int `json:"history_tokens"`      // history-message tokens only (what maybeSummarize checks)
+	HistoryTokens     int `json:"history_tokens"`      // history-message tokens only
 	CompressAtTokens  int `json:"compress_at_tokens"`  // hard budget compression threshold (contextWindow - maxTokens)
-	SummarizeAtTokens int `json:"summarize_at_tokens"` // soft summarization trigger (vs history tokens)
+	SummarizeAtTokens int `json:"summarize_at_tokens"` // soft summarization trigger (vs used tokens)
 	UsedPercent       int `json:"used_percent"`        // 0-100, relative to compressAt
+}
+
+// TokenUsage describes provider-reported token counts for an assistant reply.
+// It is carried on outbound messages so non-streaming channels can display the
+// same usage metadata that streaming channels receive from their streamer.
+type TokenUsage struct {
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	TotalTokens         int     `json:"total_tokens"`
+	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
+	CostUSD             float64 `json:"cost_usd,omitempty"`
+
+	// Requests is the number of LLM calls aggregated into InputTokens (a turn
+	// can issue several calls when it uses tools). ContextTokens is the prompt
+	// size of the last call, which is the context currently in the window.
+	Requests      int `json:"requests,omitempty"`
+	ContextTokens int `json:"context_tokens,omitempty"`
+
+	// DurationMS is the total provider time of those calls, excluding tool
+	// execution, so clients can derive output tokens per second.
+	DurationMS int64 `json:"duration_ms,omitempty"`
 }
 
 type OutboundMessage struct {
@@ -82,6 +105,7 @@ type OutboundMessage struct {
 	Content          string         `json:"content"`
 	ReplyToMessageID string         `json:"reply_to_message_id,omitempty"`
 	ContextUsage     *ContextUsage  `json:"context_usage,omitempty"`
+	Usage            *TokenUsage    `json:"usage,omitempty"`
 }
 
 // MediaPart describes a single media attachment to send.

@@ -607,6 +607,44 @@ func TestSendWithRetry_RateLimitRetry(t *testing.T) {
 	}
 }
 
+func TestSendWithRetry_HonorsRetryAfter(t *testing.T) {
+	m := newTestManager()
+	var callCount int
+	requested := 100 * time.Millisecond
+	ch := &mockChannel{
+		sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+			callCount++
+			if callCount == 1 {
+				return fmt.Errorf("429: %w", &RateLimitError{
+					RetryAfter: requested,
+					Err:        errors.New("Too Many Requests"),
+				})
+			}
+			return nil
+		},
+	}
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+
+	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"})
+
+	start := time.Now()
+	m.sendWithRetry(context.Background(), "test", w, msg)
+	elapsed := time.Since(start)
+
+	if callCount != 2 {
+		t.Fatalf("expected 2 Send calls (1 rate limit + 1 success), got %d", callCount)
+	}
+	if elapsed < requested-20*time.Millisecond {
+		t.Fatalf("expected wait of at least %v from retry_after, got %v", requested, elapsed)
+	}
+	if elapsed >= rateLimitDelay {
+		t.Fatalf("expected retry_after (%v) to override default delay (%v), got %v", requested, rateLimitDelay, elapsed)
+	}
+}
+
 func TestSendWithRetry_MaxRetriesExhausted(t *testing.T) {
 	m := newTestManager()
 	var callCount int
@@ -917,7 +955,8 @@ func TestRunWorker_MessageSplitting(t *testing.T) {
 	// Send a message that should be split
 	w.queue <- testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello world"})
 
-	time.Sleep(100 * time.Millisecond)
+	// Chunks are deliberately spaced by chunkSpacing.
+	time.Sleep(600 * time.Millisecond)
 
 	mu.Lock()
 	count := len(received)
@@ -1057,6 +1096,23 @@ func (m *mockPreparedToolFeedbackEditor) PrepareToolFeedbackMessageContent(conte
 		return m.prepareFn(content)
 	}
 	return content
+}
+
+func TestOutboundMessageEditPayloadIncludesFinalFlag(t *testing.T) {
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "final",
+	})
+	if msg.Context.Raw == nil {
+		msg.Context.Raw = make(map[string]string)
+	}
+	msg.Context.Raw["outbound_kind"] = "final"
+
+	payload := outboundMessageEditPayload(msg, "final")
+	if got := payload["final"]; got != true {
+		t.Fatalf("final flag = %#v, want true", got)
+	}
 }
 
 func TestPreSend_PlaceholderEditSuccess(t *testing.T) {
@@ -2641,11 +2697,124 @@ func TestPreSend_TypingStopCalled(t *testing.T) {
 		stopCalled = true
 	})
 
-	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"})
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
 	m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
 		t.Fatal("expected typing stop func to be called")
+	}
+}
+
+func TestPreSend_AuxiliaryMessageKeepsTyping(t *testing.T) {
+	m := newTestManager()
+	var stopCalled bool
+
+	m.RecordTypingStop("test", "123", func() {
+		stopCalled = true
+	})
+
+	aux := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "reading file",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"message_kind": "tool_feedback",
+			},
+		},
+	})
+	m.preSend(context.Background(), "test", aux, &mockChannel{})
+
+	if stopCalled {
+		t.Fatal("auxiliary messages must not stop typing")
+	}
+
+	finalMsg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "answer",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
+	m.preSend(context.Background(), "test", finalMsg, &mockChannel{})
+
+	if !stopCalled {
+		t.Fatal("final message must stop typing")
+	}
+}
+
+func TestPreSend_ApprovalPromptSurvivesFinishedStream(t *testing.T) {
+	m := newTestManager()
+	m.streamActive.Store("test:123", true)
+
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "Approval required",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"message_kind": "approval",
+			},
+		},
+	})
+	msgIDs, handled := m.preSend(context.Background(), "test", msg, &mockChannel{})
+	if handled {
+		t.Fatalf("approval prompt must not be suppressed by a finished stream, got %v", msgIDs)
+	}
+}
+
+func TestPreSend_ApprovalPromptBypassesPlaceholderEdit(t *testing.T) {
+	m := newTestManager()
+
+	ch := &mockDeletingMessageEditor{
+		mockMessageEditor: mockMessageEditor{
+			editFn: func(_ context.Context, _, _, _ string) error {
+				t.Fatal("expected approval prompt to bypass placeholder edit")
+				return nil
+			},
+		},
+	}
+
+	m.RecordPlaceholder("test", "123", "456")
+
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "Approval required",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"message_kind": "approval",
+			},
+		},
+	})
+	msgIDs, handled := m.preSend(context.Background(), "test", msg, ch)
+	if handled {
+		t.Fatalf("approval prompt must fall through so the channel can send a new message, got %v", msgIDs)
+	}
+	if ch.deleteCalls != 1 {
+		t.Fatalf("expected placeholder deletion, got %d delete calls", ch.deleteCalls)
 	}
 }
 
@@ -2688,7 +2857,18 @@ func TestPreSend_TypingAndPlaceholder(t *testing.T) {
 	})
 	m.RecordPlaceholder("test", "123", "456")
 
-	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"})
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
 	_, edited := m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
@@ -2752,7 +2932,18 @@ func TestRecordTypingStop_ReplacesExistingStop(t *testing.T) {
 		t.Fatalf("expected replacement typing stop to stay active until preSend, got %d calls", newStopCalls)
 	}
 
-	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"})
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "123",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
 	m.preSend(context.Background(), "test", msg, &mockChannel{})
 
 	if newStopCalls != 1 {
@@ -2949,7 +3140,18 @@ func TestPreSendStillWorksWithWrappedTypes(t *testing.T) {
 	})
 	m.RecordPlaceholder("test", "chat1", "ph_id")
 
-	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "chat1", Content: "response"})
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat1",
+		Content: "response",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "chat1",
+			Raw: map[string]string{
+				"outbound_kind": "final",
+			},
+		},
+	})
 	_, edited := m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
@@ -3276,6 +3478,54 @@ func TestSendMessage_WithSplitting(t *testing.T) {
 	}
 }
 
+func TestSendMessage_SpacesChunks(t *testing.T) {
+	m := newTestManager()
+
+	var mu sync.Mutex
+	var sentAt []time.Time
+	ch := &mockChannelWithLength{
+		mockChannel: mockChannel{
+			sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+				mu.Lock()
+				sentAt = append(sentAt, time.Now())
+				mu.Unlock()
+				return nil
+			},
+		},
+		maxLen: 5,
+	}
+
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+	m.channels["test"] = ch
+	m.workers["test"] = w
+
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "123",
+		Content: "hello world",
+	})
+
+	if err := m.SendMessage(context.Background(), msg); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	mu.Lock()
+	times := append([]time.Time(nil), sentAt...)
+	mu.Unlock()
+
+	if len(times) < 2 {
+		t.Fatalf("expected message to be split into at least 2 chunks, got %d", len(times))
+	}
+	for i := 1; i < len(times); i++ {
+		if gap := times[i].Sub(times[i-1]); gap < chunkSpacing-50*time.Millisecond {
+			t.Fatalf("chunk %d sent after %v, want >= %v", i, gap, chunkSpacing)
+		}
+	}
+}
+
 func TestSendMedia_ContextOnlyUsesContextAddressing(t *testing.T) {
 	m := newTestManager()
 
@@ -3390,15 +3640,13 @@ func TestManager_SendPlaceholder(t *testing.T) {
 // SetTurnUsage is not part of the bus.Streamer interface).
 type turnUsageTrackingStreamer struct {
 	mockStreamer
-	inputTokens  int
-	outputTokens int
-	usageCalls   int
+	usage      bus.TokenUsage
+	usageCalls int
 }
 
-func (m *turnUsageTrackingStreamer) SetTurnUsage(inputTokens, outputTokens int) {
+func (m *turnUsageTrackingStreamer) SetTurnUsage(usage bus.TokenUsage) {
 	m.usageCalls++
-	m.inputTokens = inputTokens
-	m.outputTokens = outputTokens
+	m.usage = usage
 }
 
 func TestFinalizeHookStreamerForwardsTurnUsage(t *testing.T) {
@@ -3409,13 +3657,20 @@ func TestFinalizeHookStreamerForwardsTurnUsage(t *testing.T) {
 	if !ok {
 		t.Fatal("finalizeHookStreamer does not satisfy turnUsageStreamer")
 	}
-	setter.SetTurnUsage(1234, 567)
+	setter.SetTurnUsage(bus.TokenUsage{
+		InputTokens:   1234,
+		OutputTokens:  567,
+		TotalTokens:   1801,
+		Requests:      3,
+		ContextTokens: 1200,
+	})
 
 	if inner.usageCalls != 1 {
 		t.Fatalf("inner SetTurnUsage calls = %d, want 1", inner.usageCalls)
 	}
-	if inner.inputTokens != 1234 || inner.outputTokens != 567 {
-		t.Errorf("inner usage = (%d, %d), want (1234, 567)", inner.inputTokens, inner.outputTokens)
+	if inner.usage.InputTokens != 1234 || inner.usage.OutputTokens != 567 ||
+		inner.usage.Requests != 3 || inner.usage.ContextTokens != 1200 {
+		t.Errorf("inner usage = %+v, want input=1234 output=567 requests=3 context=1200", inner.usage)
 	}
 }
 
@@ -3427,13 +3682,20 @@ func TestSplitMarkerStreamerForwardsTurnUsage(t *testing.T) {
 	if !ok {
 		t.Fatal("splitMarkerStreamer does not satisfy turnUsageStreamer")
 	}
-	setter.SetTurnUsage(1234, 567)
+	setter.SetTurnUsage(bus.TokenUsage{
+		InputTokens:   1234,
+		OutputTokens:  567,
+		TotalTokens:   1801,
+		Requests:      3,
+		ContextTokens: 1200,
+	})
 
 	if inner.usageCalls != 1 {
 		t.Fatalf("inner SetTurnUsage calls = %d, want 1", inner.usageCalls)
 	}
-	if inner.inputTokens != 1234 || inner.outputTokens != 567 {
-		t.Errorf("inner usage = (%d, %d), want (1234, 567)", inner.inputTokens, inner.outputTokens)
+	if inner.usage.InputTokens != 1234 || inner.usage.OutputTokens != 567 ||
+		inner.usage.Requests != 3 || inner.usage.ContextTokens != 1200 {
+		t.Errorf("inner usage = %+v, want input=1234 output=567 requests=3 context=1200", inner.usage)
 	}
 }
 
@@ -3464,4 +3726,53 @@ func TestUnregisterChannel_ConcurrentSendNoPanic(t *testing.T) {
 	m.UnregisterChannel("test") // used to panic: send on closed channel
 	close(stop)
 	<-done
+}
+
+func TestPreSendDropsStalePlaceholder(t *testing.T) {
+	m := newTestManager()
+	ch := &mockDeletingMessageEditor{
+		mockMessageEditor: mockMessageEditor{
+			mockChannel: mockChannel{
+				sendFn: func(_ context.Context, _ bus.OutboundMessage) error { return nil },
+			},
+			editFn: func(_ context.Context, _, _, _ string) error {
+				t.Fatal("a stale placeholder must never be edited into the reply")
+				return nil
+			},
+		},
+	}
+
+	m.RecordPlaceholder("test", "chat-stale", "ph_old")
+	if v, ok := m.placeholders.Load("test:chat-stale"); ok {
+		entry := v.(placeholderEntry)
+		entry.createdAt = time.Now().Add(-placeholderTTL - time.Minute)
+		m.placeholders.Store("test:chat-stale", entry)
+	}
+
+	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "chat-stale", Content: "reply"})
+	_, handled := m.preSend(context.Background(), "test", msg, ch)
+
+	if handled {
+		t.Fatal("stale placeholder should not handle delivery")
+	}
+	if ch.deleteCalls != 1 || ch.deletedMessageID != "ph_old" {
+		t.Fatalf("expected stale placeholder to be deleted, got calls=%d id=%q", ch.deleteCalls, ch.deletedMessageID)
+	}
+}
+
+func TestOutboundToolFeedbackIsTerminal(t *testing.T) {
+	terminal := bus.OutboundMessage{Context: bus.InboundContext{Raw: map[string]string{
+		"message_kind":          "tool_feedback",
+		ToolFeedbackTerminalKey: "true",
+	}}}
+	if !outboundMessageIsToolFeedback(terminal) || !OutboundToolFeedbackIsTerminal(terminal) {
+		t.Fatal("expected terminal tool feedback to be detected")
+	}
+
+	reusable := bus.OutboundMessage{Context: bus.InboundContext{Raw: map[string]string{
+		"message_kind": "tool_feedback",
+	}}}
+	if !outboundMessageIsToolFeedback(reusable) || OutboundToolFeedbackIsTerminal(reusable) {
+		t.Fatal("regular tool feedback must stay reusable")
+	}
 }

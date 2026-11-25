@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestPersistTextArtifact_WritesAndReadsBack(t *testing.T) {
@@ -24,6 +26,82 @@ func TestPersistTextArtifact_WritesAndReadsBack(t *testing.T) {
 	}
 	if string(data) != "hello artifact" {
 		t.Fatalf("artifact contents = %q", string(data))
+	}
+}
+
+// TestPersistTextArtifactWindow_CapsWithHeadAndTail verifies the server-side
+// artifact cap keeps the first and last parts of an oversized page around an
+// explicit notice, so a capped artifact still reports what it lost.
+func TestPersistTextArtifactWindow_CapsWithHeadAndTail(t *testing.T) {
+	dir := t.TempDir()
+	text := "HEAD " + strings.Repeat("m", 4000) + " TAIL"
+
+	path, truncated, err := PersistTextArtifactWindow(dir, "window_*.txt", text, 100, "ARTIFACT")
+	if err != nil {
+		t.Fatalf("PersistTextArtifactWindow: %v", err)
+	}
+	if !truncated {
+		t.Fatal("expected truncated=true for oversized text")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	stored := string(data)
+	if !strings.HasPrefix(stored, "HEAD ") {
+		t.Fatalf("expected head preserved, got %q", stored[:40])
+	}
+	if !strings.HasSuffix(stored, " TAIL") {
+		t.Fatalf("expected tail preserved, got %q", stored[len(stored)-40:])
+	}
+	if !strings.Contains(stored, "[ARTIFACT TRUNCATED - ") {
+		t.Fatalf("expected artifact truncation notice, got %q", stored)
+	}
+	if !strings.Contains(stored, "[ARTIFACT TRUNCATED - 3,910 chars omitted out of 4,010 total]") {
+		t.Fatalf("expected honest counts in notice, got %q", stored)
+	}
+}
+
+func TestPersistTextArtifactWindow_KeepsShortTextWhole(t *testing.T) {
+	dir := t.TempDir()
+	text := "short page"
+
+	path, truncated, err := PersistTextArtifactWindow(dir, "window_*.txt", text, 100, "ARTIFACT")
+	if err != nil {
+		t.Fatalf("PersistTextArtifactWindow: %v", err)
+	}
+	if truncated {
+		t.Fatal("expected truncated=false for text under the cap")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if string(data) != text {
+		t.Fatalf("artifact contents = %q, want %q", string(data), text)
+	}
+}
+
+// TestPersistTextArtifactWindow_RuneSafe verifies the cap counts characters,
+// not bytes, so multibyte content is never cut mid-rune.
+func TestPersistTextArtifactWindow_RuneSafe(t *testing.T) {
+	dir := t.TempDir()
+	text := strings.Repeat("日本語", 100)
+
+	path, truncated, err := PersistTextArtifactWindow(dir, "window_*.txt", text, 20, "ARTIFACT")
+	if err != nil {
+		t.Fatalf("PersistTextArtifactWindow: %v", err)
+	}
+	if !truncated {
+		t.Fatal("expected truncated=true")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if !utf8.Valid(data) {
+		t.Fatal("expected valid UTF-8 artifact")
 	}
 }
 
@@ -77,5 +155,127 @@ func TestPruneArtifacts_EnforcesMaxFiles(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("expected newest %s kept: %v", name, err)
 		}
+	}
+}
+
+func TestSetArtifactRetention_AppliesToPersistTextArtifact(t *testing.T) {
+	oldMaxAge, oldMaxFiles := ArtifactRetention()
+	t.Cleanup(func() { SetArtifactRetention(oldMaxAge, oldMaxFiles) })
+	SetArtifactRetention(time.Hour, 3)
+
+	if gotAge, gotFiles := ArtifactRetention(); gotAge != time.Hour || gotFiles != 3 {
+		t.Fatalf("ArtifactRetention() = (%s, %d), want (1h, 3)", gotAge, gotFiles)
+	}
+
+	dir := seedArtifactDir(t, 9)
+	forgetArtifactPruneState(t, dir)
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != 3 {
+		t.Fatalf("after configured prune: %d artifacts, want 3", got)
+	}
+}
+
+// seedArtifactDir creates n artifact files with fresh modification times, so
+// only the max-files retention rule can remove them.
+func seedArtifactDir(t *testing.T, n int) string {
+	t.Helper()
+	dir := t.TempDir()
+	for i := range n {
+		path := filepath.Join(dir, fmt.Sprintf("seed_%03d.txt", i))
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+	return dir
+}
+
+// forgetArtifactPruneState drops the process-global throttle entry for dir so
+// the test does not inherit a prune from an earlier PersistTextArtifact call.
+func forgetArtifactPruneState(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(func() { artifactPruneStates.Delete(dir) })
+}
+
+func persistArtifact(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := PersistTextArtifact(dir, "artifact_*.txt", "payload"); err != nil {
+		t.Fatalf("PersistTextArtifact: %v", err)
+	}
+}
+
+func countArtifacts(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	return len(entries)
+}
+
+// TestPersistTextArtifact_PrunesAfterBurstWrite covers the write-count arm of
+// the throttle: the first write prunes, the next artifactPruneMaxWrites writes
+// skip the scan, and the following write clears the backlog.
+func TestPersistTextArtifact_PrunesAfterBurstWrite(t *testing.T) {
+	dir := seedArtifactDir(t, DefaultArtifactMaxFiles+72)
+	forgetArtifactPruneState(t, dir)
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != DefaultArtifactMaxFiles {
+		t.Fatalf("after first write: %d artifacts, want %d", got, DefaultArtifactMaxFiles)
+	}
+
+	for i := 1; i <= artifactPruneMaxWrites; i++ {
+		persistArtifact(t, dir)
+		want := DefaultArtifactMaxFiles + i
+		if got := countArtifacts(t, dir); got != want {
+			t.Fatalf("write %d after prune: %d artifacts, want %d (scan should be skipped)", i+1, got, want)
+		}
+	}
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != DefaultArtifactMaxFiles {
+		t.Fatalf("burst prune: %d artifacts, want %d", got, DefaultArtifactMaxFiles)
+	}
+}
+
+// TestPersistTextArtifact_PrunesAfterInterval covers the time arm of the
+// throttle: a directory that grew while the scan was skipped is pruned again
+// once artifactPruneMinInterval has elapsed.
+func TestPersistTextArtifact_PrunesAfterInterval(t *testing.T) {
+	dir := seedArtifactDir(t, DefaultArtifactMaxFiles+72)
+	forgetArtifactPruneState(t, dir)
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != DefaultArtifactMaxFiles {
+		t.Fatalf("after first write: %d artifacts, want %d", got, DefaultArtifactMaxFiles)
+	}
+
+	// Within the interval the scan is skipped even when the directory is over
+	// the retention target.
+	for i := range 10 {
+		path := filepath.Join(dir, fmt.Sprintf("extra_%02d.txt", i))
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	persistArtifact(t, dir)
+	if got, want := countArtifacts(t, dir), DefaultArtifactMaxFiles+11; got != want {
+		t.Fatalf("within interval: %d artifacts, want %d (scan should be skipped)", got, want)
+	}
+
+	// Pretend the interval elapsed instead of sleeping for a minute.
+	value, ok := artifactPruneStates.Load(dir)
+	if !ok {
+		t.Fatal("missing prune state for the test directory")
+	}
+	state := value.(*artifactPruneState)
+	state.mu.Lock()
+	state.last = time.Now().Add(-2 * artifactPruneMinInterval)
+	state.mu.Unlock()
+
+	persistArtifact(t, dir)
+	if got := countArtifacts(t, dir); got != DefaultArtifactMaxFiles {
+		t.Fatalf("after interval: %d artifacts, want %d", got, DefaultArtifactMaxFiles)
 	}
 }

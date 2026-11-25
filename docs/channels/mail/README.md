@@ -1,3 +1,7 @@
+---
+title: "Mail Channel"
+description: "Connect PicoClaw to a mailbox over IMAP and send threaded replies over SMTP, with optional attachments and OAuth2 authentication."
+---
 # ✉️ Mail Channel
 
 PicoClaw can talk over e-mail. It reads a mailbox over IMAP (IDLE push when the server supports it, polling otherwise) and answers over SMTP, threading each reply onto the mail it answers. It works with Gmail, Outlook, Fastmail, or any self-hosted IMAP/SMTP server.
@@ -13,7 +17,7 @@ make build GO_BUILD_TAGS='goolm,stdjson,custom_channels,channel_mail'
 
 This example registers only the mail driver. Add any other `channel_<name>` tags
 you need to the same `GO_BUILD_TAGS` list; see
-[Custom Builds](../../guides/custom-builds.md).
+[Custom Builds](../../guides/custom-builds).
 
 ## 🚀 Quick Start
 
@@ -47,7 +51,7 @@ channel_list:
 
 Alternatively export it as an environment variable, which takes precedence: `PICOCLAW_CHANNELS_MAIL_PASSWORD`. The same applies to `smtp_password` and `oauth_token`.
 
-The value in `.security.yml` can also be a reference instead of the literal secret, for instance `password: "file://mail-password"` to read it from a file (the path is relative to the config directory, handy for mounted Docker/Kubernetes secrets). Encrypted `enc://` values are resolved by the same mechanism as for the other channels; see the [security configuration guide](../../security/security_configuration.md). Saving the config never writes these fields back to `config.json`.
+The value in `.security.yml` can also be a reference instead of the literal secret, for instance `password: "file://mail-password"` to read it from a file (the path is relative to the config directory, handy for mounted Docker/Kubernetes secrets). Encrypted `enc://` values are resolved by the same mechanism as for the other channels; see the [security configuration guide](../../security/security_configuration). Saving the config never writes these fields back to `config.json`.
 
 **3. Start the gateway:**
 
@@ -84,7 +88,7 @@ picoclaw gateway
 | `plain_text_only` | `false` | Send `text/plain` only, no HTML part |
 | `max_attachment_bytes` | `10485760` | Cap, in total, for attachments in either direction |
 
-`password`, `smtp_password` and `oauth_token` are secrets: supply them through `.security.yml` (`channel_list.mail.settings.*`) or the `PICOCLAW_CHANNELS_MAIL_PASSWORD`, `..._SMTP_PASSWORD` and `..._OAUTH_TOKEN` environment variables. See the [security configuration guide](../../security/security_configuration.md).
+`password`, `smtp_password` and `oauth_token` are secrets: supply them through `.security.yml` (`channel_list.mail.settings.*`) or the `PICOCLAW_CHANNELS_MAIL_PASSWORD`, `..._SMTP_PASSWORD` and `..._OAUTH_TOKEN` environment variables. See the [security configuration guide](../../security/security_configuration).
 
 ---
 

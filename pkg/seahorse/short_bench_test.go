@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -59,6 +60,100 @@ func BenchmarkIngest_BatchMessages(b *testing.B) {
 				b.Fatal(err)
 			}
 			s.AppendContextMessage(ctx, convID, added.ID)
+		}
+	}
+}
+
+func BenchmarkAddMessagesBatch(b *testing.B) {
+	s, cleanup := newBenchStore(b)
+	defer cleanup()
+	ctx := context.Background()
+
+	msgs := make([]Message, 10)
+	for i := range msgs {
+		msgs[i] = Message{Role: "user", Content: fmt.Sprintf("Message %d in batch", i), TokenCount: 10}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		conv, _ := s.GetOrCreateConversation(ctx, fmt.Sprintf("bench:ingest-batch-tx:%d", i))
+		if _, err := s.AddMessagesBatch(ctx, conv.ConversationID, msgs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// --- Engine ingest benchmarks ---
+
+// newBenchEngine builds an engine on an in-memory database for benchmarks.
+func newBenchEngine(b *testing.B) (*Engine, func()) {
+	b.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		b.Fatalf("open test db: %v", err)
+	}
+	if err := runSchema(db); err != nil {
+		db.Close()
+		b.Fatalf("migration: %v", err)
+	}
+	return &Engine{store: &Store{db: db}, config: Config{}}, func() { db.Close() }
+}
+
+// newBenchEngineFile builds an engine on a file-backed database using the same
+// DSN pragmas as production (WAL + synchronous=NORMAL).
+func newBenchEngineFile(b *testing.B) (*Engine, func()) {
+	b.Helper()
+	dbPath := filepath.Join(b.TempDir(), "bench.db")
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	if err != nil {
+		b.Fatalf("open test db: %v", err)
+	}
+	if err := runSchema(db); err != nil {
+		db.Close()
+		b.Fatalf("migration: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
+		db.Close()
+		b.Fatalf("journal_mode: %v", err)
+	}
+	return &Engine{store: &Store{db: db}, config: Config{}}, func() { db.Close() }
+}
+
+func benchIngestMessages() []Message {
+	msgs := make([]Message, 10)
+	for i := range msgs {
+		msgs[i] = Message{Role: "user", Content: fmt.Sprintf("Message %d in batch", i), TokenCount: 10}
+	}
+	return msgs
+}
+
+// BenchmarkEngineIngest covers the whole ingest path used by the agent loop.
+func BenchmarkEngineIngest(b *testing.B) {
+	eng, cleanup := newBenchEngine(b)
+	defer cleanup()
+	ctx := context.Background()
+	msgs := benchIngestMessages()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := eng.Ingest(ctx, fmt.Sprintf("bench:ingest:%d", i), msgs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkEngineIngestFile runs the same ingest on a file-backed database
+// with production pragmas (WAL, synchronous=NORMAL).
+func BenchmarkEngineIngestFile(b *testing.B) {
+	eng, cleanup := newBenchEngineFile(b)
+	defer cleanup()
+	ctx := context.Background()
+	msgs := benchIngestMessages()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := eng.Ingest(ctx, fmt.Sprintf("bench:file:%d", i), msgs); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

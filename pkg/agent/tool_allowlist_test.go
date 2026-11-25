@@ -43,6 +43,7 @@ func TestCronTurnExcludesCronTool(t *testing.T) {
 		{"scheduled turn", "agent:cron-job-123", "cron", false},
 		{"scheduled subturn", "agent:subturn-123", "cron", false},
 		{"scheduled session without sender", "agent:cron-job-456", "", false},
+		{"user continuing a cron session", "agent:cron-job-789", "pico-user", true},
 		{"ordinary turn", "agent:default:chat", "direct", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
+	"github.com/sipeed/picoclaw/pkg/usage"
 )
 
 const (
@@ -53,6 +55,14 @@ type SessionMeta struct {
 	UpdatedAt  time.Time       `json:"updated_at"`
 	Scope      json.RawMessage `json:"scope,omitempty"`
 	Aliases    []string        `json:"aliases,omitempty"`
+
+	// Usage is the cumulative provider-reported usage of the session. Truncation,
+	// compaction, and clearing do not reduce it. See usage.go.
+	Usage *usage.Summary `json:"usage,omitempty"`
+	// UsageTracked reports whether Usage is authoritative. Metadata written
+	// before usage was tracked stays false until its counters are initialized
+	// from the session file.
+	UsageTracked bool `json:"usage_tracked,omitempty"`
 }
 
 // sessionIndex caches canonical session keys and their aliases. The index is
@@ -223,7 +233,94 @@ func NewJSONLStore(dir string, opts ...StoreOption) (*JSONLStore, error) {
 	for _, opt := range opts {
 		opt(s)
 	}
+	if err := s.repairSessionMetadata(); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// repairSessionMetadata reconciles .meta.json files with the JSONL files they
+// describe. addMsg appends to the JSONL and updates metadata afterwards; a
+// crash between those writes leaves Count behind the real line count. Repairing
+// at startup keeps that drift from surviving the restart.
+func (s *JSONLStore) repairSessionMetadata() error {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return fmt.Errorf("memory: read session directory: %w", err)
+	}
+	var files []sessionFile
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".meta.json") {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		if readErr != nil {
+			log.Printf("memory: skipping unreadable meta %s during repair: %v", entry.Name(), readErr)
+			continue
+		}
+		var meta SessionMeta
+		if err := json.Unmarshal(data, &meta); err != nil {
+			log.Printf("memory: skipping corrupt meta %s during repair: %v", entry.Name(), err)
+			continue
+		}
+		if meta.Key == "" {
+			continue
+		}
+		repaired, err := s.repairSessionMeta(meta.Key, meta)
+		if err != nil {
+			log.Printf("memory: repairing session %q failed: %v", meta.Key, err)
+		}
+		files = append(files, sessionFile{key: meta.Key, meta: repaired, jsonlPath: s.jsonlPath(meta.Key)})
+	}
+	s.backfillUsage(files)
+	return nil
+}
+
+// repairSessionMeta rewrites metadata when its Count or Skip no longer match
+// the JSONL file. Callers must hold the session lock (or own the store before
+// it is shared). It returns the repaired metadata.
+func (s *JSONLStore) repairSessionMeta(key string, meta SessionMeta) (SessionMeta, error) {
+	rawCount, _, err := scanRetainedMessageLines(s.jsonlPath(key))
+	if err != nil {
+		return meta, err
+	}
+
+	changed := false
+	if meta.Key == "" {
+		meta.Key = key
+		changed = true
+	}
+	if meta.Count != rawCount {
+		meta.Count = rawCount
+		changed = true
+	}
+	if meta.Skip > meta.Count {
+		meta.Skip = meta.Count
+		changed = true
+	}
+	if meta.Skip < 0 {
+		meta.Skip = 0
+		changed = true
+	}
+	if rawCount > 0 && meta.CreatedAt.IsZero() {
+		if info, statErr := os.Stat(s.jsonlPath(key)); statErr == nil {
+			meta.CreatedAt = info.ModTime()
+			changed = true
+		}
+	}
+	if rawCount > 0 && meta.UpdatedAt.IsZero() {
+		if info, statErr := os.Stat(s.jsonlPath(key)); statErr == nil {
+			meta.UpdatedAt = info.ModTime()
+			changed = true
+		}
+	}
+	if !changed {
+		return meta, nil
+	}
+	if err := s.writeMeta(key, meta); err != nil {
+		return meta, err
+	}
+	return meta, nil
 }
 
 // sessionLock returns a mutex for the given session key.
@@ -396,6 +493,9 @@ func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (Sessi
 	if err != nil {
 		return SessionMeta{}, err
 	}
+	if meta, err = s.repairSessionMeta(sessionKey, meta); err != nil {
+		return SessionMeta{}, err
+	}
 	meta.Scope = cloneRawJSON(meta.Scope)
 	if len(meta.Aliases) > 0 {
 		meta.Aliases = append([]string(nil), meta.Aliases...)
@@ -419,8 +519,12 @@ func (s *JSONLStore) UpsertSessionMeta(
 	if err != nil {
 		return err
 	}
+	normalizedAliases := normalizeAliases(sessionKey, aliases)
+	if bytes.Equal(meta.Scope, scope) && slices.Equal(meta.Aliases, normalizedAliases) {
+		return nil
+	}
 	meta.Scope = cloneRawJSON(scope)
-	meta.Aliases = normalizeAliases(sessionKey, aliases)
+	meta.Aliases = normalizedAliases
 	now := time.Now()
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
@@ -453,6 +557,18 @@ func (s *JSONLStore) PromoteAliasHistory(
 	}
 
 	aliases = normalizeAliases(sessionKey, aliases)
+
+	// Fast path for the common case: the canonical session already has
+	// visible content, so promotion cannot do anything. This avoids reading
+	// the canonical JSONL and repeating the check for every alias.
+	hasContent, err := s.canonicalHasVisibleContent(sessionKey)
+	if err != nil {
+		return false, err
+	}
+	if hasContent {
+		return false, nil
+	}
+
 	for _, alias := range aliases {
 		if isMainSessionAlias(alias) {
 			continue
@@ -564,7 +680,7 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	if err != nil {
 		return false, err
 	}
-	canonicalHasContent, err := s.sessionHasVisibleContentLocked(sessionKey, canonicalMeta)
+	canonicalHasContent, err := s.canonicalMetaHasVisibleContent(sessionKey, canonicalMeta)
 	if err != nil {
 		return false, err
 	}
@@ -606,6 +722,12 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 	if aliasSummary != "" {
 		canonicalMeta.Summary = aliasSummary
 	}
+	// The copied messages keep their usage fields, so the spend moves with the
+	// counters instead of being summed again from the copy. The alias stops
+	// reporting it once the canonical session holds it.
+	moved := usageOf(s.jsonlPath(alias), aliasMeta)
+	canonicalMeta.Usage = nonEmptyUsage(mergeUsage(usageOf(s.jsonlPath(sessionKey), canonicalMeta), moved))
+	canonicalMeta.UsageTracked = true
 
 	if err := s.rewriteJSONL(sessionKey, aliasHistory); err != nil {
 		return false, err
@@ -616,18 +738,43 @@ func (s *JSONLStore) promoteAliasHistoryLocked(
 		}
 		return false, err
 	}
+
+	aliasMeta.Usage = nil
+	aliasMeta.UsageTracked = true
+	if err := s.writeMeta(alias, aliasMeta); err != nil {
+		return true, fmt.Errorf("memory: clear promoted alias usage: %w", err)
+	}
 	return true, nil
 }
 
-func (s *JSONLStore) sessionHasVisibleContentLocked(sessionKey string, meta SessionMeta) (bool, error) {
-	if strings.TrimSpace(meta.Summary) != "" {
-		return true, nil
-	}
-	history, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
+func (s *JSONLStore) canonicalHasVisibleContent(sessionKey string) (bool, error) {
+	meta, err := s.readMeta(sessionKey)
 	if err != nil {
 		return false, err
 	}
-	return len(history) > 0, nil
+	return s.canonicalMetaHasVisibleContent(sessionKey, meta)
+}
+
+// canonicalMetaHasVisibleContent reports whether the canonical session has any
+// visible content without reading the whole JSONL. Count/Skip cover sessions
+// with current metadata; the file-size check keeps legacy metadata (where
+// Count may be missing) safe.
+func (s *JSONLStore) canonicalMetaHasVisibleContent(
+	sessionKey string,
+	meta SessionMeta,
+) (bool, error) {
+	if meta.Count > meta.Skip || strings.TrimSpace(meta.Summary) != "" {
+		return true, nil
+	}
+
+	info, err := os.Stat(s.jsonlPath(sessionKey))
+	if err == nil {
+		return info.Size() > 0, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("memory: stat canonical jsonl: %w", err)
 }
 
 func (s *JSONLStore) readRawJSONL(sessionKey string) ([]byte, bool, error) {
@@ -825,6 +972,7 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	}
 	meta.Count++
 	meta.UpdatedAt = now
+	s.recordUsage(sessionKey, &meta, msg)
 
 	return s.writeMeta(sessionKey, meta)
 }
@@ -943,6 +1091,10 @@ func (s *JSONLStore) SetHistory(
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
 	}
+	// The counters are left alone: they already cover every message appended
+	// before this call. Initializing them first keeps the spend of the messages
+	// this call drops.
+	s.ensureUsageTracked(sessionKey, &meta)
 	meta.Skip = 0
 	meta.Count = len(history)
 	meta.UpdatedAt = now
@@ -998,6 +1150,7 @@ func (s *JSONLStore) Compact(
 	// (uncompacted) file is still intact, so GetHistory reads from
 	// line 1 — returning previously-truncated messages rather than
 	// losing data. The next Compact or TruncateHistory corrects this.
+	s.ensureUsageTracked(sessionKey, &meta)
 	meta.Skip = 0
 	meta.Count = len(active)
 	meta.UpdatedAt = time.Now()

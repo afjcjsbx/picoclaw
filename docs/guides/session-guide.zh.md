@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "PicoClaw 的 Session 决定了哪些消息会共享同一段对话历史。 如果你的 bot 表现为“记得太多”或“忘得太快”，首先就该检查 session 配置。"
+---
 # Session 使用指南
 
 > 返回 [README](../project/README.zh.md)
@@ -128,8 +132,17 @@ Telegram forum 消息在默认 `chat` 模式下就会保留 topic 隔离。
 
 ### 摘要是按 session 触发的
 
-`summarize_message_threshold` 和 `summarize_token_percent` 都是针对单个 session 生效。
-如果你把 session 切得更小，摘要也会按更小的历史范围触发。
+`summarize_token_percent` 针对单个 session 生效：当提示词（系统提示、摘要、历史消息和工具定义）达到可用上下文窗口（`context_window - max_tokens`）的该百分比时触发摘要，与消息条数无关。该检查在每次调用 LLM 之前执行（包括长工具循环的中途），回合会等待摘要完成后，从压缩后的上下文继续。
+如果你把 session 切得更小，每个 session 离阈值就更远。`summarize_message_threshold` 已弃用，不再生效。
+
+legacy context manager 还会保护头部和尾部，而不是只保留最后 4 条消息：
+
+- `protect_first_n`（默认 `1`）：始终原样保留最前面的若干条会话消息；开头的用户指令不会被摘要。`0` 关闭头部保护。
+- `protect_last_n`（默认 `4`）：尾部至少原样保留的消息条数；token 预算可以保留更多。`0` 关闭条数下限。
+- `min_tail_user_messages`（默认 `1`）：尾部至少保留的真实 `user` 消息条数。`0` 关闭该保证。
+- `tail_token_budget`（默认自动）：从最新消息向前按估算 token 数累计的尾部预算。自动值为可用窗口（`context_window - max_tokens`）的 10%，限制在 2,000-32,000，且不超过窗口的一半。可以设置明确的 token 数，或设为 `0` 只保留消息条数/用户消息下限。
+
+这些配置位于 `agents.defaults`，也可以使用对应的 `PICOCLAW_AGENTS_DEFAULTS_*` 环境变量。切分点始终对齐到 Turn 边界，因此当唯一安全的边界晚于目标位置时，实际保留的尾部可能少于 `protect_last_n`。如果受保护的尾部本身超出预算，尾部内的旧工具输出会被归档到 `<workspace>/.artifacts/evicted/`，并替换为指向文件的 stub，因此单个巨大的工具结果不会导致整段对话被丢弃。这只能尽最大可能：只有足够大的工具结果会成为候选，由 user/assistant 消息组成的尾部仍可能超出预算。
 
 ## 常见配置方案
 

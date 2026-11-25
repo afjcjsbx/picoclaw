@@ -9,6 +9,7 @@ func showCommand() Definition {
 	return Definition{
 		Name:        "show",
 		Description: "Show current configuration",
+		ReadOnly:    true,
 		SubCommands: []SubCommand{
 			{
 				Name:        "model",

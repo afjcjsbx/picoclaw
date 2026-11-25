@@ -1,3 +1,7 @@
+---
+lang: zh
+description: "Telegram Channel 通过 Telegram 机器人 API 使用长轮询实现基于机器人的通信。它支持文本消息、媒体附件（照片、语音、音频、文档）、语音转录（配置见提供商与模型配置），以及内置命令处理器。"
+---
 > 返回 [README](../../project/README.zh.md)
 
 # Telegram
@@ -36,6 +40,10 @@ Telegram Channel 通过 Telegram 机器人 API 使用长轮询实现基于机器
 3. 获取 HTTP API Token
 4. 将 Token 填入配置文件中
 5. (可选) 配置 `allow_from` 以限制允许互动的用户 ID (可通过 `@userinfobot` 获取 ID)
+
+## 消息表情回应
+
+Telegram 频道支持消息表情回应（reaction）。收到消息时，网关会自动添加 👀 表情，并在回复发送后移除；`reaction` 工具也可以按需添加该表情。
 
 ## 内置命令
 

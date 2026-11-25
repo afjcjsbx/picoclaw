@@ -1,3 +1,6 @@
+---
+description: "The VK channel uses Bots Long Poll API for bot-based communication with VK social network."
+---
 # VK (VKontakte)
 
 The VK channel uses Bots Long Poll API for bot-based communication with VK social network. It supports text messages, media attachments (photos, videos, audio, documents, stickers), and group chat interactions.
@@ -13,6 +16,8 @@ The VK channel uses Bots Long Poll API for bot-based communication with VK socia
       "token": "NOT_HERE",
       "group_id": 123456789,
       "allow_from": ["123456789"],
+      "placeholder": { "enabled": true, "text": ["Thinking..."] },
+      "reasoning_channel_id": "",
       "group_trigger": {
         "mention_only": false,
         "prefixes": ["/bot", "!bot"]
@@ -28,6 +33,8 @@ The VK channel uses Bots Long Poll API for bot-based communication with VK socia
 | token            | string | Yes      | Set to `NOT_HERE` - token is stored securely (see Token Storage)   |
 | group_id         | int    | Yes      | VK Community ID (Group ID)                                         |
 | allow_from       | array  | No       | Allowlist of user IDs; empty means all users are allowed           |
+| placeholder      | object | No       | Placeholder message shown while the agent is working               |
+| reasoning_channel_id | string | No   | Optional peer ID to route reasoning/thinking output to a separate chat |
 | group_trigger    | object | No       | Configuration for group chat triggers                              |
 
 ### Token Storage

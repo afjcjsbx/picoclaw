@@ -1,10 +1,13 @@
+---
+description: "Steering allows injecting messages into an already-running agent loop, interrupting it between tool calls without waiting for the entire cycle to complete."
+---
 # Steering
 
 Steering allows injecting messages into an already-running agent loop, interrupting it between tool calls without waiting for the entire cycle to complete.
 
 ## How it works
 
-When the agent is executing a sequence of tool calls (e.g. the model requested 3 tools in a single turn), steering checks the queue **after each tool** completes. If it finds queued messages:
+When the agent is executing a sequence of tool calls (e.g. the model requested 3 tools in a single turn), steering checks the queue **after each tool** completes (after the whole segment when [parallel tool calls](parallel-tool-calls.md) are enabled and the tools ran concurrently). If it finds queued messages:
 
 1. The remaining tools are **skipped** and receive `"Skipped due to queued user message."` as their result
 2. The steering messages are **injected into the conversation context**
@@ -183,6 +186,12 @@ This design enables **parallel processing of messages from different sessions** 
 - Users don't need to do anything special — their messages are automatically captured as steering when the agent is busy for their session
 - Audio messages are transcribed within the worker that processes the turn, so the agent receives text
 - `system` inbound messages are processed immediately and do not trigger steering
+
+## Slash commands during an active turn
+
+Registered commands marked `ReadOnly` (`/start`, `/help`, `/show`, `/list`, `/check`, `/context`, `/usage`, `/subagents`) execute immediately and publish their normal reply. They are not added to the steering queue.
+
+`/stop` remains a special hard-abort path. Commands that change session or runtime state (`/clear`, `/compact`, `/switch`, `/use`, `/voice`, `/reload`) are rejected with a message asking the user to run `/stop` first. Unknown slash-prefixed text is still treated as a normal message, so it follows the steering or idle passthrough path.
 
 ## Steering with media
 

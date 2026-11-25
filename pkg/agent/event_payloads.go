@@ -23,6 +23,7 @@ type TurnStartPayload struct {
 const (
 	skillContextTriggerInitialBuild        = "initial_build"
 	skillContextTriggerContextRetryRebuild = "context_retry_rebuild"
+	skillContextTriggerThresholdRebuild    = "threshold_rebuild"
 )
 
 type SkillContextSnapshot struct {
@@ -64,11 +65,16 @@ type LLMRequestPayload struct {
 	Temperature   float64
 }
 
-// LLMResponsePayload describes an inbound LLM response.
+// LLMResponsePayload describes an inbound LLM response. Token counts are
+// populated from the provider usage report and stay zero when the provider
+// does not return usage information.
 type LLMResponsePayload struct {
 	ContentLen   int
 	ToolCalls    int
 	HasReasoning bool
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
 }
 
 // LLMDeltaPayload describes a streamed LLM delta.
@@ -94,20 +100,33 @@ const (
 	ContextCompressReasonProactive ContextCompressReason = "proactive_budget"
 	// ContextCompressReasonRetry indicates compression during context-error retry handling.
 	ContextCompressReasonRetry ContextCompressReason = "llm_retry"
-	// ContextCompressReasonSummarize indicates post-turn async summarization.
+	// ContextCompressReasonSummarize indicates the post-turn compaction opportunity.
 	ContextCompressReasonSummarize ContextCompressReason = "summarize"
+	// ContextCompressReasonThreshold indicates synchronous compaction right before an
+	// LLM call, at turn start or mid-turn, once the prompt reached the summarize threshold.
+	ContextCompressReasonThreshold ContextCompressReason = "threshold"
 	// ContextCompressReasonManual indicates a user-requested /compact.
 	ContextCompressReasonManual ContextCompressReason = "manual"
 )
 
 // ContextCompressPayload describes a forced history compression.
 type ContextCompressPayload struct {
-	Reason            ContextCompressReason
-	DroppedMessages   int
-	RemainingMessages int
+	Reason             ContextCompressReason
+	DroppedMessages    int
+	SummarizedMessages int
+	RemainingMessages  int
+	// Attempts is how many bounded recovery steps were tried; the destructive
+	// drop fallback, when used, is always the last one.
+	Attempts int
+	// Fallback is true when summarization was impossible and the oldest turns
+	// were dropped.
+	Fallback bool
+	// ArchivedPath is the pre-compression transcript written before a
+	// destructive fallback.
+	ArchivedPath string
 }
 
-// SessionSummarizePayload describes a completed async session summarization.
+// SessionSummarizePayload describes a completed session summarization.
 type SessionSummarizePayload struct {
 	SummarizedMessages int
 	KeptMessages       int

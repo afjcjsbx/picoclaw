@@ -18,6 +18,7 @@ const (
 type SearchResult struct {
 	Score        float64 `json:"score"`
 	Slug         string  `json:"slug"`
+	Owner        string  `json:"owner,omitempty"`
 	DisplayName  string  `json:"display_name"`
 	Summary      string  `json:"summary"`
 	Version      string  `json:"version"`

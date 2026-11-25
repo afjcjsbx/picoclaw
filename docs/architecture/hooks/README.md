@@ -1,3 +1,6 @@
+---
+description: "How the PicoClaw hook system works as implemented today: hook kinds, the lifecycle events they observe, and how to register one."
+---
 # Hook System Guide
 
 This document describes the hook system that is implemented in the current repository, not the older design draft.
@@ -423,6 +426,7 @@ Only after you register that builtin will the following config work:
 - If `log_file` is not set, the hook still writes summaries to the gateway log
 - Requests that only hit the LLM path usually show `before_llm` and `after_llm`
 - Requests that trigger tools usually also show `before_tool`, `approve_tool`, and `after_tool`
+- With `max_parallel_tool_calls` > 1, all `before_tool`/`approve_tool` calls of a parallel segment run first, in call order, then the tools run concurrently, then `after_tool` runs per call in call order. See [Parallel Tool Calls](../parallel-tool-calls.md)
 - If `log_events=true`, you will also see `event`
 
 Typical log lines:
@@ -715,6 +719,11 @@ The host does not currently accept new RPCs initiated by the process hook. In pr
 - `dir`
 - `env`
 - `observe`
+  Runtime event kinds to subscribe to. Each entry is a kind string such as
+  `agent.turn.end` or a legacy alias. The values `"*"` and `"all"` (and the
+  empty string `""`) subscribe to every runtime event kind. All families
+  (`channel.*`, `bus.*`, `gateway.*`, `mcp.*`, and `agent.*`) are observable;
+  see [Runtime Events](../runtime-events.md) for the full catalog.
 - `intercept`
 
 ## Troubleshooting

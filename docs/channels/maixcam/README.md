@@ -1,4 +1,7 @@
-> Back to [README](../../../README.md)
+---
+description: "MaixCam is a dedicated channel for connecting to Sipeed MaixCAM and MaixCAM2 AI camera devices."
+---
+> Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # MaixCam
 
@@ -14,7 +17,10 @@ MaixCam is a dedicated channel for connecting to Sipeed MaixCAM and MaixCAM2 AI 
       "type": "maixcam",
       "host": "0.0.0.0",
       "port": 18790,
-      "allow_from": []
+      "allow_from": [],
+      "placeholder": { "enabled": true, "text": ["Processing..."] },
+      "group_trigger": { "mention_only": false },
+      "reasoning_channel_id": ""
     }
   }
 }
@@ -26,6 +32,9 @@ MaixCam is a dedicated channel for connecting to Sipeed MaixCAM and MaixCAM2 AI 
 | host       | string | Yes      | TCP server listening address                                     |
 | port       | int    | Yes      | TCP server listening port                                        |
 | allow_from | array  | No       | Allowlist of device IDs; empty means all devices are allowed     |
+| placeholder | object | No      | Placeholder message shown while the agent is working             |
+| group_trigger | object | No    | Group trigger settings (e.g. `{ "mention_only": true }`)         |
+| reasoning_channel_id | string | No | Optional device ID to route reasoning/thinking output to a separate channel |
 
 ## Use Cases
 

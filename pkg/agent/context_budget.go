@@ -90,6 +90,36 @@ func EstimateMessageTokens(msg providers.Message) int {
 	return tokenizer.EstimateMessageTokens(msg)
 }
 
+// estimateMessageTokensForProvider counts only what the active provider sends.
+// Providers that strip assistant reasoning_content (for example opencode-go's
+// OpenAI-compatible route) must not have that hidden text inflate compaction
+// thresholds or context-usage estimates.
+func estimateMessageTokensForProvider(provider providers.LLMProvider, msg providers.Message) int {
+	includeReasoning := true
+	if provider != nil {
+		if capable, ok := provider.(providers.ReasoningReplayCapable); ok {
+			includeReasoning = capable.ReplaysReasoningContent()
+		}
+	}
+	return tokenizer.EstimateMessageTokensWithOptions(msg, tokenizer.EstimateOptions{
+		IncludeReasoning: includeReasoning,
+	})
+}
+
+// estimatePromptTokens sums the prompt about to be sent to the provider,
+// using provider-aware message estimates plus the tool definitions.
+func estimatePromptTokens(
+	provider providers.LLMProvider,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+) int {
+	total := EstimateToolDefsTokens(toolDefs)
+	for _, msg := range messages {
+		total += estimateMessageTokensForProvider(provider, msg)
+	}
+	return total
+}
+
 // EstimateToolDefsTokens estimates the total token cost of tool definitions
 // as they appear in the LLM request. Delegates to the shared tokenizer package.
 func EstimateToolDefsTokens(defs []providers.ToolDefinition) int {
@@ -105,15 +135,19 @@ func isOverContextBudget(
 	toolDefs []providers.ToolDefinition,
 	maxTokens int,
 ) bool {
-	msgTokens := 0
-	for _, m := range messages {
-		msgTokens += EstimateMessageTokens(m)
-	}
+	return isOverContextBudgetForProvider(nil, contextWindow, messages, toolDefs, maxTokens)
+}
 
-	toolTokens := EstimateToolDefsTokens(toolDefs)
-	total := msgTokens + toolTokens + maxTokens
-
-	return total > contextWindow
+// isOverContextBudgetForProvider is the provider-aware variant used by the
+// turn pipeline. It excludes content the provider strips before sending.
+func isOverContextBudgetForProvider(
+	provider providers.LLMProvider,
+	contextWindow int,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	maxTokens int,
+) bool {
+	return estimatePromptTokens(provider, messages, toolDefs)+maxTokens > contextWindow
 }
 
 // trimHistoryToFitContextWindow rebuilds the prompt from progressively newer
@@ -126,8 +160,28 @@ func trimHistoryToFitContextWindow(
 	toolDefs []providers.ToolDefinition,
 	maxTokens int,
 ) ([]providers.Message, []providers.Message, bool) {
+	return trimHistoryToFitContextWindowForProvider(
+		nil,
+		history,
+		build,
+		contextWindow,
+		toolDefs,
+		maxTokens,
+	)
+}
+
+// trimHistoryToFitContextWindowForProvider is the provider-aware variant used
+// by the turn pipeline.
+func trimHistoryToFitContextWindowForProvider(
+	provider providers.LLMProvider,
+	history []providers.Message,
+	build func([]providers.Message) []providers.Message,
+	contextWindow int,
+	toolDefs []providers.ToolDefinition,
+	maxTokens int,
+) ([]providers.Message, []providers.Message, bool) {
 	messages := build(history)
-	if !isOverContextBudget(contextWindow, messages, toolDefs, maxTokens) {
+	if !isOverContextBudgetForProvider(provider, contextWindow, messages, toolDefs, maxTokens) {
 		return history, messages, true
 	}
 
@@ -141,7 +195,7 @@ func trimHistoryToFitContextWindow(
 		}
 
 		messages = build(trimmedHistory)
-		if !isOverContextBudget(contextWindow, messages, toolDefs, maxTokens) {
+		if !isOverContextBudgetForProvider(provider, contextWindow, messages, toolDefs, maxTokens) {
 			return trimmedHistory, messages, true
 		}
 	}
