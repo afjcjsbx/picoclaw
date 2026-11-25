@@ -85,6 +85,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **Mistral AI**      | `mistral`         | `https://api.mistral.ai/v1`                         | OpenAI    | [Get Key](https://console.mistral.ai)                            |
 | **Avian**           | `avian`           | `https://api.avian.io/v1`                           | OpenAI    | [Get Key](https://avian.io)                                      |
 | **Novita AI**       | `novita`          | `https://api.novita.ai/openai`                      | OpenAI    | [Get Key](https://novita.ai)                                     |
+| **ElevenLabs ASR**  | `elevenlabs`      | `https://api.elevenlabs.io`                         | ASR only  | [Get Key](https://elevenlabs.io) _(voice transcription, not a chat model)_ |
 | **Alibaba Coding Plan** | `alibaba-coding` | `https://coding-intl.dashscope.aliyuncs.com/v1` | OpenAI    | [Get Key](https://alibabacloud.com)                              |
 | **Alibaba Coding Plan (Anthropic)** | `alibaba-coding-anthropic` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | Anthropic Messages | [Get Key](https://alibabacloud.com) |
 | **AWS Bedrock**     | `bedrock`         | _(endpoint from region or env)_                     | Bedrock Converse | AWS SDK credentials (no `api_key` needed) |
@@ -250,6 +251,8 @@ Examples:
 You can configure a dedicated model for audio transcription with `voice.model_name`. This lets you reuse existing multimodal providers that support audio input instead of relying only on Groq.
 
 If `voice.model_name` is not configured, PicoClaw will continue to fall back to Groq transcription when a Groq API key is available.
+
+> **ElevenLabs ASR:** The `elevenlabs` provider (`https://api.elevenlabs.io`) is a dedicated speech-to-text provider. It is not a chat model and cannot be used in `model_list` for general agent inference. Use it only as the `voice.model_name` for audio transcription.
 
 ```json
 {
