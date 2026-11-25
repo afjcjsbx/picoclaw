@@ -60,6 +60,7 @@ Sessions last about 31 days but are invalidated when the launcher restarts, so a
 | `/agent/hub`, `/agent/skills`, `/agent/tools` | Browse and import skills; view and toggle agent tools |
 | `/agent/subagents` | Review the agent roster, configure spawn/delegate permissions and subagent model overrides, tune global sub-turn limits, and watch active subagent tasks live |
 | `/agent/cron` | View scheduled jobs with their last-run status and stats; trigger a job immediately, enable/disable, or remove it |
+| `/agent/mcp` | View MCP server connection status and tool lists; add, edit, enable/disable, and remove MCP servers |
 | `/config` | Edit agent defaults, self-evolution, exec/cron controls, heartbeat, device monitoring, and launcher networking/autostart |
 | `/logs` | Follow the in-memory Gateway log buffer and clear it |
 
