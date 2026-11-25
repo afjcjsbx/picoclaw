@@ -495,7 +495,7 @@ their canonical runtime event kind:
 |-------|-------------------|
 | `turn_start` | `agent.turn.start` |
 | `turn_end` | `agent.turn.end` |
-| `turn_completed` | `agent.turn.end` |
+| `turn_completed` | `agent.turn.end` (filtered to successfully completed turns only) |
 | `llm_request` | `agent.llm.request` |
 | `llm_delta` | `agent.llm.delta` |
 | `llm_response` | `agent.llm.response` |
