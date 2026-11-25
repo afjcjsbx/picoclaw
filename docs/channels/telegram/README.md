@@ -30,6 +30,7 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 | enabled          | bool   | Yes      | Whether to enable the Telegram channel                             |
 | token            | string | Yes      | Telegram Bot API Token                                             |
 | allow_from       | array  | No       | Allowlist of user IDs; empty means all users are allowed           |
+| base_url         | string | No       | Custom Telegram Bot API server URL (e.g. `https://my-bot-api.example.com/bot`). Leave empty to use the official `api.telegram.org` endpoint |
 | proxy            | string | No       | Proxy URL for connecting to the Telegram API (e.g. http://127.0.0.1:7890) |
 | use_markdown_v2 | bool   | No       | Enable Telegram MarkdownV2 formatting                              |
 | media_group_delay_ms | int | No       | Idle delay before processing Telegram media groups/albums. Defaults to 500 ms |
