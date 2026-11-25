@@ -32,6 +32,8 @@ These apply to every tool and live in the same `tools` block:
 - **Result filtering** — [`filter_sensitive_data` and `filter_min_length`](../reference/tools_configuration.md#sensitive-data-filtering) redact exact configured secret values from tool results before they reach the model. This is defense in depth, not a DLP boundary; encoded or transformed output bypasses it.
 - **Large results** — [`max_inline_result_chars`](../reference/tools_configuration.md#large-tool-results) spills oversized tool output to a workspace artifact with a bounded inline preview.
 
+When a user message arrives while an agent is mid-turn, [steering](../architecture/steering.md) interrupts the tool loop after the current tool (or parallel segment) finishes. Any remaining tool calls in that turn are skipped and receive `"Skipped due to queued user message."` as their result, so the LLM context is complete before the user's message is injected.
+
 Tool visibility can be narrowed per agent and per request, on top of the global switches:
 
 - an `AGENT.md` frontmatter `tools:` list restricts which registered tools an agent can see;
