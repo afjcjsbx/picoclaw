@@ -605,18 +605,39 @@ picoclaw gateway
     "irc": {
       "enabled": true,
       "type": "irc",
-      "server": "irc.libera.chat:6697",
-      "tls": true,
-      "nick": "picoclaw-bot",
-      "channels": ["#your-channel"],
-      "password": "",
+      "settings": {
+        "server": "irc.libera.chat:6697",
+        "tls": true,
+        "nick": "picoclaw-bot",
+        "user": "",
+        "real_name": "",
+        "channels": ["#your-channel"],
+        "password": "",
+        "nickserv_password": "",
+        "sasl_user": "",
+        "sasl_password": "",
+        "request_caps": []
+      },
       "allow_from": []
     }
   }
 }
 ```
 
-Optional: `nickserv_password` for NickServ authentication, `sasl_user`/`sasl_password` for SASL auth.
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `server` | Yes | — | IRC server address in `host:port` format |
+| `tls` | No | `false` | Enable TLS. Recommended for port 6697 |
+| `nick` | Yes | — | Bot's IRC nickname |
+| `user` | No | same as `nick` | IRC username (the ident field). Defaults to `nick` when empty |
+| `real_name` | No | `""` | Real name field shown in `/whois`. Defaults to `nick` when empty |
+| `channels` | Yes | — | List of IRC channels to join on connect (e.g. `["#general"]`) |
+| `password` | No | — | Server password (for password-protected servers). Stored in `.security.yml` |
+| `nickserv_password` | No | — | NickServ identify password sent on connect. Stored in `.security.yml` |
+| `sasl_user` | No | — | SASL PLAIN username for SASL authentication |
+| `sasl_password` | No | — | SASL PLAIN password. Stored in `.security.yml` |
+| `request_caps` | No | `[]` | Additional IRCv3 capability names to request during capability negotiation |
+| `allow_from` | No | `[]` | Allowlist of IRC nicks; empty means all nicks are allowed |
 
 **2. Run**
 
@@ -624,7 +645,7 @@ Optional: `nickserv_password` for NickServ authentication, `sasl_user`/`sasl_pas
 picoclaw gateway
 ```
 
-The bot will connect to the IRC server and join the specified channels.
+The bot connects to the IRC server, negotiates capabilities, authenticates (if configured), and joins the listed channels.
 
 </details>
 
