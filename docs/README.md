@@ -106,11 +106,16 @@ These files still follow the same translation naming rules.
 4. Update links from existing docs when the new doc becomes a navigation target.
 5. Run `make lint-docs` locally when adding or moving docs.
 
-## GitHub Pages Notes
+## Documentation Site
 
-- Section indexes are `README.md` files kept as directory indexes by `readme_index.with_frontmatter` in `docs/_config.yml`. If you add front matter to a section `README.md`, keep that setting; do not add a separate `permalink`.
-- Chinese pages are paired with their English source in `docs/_data/i18n.yml`. Update that file when adding or renaming a `.zh.md` page. `hreflang` alternates are emitted only for reciprocal pairs.
-- `jekyll-sitemap` generates `sitemap.xml` and a `robots.txt` that points to it. Crawlers only read `robots.txt` at the host root (`https://afjcjsbx.github.io/robots.txt`), not at the project path, so submit `https://afjcjsbx.github.io/picoclaw/sitemap.xml` directly in Google Search Console and Bing Webmaster Tools.
+The site at <https://afjcjsbx.github.io/picoclaw/> is built with Docusaurus from `website/` and reads this directory unchanged. Preview it with `cd website && npm install && npm start`; `.github/workflows/docs.yml` builds it on every docs change and deploys `main`.
+
+- The sidebar is the explicit list in `website/sidebars.js`. A new page is published and searchable without it, but only appears in the sidebar once you add it there.
+- Section indexes are `README.md` files and become the directory page. Directory links such as `../channels/telegram/` are rewritten to the index file at build time.
+- A `.zh.md` file is published in the 简体中文 locale when its English source exists; untranslated pages fall back to English there. `website/scripts/sync-i18n.mjs` does the copy, so there is no pairing file to maintain.
+- GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!WARNING]`) render as admonitions.
+- Old Jekyll URLs (`/guides/providers.html`) redirect to the new ones (`/docs/guides/providers/`).
+- Submit `https://afjcjsbx.github.io/picoclaw/sitemap.xml` directly in Google Search Console and Bing Webmaster Tools: crawlers only read `robots.txt` at the host root, not at the project path.
 
 ## Examples
 

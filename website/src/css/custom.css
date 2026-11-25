@@ -1,0 +1,155 @@
+/* Palette taken from the PicoClaw mascot: teal-blue body, coral claws. */
+:root {
+  --ifm-color-primary: #1f6f93;
+  --ifm-color-primary-dark: #1c6484;
+  --ifm-color-primary-darker: #1b5f7d;
+  --ifm-color-primary-darkest: #164e66;
+  --ifm-color-primary-light: #227aa2;
+  --ifm-color-primary-lighter: #2381ab;
+  --ifm-color-primary-lightest: #2a9bcf;
+  --ifm-code-font-size: 92%;
+  --ifm-navbar-height: 3.6rem;
+  --pc-coral: #ec5b4a;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+}
+
+html[data-theme='dark'] {
+  --ifm-color-primary: #5bb4dc;
+  --ifm-color-primary-dark: #3fa6d5;
+  --ifm-color-primary-darker: #339fd1;
+  --ifm-color-primary-darkest: #2282b0;
+  --ifm-color-primary-light: #77c2e3;
+  --ifm-color-primary-lighter: #83c8e6;
+  --ifm-color-primary-lightest: #a9dbef;
+  --ifm-background-color: #0d1117;
+  --ifm-background-surface-color: #131a22;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+}
+
+.navbar__logo img {
+  border-radius: 6px;
+}
+
+.navbar__title {
+  font-weight: 700;
+}
+
+/* Docs: slightly tighter sidebar, clear top-level sections. */
+.menu__link {
+  font-size: 0.92rem;
+}
+
+.theme-doc-sidebar-menu > .menu__list-item > .menu__list-item-collapsible > .menu__link,
+.theme-doc-sidebar-menu > .menu__list-item > .menu__link--sublist {
+  font-weight: 600;
+}
+
+/* Landing page */
+.hero--home {
+  padding: 4rem 0 3rem;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(31, 111, 147, 0.14), transparent 80%);
+}
+
+.hero__logo {
+  margin-bottom: 0.5rem;
+}
+
+.hero__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin: 1.5rem 0;
+}
+
+.hero__buttons .button--primary {
+  background: var(--pc-coral);
+  border-color: var(--pc-coral);
+  color: #fff;
+}
+
+.hero__install {
+  max-width: 46rem;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.hero__install code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1rem;
+  margin-bottom: 2.5rem;
+}
+
+.stats__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1rem;
+  text-align: center;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 10px;
+}
+
+.stats__item strong {
+  font-size: 1.5rem;
+  color: var(--ifm-color-primary);
+}
+
+.stats__item span {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.section__title {
+  text-align: center;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+.card-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1.1rem 1.2rem;
+  color: inherit;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 10px;
+  background: var(--ifm-background-surface-color);
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.card-link:hover {
+  color: inherit;
+  text-decoration: none;
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-2px);
+}
+
+.card-link__icon {
+  font-size: 1.6rem;
+}
+
+.card-link__title {
+  font-weight: 700;
+}
+
+.card-link__text {
+  font-size: 0.88rem;
+  opacity: 0.8;
+}
+
+/* Alerts converted from GitHub "> [!NOTE]" blockquotes. */
+.alert p:last-child {
+  margin-bottom: 0;
+}
