@@ -361,6 +361,13 @@ a stable hash suffix to fit provider limits and avoid ambiguous normalization.
 Use the emitted tool definitions to obtain exact names for a tool allowlist.
 Plugin tools never overwrite built-ins or existing tools.
 
+Plugin MCP servers always run tool calls sequentially. The
+`supports_parallel_tool_calls` field available for native MCP servers (see
+[MCP tools](../tools/mcp.md)) is not accepted in a plugin `mcp.json` or in
+`mcp_overrides`; specifying it there produces a validation error. If a server
+in a plugin must handle parallel calls, expose it as a native
+`tools.mcp.servers` entry instead.
+
 ## Skills and bundled resources
 
 Each immediate child of `skills/` containing a regular `SKILL.md` is a candidate.
