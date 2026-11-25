@@ -591,6 +591,32 @@ If the standard Zhipu endpoint (`https://open.bigmodel.cn/api/paas/v4`) returns 
 
 **Note:** The Z.AI Coding Plan endpoint and standard Zhipu endpoint use the same API key format but have separate billing. If you encounter 429 errors with the standard Zhipu endpoint, the Z.AI Coding Plan endpoint may have available balance.
 
+**AWS Bedrock**
+
+Bedrock requires the `-tags bedrock` build flag. Credentials are resolved automatically via the AWS SDK default chain (env vars, `~/.aws/credentials`, IAM roles). No `api_key` is used.
+
+The `api_base` field has special semantics for Bedrock:
+- **Region name** (no `://`): PicoClaw passes it to the AWS SDK as the region, which resolves the correct partition endpoint (all AWS partitions: `aws`, `aws-cn`, `aws-us-gov`, etc.).
+- **Full endpoint URL** (contains `://`): PicoClaw uses it directly as the Bedrock Runtime endpoint.
+
+```json
+{
+  "model_name": "bedrock-claude",
+  "provider": "bedrock",
+  "model": "anthropic.claude-sonnet-4-6-v1:0",
+  "api_base": "us-east-1"
+}
+```
+
+```json
+{
+  "model_name": "bedrock-claude-custom-endpoint",
+  "provider": "bedrock",
+  "model": "anthropic.claude-sonnet-4-6-v1:0",
+  "api_base": "https://bedrock-runtime.us-east-1.amazonaws.com"
+}
+```
+
 #### Load Balancing
 
 Configure multiple endpoints for the same model name. PicoClaw selects one of
