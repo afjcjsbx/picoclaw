@@ -105,7 +105,7 @@ python3 scripts/bench-agent-tui.py --cmd opencode --runs 3 --keys '\x03'
 
 </details>
 
-> **[Hardware Compatibility List](docs/guides/hardware-compatibility.md)** — Tested boards from $5 RISC-V devices to Raspberry Pi and Android phones. Your board is missing? Submit a PR!
+> **[Hardware Compatibility List](docs/guides/hardware-compatibility.md)** — Tested boards from $5 RISC-V devices to Raspberry Pi. Your board is missing? Submit a PR!
 
 ## Install
 

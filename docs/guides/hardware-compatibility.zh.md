@@ -100,12 +100,6 @@ PicoClaw 几乎可以在任何 Linux 设备上运行。本页面记录了已验�
 
 ## 4. 同样适用于
 
-### Android 手机（通过 Termux）
-
-任何 ARM64 Android 手机（2015 年以后），1GB 以上内存。安装 [Termux](https://github.com/termux/termux-app)，使用 `proot` 运行 PicoClaw。
-
-> 参见 [README：在旧 Android 手机上运行](../project/README.zh.md#-run-on-old-android-phones) 获取设置说明。
-
 ### 桌面 / 服务器 / 云
 
 | 平台 | 备注 |

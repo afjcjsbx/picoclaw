@@ -97,12 +97,6 @@ Consumer products, routers, and industrial devices that have been tested with Pi
 
 ## 4. Also Works On
 
-### Android Phones (via Termux)
-
-Any ARM64 Android phone (2015+) with 1GB+ RAM. Install [Termux](https://github.com/termux/termux-app), use `proot` to run PicoClaw.
-
-> See the [Android Termux Guide](android-termux.md) for setup instructions.
-
 ### Desktop / Server / Cloud
 
 | Platform | Notes |
