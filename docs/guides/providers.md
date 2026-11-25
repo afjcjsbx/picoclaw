@@ -72,6 +72,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **OpenRouter**      | `openrouter`      | `https://openrouter.ai/api/v1`                      | OpenAI    | [Get Key](https://openrouter.ai/keys)                            |
 | **LiteLLM Proxy**   | `litellm`         | `http://localhost:4000/v1`                          | OpenAI    | Your LiteLLM proxy key                                           |
 | **VLLM**            | `vllm`            | `http://localhost:8000/v1`                          | OpenAI    | Local                                                            |
+| **GPT4Free**        | `gpt4free`        | `http://localhost:1337/v1`                          | OpenAI    | Local (no key needed); alias: `g4f`                              |
 | **Cerebras**        | `cerebras`        | `https://api.cerebras.ai/v1`                        | OpenAI    | [Get Key](https://cerebras.ai)                                   |
 | **VolcEngine (Doubao)** | `volcengine`  | `https://ark.cn-beijing.volces.com/api/v3`          | OpenAI    | [Get Key](https://www.volcengine.com/activity/codingplan?utm_campaign=PicoClaw&utm_content=PicoClaw&utm_medium=devrel&utm_source=OWO&utm_term=PicoClaw) |
 | **神算云**          | `shengsuanyun`    | `https://router.shengsuanyun.com/api/v1`            | OpenAI    | -                                                                |
@@ -479,6 +480,20 @@ one-click **x-opencode-session** preset.
 
 `api_base` defaults to `http://localhost:1234/v1`. API key is optional unless your LM Studio server enables authentication.<br/>
 With explicit `provider`, PicoClaw sends `openai/gpt-oss-20b` unchanged to the LM Studio server. The legacy compatibility form `"model": "lmstudio/openai/gpt-oss-20b"` still resolves to the same upstream model ID when `provider` is omitted.
+
+**GPT4Free (local)**
+
+[GPT4Free](https://github.com/xtekky/gpt4free) runs a local OpenAI-compatible server on `http://localhost:1337/v1`. No API key is required:
+
+```json
+{
+  "model_name": "gpt4free-local",
+  "provider": "gpt4free",
+  "model": "gpt-4o"
+}
+```
+
+Alias `g4f` works as well. Set `api_base` if your server listens on a different address.
 
 **Custom Proxy/API**
 
