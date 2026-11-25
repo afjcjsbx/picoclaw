@@ -26,8 +26,8 @@ On Windows and Linux desktop builds, a system tray icon appears while the launch
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-port` | `18800` | Listen port (1–65535) |
-| `-host` | `""` | Bind host; when set, overrides `-public` |
-| `-public` | `false` | Bind all interfaces instead of localhost |
+| `-host` | `""` | Bind host; when set, overrides `-public`. Env var `PICOCLAW_LAUNCHER_HOST` is used when `-host` is not supplied; the flag takes priority over the env var, which takes priority over `launcher-config.json`. |
+| `-public` | `false` | Bind all interfaces instead of localhost; ignored when `-host` or `PICOCLAW_LAUNCHER_HOST` is set |
 | `-no-browser` | `false` | Do not auto-open the browser |
 | `-lang` | auto | UI language (`en` or `zh`) |
 | `-console` | `false` | Console mode: no tray, logs to the terminal |
