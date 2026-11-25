@@ -137,13 +137,12 @@ func computeHistoryProtection(
 func pruneProtectedHistory(
 	history []providers.Message,
 	protection historyProtection,
-	limit int,
 	agent *AgentInstance,
 ) bool {
 	if agent == nil {
 		return false
 	}
-	historicalTailStart := min(protection.tailStartFull, limit)
+	historicalTailStart := min(protection.tailStartFull, protection.limit)
 	if historicalTailStart < protection.headEnd {
 		historicalTailStart = protection.headEnd
 	}
@@ -156,7 +155,7 @@ func pruneProtectedHistory(
 	if pruneToolResultsToBudget(
 		history,
 		historicalTailStart,
-		limit,
+		protection.limit,
 		agent.Workspace,
 		agent.Provider,
 		protection.tailTokenBudget,

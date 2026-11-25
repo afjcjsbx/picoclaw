@@ -316,7 +316,7 @@ func TestLegacyPrune_ArchivesHugeToolResultInTheTail(t *testing.T) {
 	}
 
 	protection := computeHistoryProtection(history, len(history), agent)
-	if !pruneProtectedHistory(history, protection, len(history), agent) {
+	if !pruneProtectedHistory(history, protection, agent) {
 		t.Fatal("expected the huge tail tool result to be evicted")
 	}
 	if len(history) != 8 {
@@ -356,7 +356,7 @@ func TestPruneProtectedHistory_KeepsHeadAndPrunesMiddle(t *testing.T) {
 	if protection.headEnd != 3 || protection.tailStart != 6 {
 		t.Fatalf("protection = %+v, want head end 3 and tail start 6", protection)
 	}
-	if !pruneProtectedHistory(history, protection, len(history), agent) {
+	if !pruneProtectedHistory(history, protection, agent) {
 		t.Fatal("expected the middle tool output to be evicted")
 	}
 	if history[2].Content != bulky {

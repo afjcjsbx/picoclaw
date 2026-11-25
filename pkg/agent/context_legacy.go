@@ -513,7 +513,7 @@ func (m *legacyContextManager) pruneSessionToolResults(
 	}
 
 	protection := computeHistoryProtection(history, limit, agent)
-	pruned := pruneProtectedHistory(history, protection, limit, agent)
+	pruned := pruneProtectedHistory(history, protection, agent)
 	if activeEnd > limit {
 		if pruneToolResultsInRange(history, limit, activeEnd, agent.Workspace) {
 			pruned = true
