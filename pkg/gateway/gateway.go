@@ -36,6 +36,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
+var createProvider = providers.CreateProvider
+
 const (
 	serviceShutdownTimeout  = 30 * time.Second
 	providerReloadTimeout   = 30 * time.Second
@@ -422,7 +424,7 @@ func createStartupProvider(
 		return &startupBlockedProvider{reason: reason}, "", nil
 	}
 
-	provider, modelID, err := providers.CreateProvider(cfg)
+	provider, modelID, err := createProvider(cfg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -435,11 +437,15 @@ func setupAndStartServices(
 	msgBus *bus.MessageBus,
 	authToken string,
 	listenResult netbind.OpenResult,
-) (*services, error) {
+) (_ *services, err error) {
 	runningServices := &services{}
+	defer func() {
+		if err != nil {
+			stopAndCleanupServices(runningServices, serviceShutdownTimeout, false)
+		}
+	}()
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	var err error
 	cronService, err := setupCronTool(
 		agentLoop,
 		msgBus,
@@ -449,11 +455,11 @@ func setupAndStartServices(
 		cfg,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("error setting up cron service: %w", err)
+		return runningServices, fmt.Errorf("error setting up cron service: %w", err)
 	}
 	runningServices.setCronService(cronService)
 	if err = cronService.Start(); err != nil {
-		return nil, fmt.Errorf("error starting cron service: %w", err)
+		return runningServices, fmt.Errorf("error starting cron service: %w", err)
 	}
 	fmt.Println("✓ Cron service started")
 
@@ -465,7 +471,7 @@ func setupAndStartServices(
 	runningServices.HeartbeatService.SetBus(msgBus)
 	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
 	if err = runningServices.HeartbeatService.Start(); err != nil {
-		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
+		return runningServices, fmt.Errorf("error starting heartbeat service: %w", err)
 	}
 	if cfg.Heartbeat.Enabled {
 		fmt.Println("✓ Heartbeat service started")
@@ -486,10 +492,7 @@ func setupAndStartServices(
 		channels.WithRuntimeEvents(agentLoop.RuntimeEventBus()),
 	)
 	if err != nil {
-		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
-			fms.Stop()
-		}
-		return nil, fmt.Errorf("error creating channel manager: %w", err)
+		return runningServices, fmt.Errorf("error creating channel manager: %w", err)
 	}
 
 	agentLoop.SetChannelManager(runningServices.ChannelManager)
@@ -529,7 +532,7 @@ func setupAndStartServices(
 	)
 
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
-		return nil, fmt.Errorf("error starting channels: %w", err)
+		return runningServices, fmt.Errorf("error starting channels: %w", err)
 	}
 
 	logChannelVoiceCapabilities(runningServices.ChannelManager, transcriber != nil, ttsAvailable)
@@ -686,11 +689,15 @@ func restartServices(
 	al *agent.AgentLoop,
 	runningServices *services,
 	msgBus *bus.MessageBus,
-) error {
+) (err error) {
+	defer func() {
+		if err != nil {
+			stopAndCleanupServices(runningServices, serviceShutdownTimeout, true)
+		}
+	}()
 	cfg := al.GetConfig()
 
 	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
-	var err error
 	cronService, err := setupCronTool(
 		al,
 		msgBus,
