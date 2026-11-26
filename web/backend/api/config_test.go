@@ -290,6 +290,7 @@ func TestHandlePatchConfig_SavesChannelListSettingsPatch(t *testing.T) {
 			"feishu": {
 				"enabled": true,
 				"allow_from": ["ou_patch_user"],
+				"commands_enabled": false,
 				"settings": {
 					"app_id": "cli_patch_app",
 					"app_secret": "patch-secret",
@@ -321,6 +322,9 @@ func TestHandlePatchConfig_SavesChannelListSettingsPatch(t *testing.T) {
 	}
 	if len(bc.AllowFrom) != 1 || bc.AllowFrom[0] != "ou_patch_user" {
 		t.Fatalf("feishu allow_from = %#v, want [\"ou_patch_user\"]", bc.AllowFrom)
+	}
+	if bc.CommandsAreEnabled() {
+		t.Fatal("feishu commands_enabled should be false after PATCH")
 	}
 	decoded, err := bc.GetDecoded()
 	if err != nil {

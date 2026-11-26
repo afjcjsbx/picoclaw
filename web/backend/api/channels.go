@@ -185,6 +185,7 @@ func addChannelCommonConfig(settings map[string]any, bc *config.Channel) {
 	if len(bc.AllowFrom) > 0 {
 		settings["allow_from"] = []string(bc.AllowFrom)
 	}
+	settings["commands_enabled"] = bc.CommandsAreEnabled()
 	if bc.ReasoningChannelID != "" {
 		settings["reasoning_channel_id"] = bc.ReasoningChannelID
 	}

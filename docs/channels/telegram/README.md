@@ -63,7 +63,7 @@ The Telegram channel supports message reactions. The gateway acknowledges each i
 
 ## Built-in Commands
 
-Telegram auto-registers PicoClaw's top-level bot commands at startup, including `/start`, `/help`, `/show`, `/list`, and `/use`.
+Telegram auto-registers PicoClaw's top-level bot commands at startup, including `/start`, `/help`, `/show`, `/list`, and `/use`. Setting `channel_list.telegram.commands_enabled` to `false` clears the menu and makes the agent reject all slash commands.
 
 Skill-related commands:
 

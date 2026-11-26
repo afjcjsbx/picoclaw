@@ -82,6 +82,12 @@ func TestTelegramCommandMenuMarkup_NoMatch(t *testing.T) {
 	require.Nil(t, telegramCommandMenuMarkup("Use /list models to see the models.", defs))
 }
 
+func TestTelegramCommandMenuMarkup_SkipsPickersWhenCommandsDisabled(t *testing.T) {
+	require.Nil(t, telegramCommandMenuMarkup(modelListText("test-model"), nil))
+	require.Nil(t, telegramCommandMenuMarkup(useHelpText("git"), nil))
+	require.False(t, telegramCallbackCommandAllowed("/use git", nil))
+}
+
 func TestTelegramCommandMenuMarkup_SkipsCallbackDataOverLimit(t *testing.T) {
 	name := strings.Repeat("a", 60)
 	defs := []commands.Definition{{
@@ -146,6 +152,38 @@ func TestTelegramCallbackCommandAllowed(t *testing.T) {
 	require.False(t, telegramCallbackCommandAllowed("/unknown", defs))
 	// Simple commands are not reachable from a command menu callback.
 	require.False(t, telegramCallbackCommandAllowed("/clear", defs))
+}
+
+func TestHandleCallbackQuery_RejectsDisabledPickerCallbacks(t *testing.T) {
+	for _, data := range []string{"pu:s:0", "pm:s:0"} {
+		t.Run(data, func(t *testing.T) {
+			caller := &stubCaller{
+				callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+					if !strings.Contains(url, "answerCallbackQuery") {
+						t.Fatalf("unexpected API call: %s", url)
+					}
+					return &ta.Response{Ok: true, Result: []byte("true")}, nil
+				},
+			}
+			ch, messageBus := newCallbackTestChannel(t, caller, nil)
+			disabled := false
+			ch.bc = &config.Channel{CommandsEnabled: &disabled}
+
+			err := ch.handleCallbackQuery(context.Background(), telego.CallbackQuery{
+				ID:      "cb-disabled",
+				From:    telego.User{ID: 777, FirstName: "Alice"},
+				Data:    data,
+				Message: &telego.Message{MessageID: 42, Chat: telego.Chat{ID: 12345, Type: "private"}},
+			})
+			require.NoError(t, err)
+			select {
+			case inbound := <-messageBus.InboundChan():
+				t.Fatalf("disabled picker published inbound message: %+v", inbound)
+			case <-time.After(100 * time.Millisecond):
+			}
+			requireCallbackAnswered(t, caller)
+		})
+	}
 }
 
 func TestHandleCallbackQueryPublishesCommand(t *testing.T) {

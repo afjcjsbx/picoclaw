@@ -32,6 +32,9 @@ func (h *Handler) handleListCommands(w http.ResponseWriter, r *http.Request) {
 			defs,
 			commands.LoadCustomCommands(cfg.WorkspacePath()),
 		)
+		if pico := cfg.Channels.Get(config.ChannelPico); pico != nil && !pico.CommandsAreEnabled() {
+			defs = nil
+		}
 	}
 	items := make([]slashCommandItem, 0, len(defs))
 	for _, def := range defs {

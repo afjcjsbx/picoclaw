@@ -25,6 +25,7 @@ Discord is a free voice, video, and text chat application designed for communiti
       "type": "discord",
       "token": "YOUR_BOT_TOKEN",
       "allow_from": ["YOUR_USER_ID"],
+      "commands_enabled": true,
       "placeholder": {
         "enabled": true,
         "text": ["Thinking... 💭"]
@@ -47,6 +48,7 @@ Discord is a free voice, video, and text chat application designed for communiti
 | enabled              | bool   | Yes      | Whether to enable the Discord channel                                       |
 | token                | string | Yes      | Discord Bot Token                                                           |
 | allow_from           | array  | No       | Allowlist of user IDs; empty means all users are allowed                    |
+| commands_enabled     | bool   | No       | Whether slash commands are enabled on this channel; set to `false` to clear the Discord command menu and reject all slash commands. Defaults to `true` |
 | placeholder          | object | No       | Placeholder message config shown while the agent is working                 |
 | group_trigger        | object | No       | Group trigger settings (example: { "mention_only": false })                 |
 | reasoning_channel_id | string | No       | Optional target channel ID for reasoning/thinking output                    |
@@ -54,6 +56,8 @@ Discord is a free voice, video, and text chat application designed for communiti
 | allow_dm             | bool   | No       | Whether the bot accepts direct messages and DM slash commands. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_DM` |
 
 Set `allow_dm` to `false` to make the bot ignore direct messages and DM interactions while continuing to handle mentions in guild channels.
+
+Set `commands_enabled` to `false` to clear the Discord slash command menu at startup and make the agent reject all slash commands. The setting applies to the whole Discord integration, not to an individual guild or text channel.
 
 ## Visible Execution Feedback
 

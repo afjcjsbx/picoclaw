@@ -23,12 +23,19 @@ const (
 )
 
 func (c *DiscordChannel) commandDefinitions() []commands.Definition {
+	if !c.commandsEnabled() {
+		return nil
+	}
 	if c.commandDefs != nil {
 		if defs := c.commandDefs(); len(defs) > 0 {
 			return defs
 		}
 	}
 	return commands.BuiltinDefinitions()
+}
+
+func (c *DiscordChannel) commandsEnabled() bool {
+	return c.bc == nil || c.bc.CommandsAreEnabled()
 }
 
 // RegisterCommands replaces Discord's global slash command menu with the
@@ -42,10 +49,10 @@ func (c *DiscordChannel) RegisterCommands(ctx context.Context, defs []commands.D
 		return fmt.Errorf("discord session is unavailable")
 	}
 
-	botCommands := discordBotCommands(defs)
-	if len(botCommands) == 0 {
-		return nil
+	if !c.commandsEnabled() {
+		defs = nil
 	}
+	botCommands := discordBotCommands(defs)
 	_, err := c.session.ApplicationCommandBulkOverwrite(
 		appID,
 		"",

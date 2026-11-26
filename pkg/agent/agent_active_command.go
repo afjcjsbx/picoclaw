@@ -27,6 +27,10 @@ func (al *AgentLoop) tryHandleActiveTurnCommand(
 	if !ok || cmdName == "stop" {
 		return false
 	}
+	if !al.commandsEnabledForChannel(msg.Channel) {
+		al.publishActiveTurnCommandReply(ctx, msg, sessionKey, commandsDisabledReply)
+		return true
+	}
 	if al.cmdRegistry == nil {
 		return false
 	}

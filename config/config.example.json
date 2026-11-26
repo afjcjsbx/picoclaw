@@ -166,6 +166,7 @@
       "enabled": false,
       "type": "telegram",
       "allow_from": ["YOUR_USER_ID"],
+      "commands_enabled": true,
       "reasoning_channel_id": "",
       "settings": {
         "token": "YOUR_TELEGRAM_BOT_TOKEN",
@@ -181,6 +182,7 @@
       "enabled": false,
       "type": "discord",
       "allow_from": [],
+      "commands_enabled": true,
       "group_trigger": {
         "mention_only": false
       },

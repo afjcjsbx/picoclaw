@@ -34,6 +34,7 @@ import { WeixinForm } from "@/components/channels/channel-forms/weixin-form"
 import { ConfigChangeNotice } from "@/components/config-change-notice"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import { useGateway } from "@/hooks/use-gateway"
 import { showSaveSuccessOrRestartToast } from "@/lib/restart-required"
@@ -97,6 +98,7 @@ function serializeGroupTriggerForSubmit(value: unknown): unknown {
 
 const CHANNEL_COMMON_CONFIG_KEYS = new Set([
   "allow_from",
+  "commands_enabled",
   "group_trigger",
   "placeholder",
   "reasoning_channel_id",
@@ -750,6 +752,26 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             )}
 
             {renderForm()}
+
+            <Card className="shadow-sm">
+              <CardContent className="flex items-center justify-between gap-6 px-6 py-5">
+                <div>
+                  <p className="text-sm font-medium">
+                    {t("channels.field.commandsEnabled")}
+                  </p>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    {t("channels.form.desc.commandsEnabled")}
+                  </p>
+                </div>
+                <Switch
+                  checked={editConfig.commands_enabled !== false}
+                  onCheckedChange={(checked) =>
+                    handleChange("commands_enabled", checked)
+                  }
+                  aria-label={t("channels.field.commandsEnabled")}
+                />
+              </CardContent>
+            </Card>
 
             {serverError && (
               <p className="text-destructive text-sm">{serverError}</p>

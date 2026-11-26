@@ -23,7 +23,8 @@ func NewRegistry(defs []Definition) *Registry {
 }
 
 // Definitions returns all registered command definitions.
-// Command availability is global and no longer channel-scoped.
+// The registry is global; callers check the channel's commands_enabled setting
+// before building menus or dispatching a request.
 func (r *Registry) Definitions() []Definition {
 	out := make([]Definition, len(r.defs))
 	copy(out, r.defs)

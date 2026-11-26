@@ -50,11 +50,16 @@ var (
 // executor. It returns nil when the text is not a command usage reply or when
 // no sub-command can be invoked without required arguments.
 func telegramCommandMenuMarkup(text string, defs []commands.Definition) *telego.InlineKeyboardMarkup {
-	if markup := telegramModelCommandMenuMarkup(text); markup != nil {
-		return markup
+	registry := commands.NewRegistry(defs)
+	if _, available := registry.Lookup("switch"); available {
+		if markup := telegramModelCommandMenuMarkup(text); markup != nil {
+			return markup
+		}
 	}
-	if markup := telegramUseCommandMenuMarkup(text); markup != nil {
-		return markup
+	if _, available := registry.Lookup("use"); available {
+		if markup := telegramUseCommandMenuMarkup(text); markup != nil {
+			return markup
+		}
 	}
 
 	name, ok := telegramUsageCommandName(text)
@@ -62,7 +67,7 @@ func telegramCommandMenuMarkup(text string, defs []commands.Definition) *telego.
 		return nil
 	}
 
-	def, found := commands.NewRegistry(defs).Lookup(name)
+	def, found := registry.Lookup(name)
 	if !found || len(def.SubCommands) == 0 {
 		return nil
 	}
@@ -348,6 +353,11 @@ func telegramCallbackCommand(data string) (string, bool) {
 	return commandText, true
 }
 
+func (c *TelegramChannel) commandAvailable(name string) bool {
+	_, found := commands.NewRegistry(c.commandDefinitions()).Lookup(name)
+	return found
+}
+
 // telegramCallbackCommandAllowed validates callback data against the command
 // definitions. Only commands with sub-commands can be invoked from a command
 // menu button, so forged callback data cannot reach unrelated commands. The
@@ -359,13 +369,16 @@ func telegramCallbackCommandAllowed(commandText string, defs []commands.Definiti
 		return false
 	}
 
+	def, found := commands.NewRegistry(defs).Lookup(cmdName)
+	if !found {
+		return false
+	}
+
 	if cmdName == "use" {
 		parts := strings.Fields(strings.TrimSpace(commandText))
 		return len(parts) == 2 && !strings.EqualFold(parts[1], "clear")
 	}
-
-	def, found := commands.NewRegistry(defs).Lookup(cmdName)
-	if !found || len(def.SubCommands) == 0 {
+	if len(def.SubCommands) == 0 {
 		return false
 	}
 

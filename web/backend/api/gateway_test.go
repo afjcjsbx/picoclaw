@@ -2052,6 +2052,18 @@ func TestConfigSignatureChangesWithDefaultProvider(t *testing.T) {
 	}
 }
 
+func TestChannelSignaturesIncludeCommandsEnabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	before := strings.Join(computeChannelSignatures(cfg.Channels), "\n")
+
+	cfg.Channels.Get(config.ChannelTelegram).CommandsEnabled = boolPointer(false)
+	after := strings.Join(computeChannelSignatures(cfg.Channels), "\n")
+
+	if before == after {
+		t.Fatal("channel signatures should change when commands_enabled changes")
+	}
+}
+
 func TestGatewayStatusRequiresRestartAfterWebSearchConfigChange(t *testing.T) {
 	resetGatewayTestState(t)
 

@@ -32,6 +32,10 @@ func (al *AgentLoop) handleCommand(
 		return "", false
 	}
 
+	if !al.commandsEnabledForChannel(msg.Channel) {
+		return commandsDisabledReply, true
+	}
+
 	if matched, handled, reply := al.applyExplicitSkillCommand(msg.Content, agent, opts); matched {
 		return reply, handled
 	}
@@ -51,7 +55,7 @@ func (al *AgentLoop) handleCommand(
 		return "", false
 	}
 
-	rt := al.buildCommandsRuntime(ctx, agent, opts)
+	rt := al.buildCommandsRuntime(ctx, agent, opts, msg.Channel)
 	executor := commands.NewExecutor(al.cmdRegistry, rt)
 
 	var commandReply string
@@ -78,6 +82,20 @@ func (al *AgentLoop) handleCommand(
 	default: // OutcomePassthrough — let the message fall through to LLM
 		return "", false
 	}
+}
+
+const commandsDisabledReply = "Commands are disabled for this channel."
+
+func (al *AgentLoop) commandsEnabledForChannel(channel string) bool {
+	cfg := al.GetConfig()
+	if cfg == nil {
+		return true
+	}
+	channelCfg := cfg.Channels.GetForInbound(channel)
+	if channelCfg == nil {
+		return true
+	}
+	return channelCfg.CommandsAreEnabled()
 }
 
 // expandCustomCommand rewrites a user-defined prompt command into its expanded
@@ -178,18 +196,21 @@ func (al *AgentLoop) resolveCustomCommand(
 
 // commandDefinitions returns built-in commands plus custom command metadata for
 // help output and command palettes.
-func (al *AgentLoop) commandDefinitions(agent *AgentInstance) []commands.Definition {
+func (al *AgentLoop) commandDefinitions(agent *AgentInstance, channel string) []commands.Definition {
+	if !al.commandsEnabledForChannel(channel) {
+		return nil
+	}
 	defs := commands.BuiltinDefinitions()
 	if al.cmdRegistry != nil {
 		defs = al.cmdRegistry.Definitions()
 	}
-	if agent == nil || strings.TrimSpace(agent.Workspace) == "" {
-		return defs
+	if agent != nil && strings.TrimSpace(agent.Workspace) != "" {
+		defs = commands.MergeCustomCommandDefinitions(
+			defs,
+			commands.LoadCustomCommands(agent.Workspace),
+		)
 	}
-	return commands.MergeCustomCommandDefinitions(
-		defs,
-		commands.LoadCustomCommands(agent.Workspace),
-	)
+	return defs
 }
 
 func (al *AgentLoop) applyExplicitSkillCommand(
@@ -255,6 +276,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 	ctx context.Context,
 	agent *AgentInstance,
 	opts *processOptions,
+	channel string,
 ) *commands.Runtime {
 	normalizeProcessOptionsInPlace(opts)
 
@@ -265,7 +287,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 		VoiceMode:    al.voiceMode(opts.Dispatch.SessionKey),
 		ListAgentIDs: registry.ListAgentIDs,
 		ListDefinitions: func() []commands.Definition {
-			return al.commandDefinitions(agent)
+			return al.commandDefinitions(agent, channel)
 		},
 		ListMCPServers: func(ctx context.Context) []commands.MCPServerInfo {
 			if cfg == nil {

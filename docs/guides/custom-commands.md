@@ -140,6 +140,8 @@ command metadata:
 
 The Web UI slash suggestions and command palette also list workspace custom
 commands. Reload the page if the Web UI was already open when you added a file.
+Setting a channel's `commands_enabled` to `false` also hides and blocks custom
+commands on that configured channel; see [Enable or Disable All Commands on One Channel](configuration.md#enable-or-disable-all-commands-on-one-channel).
 
 Telegram's bot command menu includes custom commands whose names are compatible
 with Telegram: lowercase letters, digits, and underscores, up to 32 characters.
