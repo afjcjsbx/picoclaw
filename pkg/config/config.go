@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,12 @@ import (
 
 // rrCounter is a global counter for round-robin load balancing across models.
 var rrCounter atomic.Uint64
+
+// configLoadMu keeps the process-wide credential resolver bound to the config
+// directory for the entire load. SecureString unmarshaling has no context
+// parameter, so concurrent loads from different directories would otherwise
+// resolve file:// credentials against each other's resolver.
+var configLoadMu sync.Mutex
 
 // CurrentVersion is the latest config schema version
 const CurrentVersion = 3
@@ -1969,6 +1976,9 @@ func (c *MCPConfig) GetMaxInlineTextChars() int {
 }
 
 func LoadConfig(path string) (*Config, error) {
+	configLoadMu.Lock()
+	defer configLoadMu.Unlock()
+
 	updateResolver(filepath.Dir(path))
 
 	data, err := os.ReadFile(path)

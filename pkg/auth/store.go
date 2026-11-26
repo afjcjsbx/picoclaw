@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -25,6 +26,8 @@ type AuthCredential struct {
 type AuthStore struct {
 	Credentials map[string]*AuthCredential `json:"credentials"`
 }
+
+var authStoreMu sync.Mutex
 
 const (
 	providerGoogleAntigravity = "google-antigravity"
@@ -210,6 +213,9 @@ func GetCredential(provider string) (*AuthCredential, error) {
 }
 
 func SetCredential(provider string, cred *AuthCredential) error {
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
 	store, err := LoadStore()
 	if err != nil {
 		return err
@@ -229,6 +235,9 @@ func SetCredential(provider string, cred *AuthCredential) error {
 }
 
 func DeleteCredential(provider string) error {
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
 	store, err := LoadStore()
 	if err != nil {
 		return err
@@ -238,6 +247,9 @@ func DeleteCredential(provider string) error {
 }
 
 func DeleteAllCredentials() error {
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
 	path := authFilePath()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
