@@ -243,8 +243,10 @@ picoclaw gateway
 
 PicoClaw can connect to WhatsApp in two ways:
 
-- **Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Set `"use_native": true` and leave `bridge_url` empty. On first run, scan the QR code with WhatsApp (Linked Devices). Session is stored under your workspace (e.g. `workspace/whatsapp/`). The native channel is **optional** to keep the default binary small; build with `-tags whatsapp_native` (e.g. `make build-whatsapp-native` or `go build -tags whatsapp_native ./cmd/...`).
-- **Bridge:** Connect to an external WebSocket bridge. Set `bridge_url` (e.g. `ws://localhost:3001`) and keep `use_native` false.
+- **Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Set `"type": "whatsapp_native"` and `"settings": {"use_native": true}`, and leave `bridge_url` empty. On first run, scan the QR code with WhatsApp (Linked Devices). Session is stored under your workspace (e.g. `workspace/whatsapp/`). The native channel is **optional** to keep the default binary small; build with `-tags whatsapp_native` (e.g. `make build-whatsapp-native` or `go build -tags whatsapp_native ./cmd/...`).
+- **Bridge:** Connect to an external WebSocket bridge. Keep `"type": "whatsapp"`, set `settings.bridge_url` (e.g. `ws://localhost:3001`), and keep `settings.use_native` false.
+
+The `channel_list` key remains `whatsapp` in both modes. The `type` field selects the implementation; setting `use_native` alone does not switch an existing `type: "whatsapp"` entry to native mode.
 
 **Configure (native)**
 
@@ -253,10 +255,12 @@ PicoClaw can connect to WhatsApp in two ways:
   "channel_list": {
     "whatsapp": {
       "enabled": true,
-      "type": "whatsapp",
-      "use_native": true,
-      "session_store_path": "",
-      "allow_from": []
+      "type": "whatsapp_native",
+      "allow_from": [],
+      "settings": {
+        "use_native": true,
+        "session_store_path": ""
+      }
     }
   }
 }

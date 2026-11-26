@@ -237,8 +237,10 @@ picoclaw gateway
 
 PicoClaw 支持两种 WhatsApp 连接方式：
 
-- **原生（推荐）：** 进程内使用 [whatsmeow](https://github.com/tulir/whatsmeow)，无需独立 Bridge。设置 `"use_native": true` 并留空 `bridge_url`。首次运行时用 WhatsApp 扫描 QR 码（关联设备）。会话存储在工作区下（如 `workspace/whatsapp/`）。原生渠道为**可选**构建，使用 `-tags whatsapp_native` 编译（如 `make build-whatsapp-native` 或 `go build -tags whatsapp_native ./cmd/...`）。
-- **Bridge：** 连接外部 WebSocket Bridge。设置 `bridge_url`（如 `ws://localhost:3001`），保持 `use_native` 为 false。
+- **原生（推荐）：** 进程内使用 [whatsmeow](https://github.com/tulir/whatsmeow)，无需独立 Bridge。设置 `"type": "whatsapp_native"` 和 `"settings": {"use_native": true}`，并留空 `bridge_url`。首次运行时用 WhatsApp 扫描 QR 码（关联设备）。会话存储在工作区下（如 `workspace/whatsapp/`）。原生渠道为**可选**构建，使用 `-tags whatsapp_native` 编译（如 `make build-whatsapp-native` 或 `go build -tags whatsapp_native ./cmd/...`）。
+- **Bridge：** 连接外部 WebSocket Bridge。保持 `"type": "whatsapp"`，设置 `settings.bridge_url`（如 `ws://localhost:3001`），并保持 `settings.use_native` 为 false。
+
+两种模式都使用 `whatsapp` 作为 `channel_list` 的键。`type` 字段决定实现；对于已有的 `type: "whatsapp"` 配置，仅设置 `use_native` 不会切换到原生模式。
 
 **配置（原生）**
 
@@ -247,10 +249,12 @@ PicoClaw 支持两种 WhatsApp 连接方式：
   "channel_list": {
     "whatsapp": {
       "enabled": true,
-      "type": "whatsapp",
-      "use_native": true,
-      "session_store_path": "",
-      "allow_from": []
+      "type": "whatsapp_native",
+      "allow_from": [],
+      "settings": {
+        "use_native": true,
+        "session_store_path": ""
+      }
     }
   }
 }
