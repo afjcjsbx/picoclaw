@@ -50,17 +50,29 @@ In practice, each suite gives us:
 - automatic cleanup after the run
 - a clean place to encode the exact regression we want to prevent
 
-## Current Reference Suite
+## Current Suites
 
-[`integration/suites/mcp-streamable/`](suites/mcp-streamable/) is the reference example today.
+The runner auto-discovers every directory under `integration/suites/`.
 
-It does three things:
+### `mcp-streamable`
 
-- builds and starts a fixture MCP server from [`integration/fixtures/mcp-streamable-server/`](fixtures/mcp-streamable-server/)
+This is the reference MCP transport suite. It:
+
+- builds and starts the fixture MCP server from [`integration/fixtures/mcp-streamable-server/`](fixtures/mcp-streamable-server/)
 - injects connection details into the runner container through environment variables
 - runs [`TestIntegration_RealConfiguredServer`](../pkg/mcp/manager_real_server_integration_test.go) to verify that PicoClaw can connect to a real server, discover tools, invoke one, and validate the response payload
 
 That suite complements [`TestIntegration_StreamableHTTPCompatibility`](../pkg/mcp/manager_integration_test.go), which exercises the same area in-process. Together they cover both protocol behavior and real service wiring.
+
+### `gateway-stack`
+
+This suite exercises the gateway runtime wiring with real PicoClaw components and local fake transports. [`TestIntegration_GatewayStack`](../pkg/gateway/gateway_stack_integration_test.go) starts:
+
+- an OpenAI-compatible HTTP provider fixture;
+- a OneBot WebSocket fixture;
+- the real channel manager, message bus, agent loop, and gateway service setup.
+
+It sends an inbound OneBot message, verifies the provider request, and waits for the assistant response to return through OneBot. No external network or credentials are required.
 
 ## Suite Layout
 
