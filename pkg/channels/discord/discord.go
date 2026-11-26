@@ -548,6 +548,9 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 	if m == nil || m.Author == nil {
 		return
 	}
+	if m.GuildID == "" && c.config != nil && !c.config.DMAllowed() {
+		return
+	}
 
 	if m.Author.ID == s.State.User.ID {
 		return

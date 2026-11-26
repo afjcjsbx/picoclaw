@@ -187,7 +187,8 @@
       "reasoning_channel_id": "",
       "settings": {
         "token": "YOUR_DISCORD_BOT_TOKEN",
-        "proxy": ""
+        "proxy": "",
+        "allow_dm": true
       }
     },
     "qq": {

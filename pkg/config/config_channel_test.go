@@ -773,6 +773,40 @@ channels:
 	assert.Equal(t, "DISCORD_TOKEN_FROM_YAML", disc.Token.String())
 }
 
+func TestDiscordSettings_DMAllowed(t *testing.T) {
+	t.Run("unset preserves default", func(t *testing.T) {
+		settings := DiscordSettings{}
+		assert.True(t, settings.DMAllowed())
+	})
+
+	t.Run("explicit false blocks DMs", func(t *testing.T) {
+		allow := false
+		settings := DiscordSettings{AllowDM: &allow}
+		assert.False(t, settings.DMAllowed())
+	})
+
+	t.Run("explicit true allows DMs", func(t *testing.T) {
+		allow := true
+		settings := DiscordSettings{AllowDM: &allow}
+		assert.True(t, settings.DMAllowed())
+	})
+}
+
+func TestChannel_DiscordAllowDMDecode(t *testing.T) {
+	var channel Channel
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"enabled": true,
+		"type": "discord",
+		"settings": {"allow_dm": false}
+	}`), &channel))
+
+	var settings DiscordSettings
+	require.NoError(t, channel.Decode(&settings))
+	require.NotNil(t, settings.AllowDM)
+	assert.False(t, *settings.AllowDM)
+	assert.False(t, settings.DMAllowed())
+}
+
 // ═══════════════════════════════════════════════════
 //  removeSecureFields / filterSecureFields unit tests
 // ═══════════════════════════════════════════════════

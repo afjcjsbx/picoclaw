@@ -158,6 +158,9 @@ func (c *DiscordChannel) handleInteractionCreate(s *discordgo.Session, i *discor
 	if i == nil || i.Type != discordgo.InteractionApplicationCommand {
 		return
 	}
+	if i.GuildID == "" && c.config != nil && !c.config.DMAllowed() {
+		return
+	}
 	data := i.ApplicationCommandData()
 	if strings.TrimSpace(data.Name) == "" {
 		return

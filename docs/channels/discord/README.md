@@ -34,7 +34,8 @@ Discord is a free voice, video, and text chat application designed for communiti
       },
       "reasoning_channel_id": "",
       "settings": {
-        "proxy": ""
+        "proxy": "",
+        "allow_dm": true
       }
     }
   }
@@ -50,6 +51,9 @@ Discord is a free voice, video, and text chat application designed for communiti
 | group_trigger        | object | No       | Group trigger settings (example: { "mention_only": false })                 |
 | reasoning_channel_id | string | No       | Optional target channel ID for reasoning/thinking output                    |
 | proxy                | string | No       | HTTP/SOCKS5 proxy URL for the Discord connection (e.g. `http://127.0.0.1:7890`). Env: `PICOCLAW_CHANNELS_DISCORD_PROXY` |
+| allow_dm             | bool   | No       | Whether the bot accepts direct messages and DM slash commands. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_DM` |
+
+Set `allow_dm` to `false` to make the bot ignore direct messages and DM interactions while continuing to handle mentions in guild channels.
 
 ## Visible Execution Feedback
 
