@@ -349,8 +349,8 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	senderID := evt.Info.Sender.String()
 	chatID := evt.Info.Chat.String()
 	content := evt.Message.GetConversation()
-	if content == "" && evt.Message.ExtendedTextMessage != nil {
-		content = evt.Message.ExtendedTextMessage.GetText()
+	if content == "" && evt.Message.GetExtendedTextMessage() != nil {
+		content = evt.Message.GetExtendedTextMessage().GetText()
 	}
 	content = utils.SanitizeMessageContent(content)
 

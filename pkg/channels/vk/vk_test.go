@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/SevereCloud/vksdk/v3/object"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -166,66 +168,72 @@ func TestVKChannel_SplitMessage(t *testing.T) {
 func TestVKChannel_ProcessAttachments(t *testing.T) {
 	tests := []struct {
 		name        string
-		attachments []string
+		attachments []object.MessagesMessageAttachment
 		want        string
 	}{
 		{
-			name:        "empty attachments",
-			attachments: []string{},
-			want:        "",
+			name: "empty attachments",
+			want: "",
 		},
 		{
 			name:        "photo attachment",
-			attachments: []string{"photo"},
+			attachments: []object.MessagesMessageAttachment{{Type: "photo"}},
 			want:        "[photo]",
 		},
 		{
 			name:        "video attachment",
-			attachments: []string{"video"},
+			attachments: []object.MessagesMessageAttachment{{Type: "video"}},
 			want:        "[video]",
 		},
 		{
 			name:        "audio attachment",
-			attachments: []string{"audio"},
+			attachments: []object.MessagesMessageAttachment{{Type: "audio"}},
 			want:        "[audio]",
 		},
 		{
-			name:        "document attachment",
-			attachments: []string{"doc"},
-			want:        "[doc]",
+			name:        "document without title",
+			attachments: []object.MessagesMessageAttachment{{Type: "doc"}},
+			want:        "[document]",
+		},
+		{
+			name: "document with title",
+			attachments: []object.MessagesMessageAttachment{{
+				Type: "doc",
+				Doc:  object.DocsDoc{Title: "report.pdf"},
+			}},
+			want: "[document: report.pdf]",
 		},
 		{
 			name:        "sticker attachment",
-			attachments: []string{"sticker"},
+			attachments: []object.MessagesMessageAttachment{{Type: "sticker"}},
 			want:        "[sticker]",
 		},
 		{
 			name:        "audio_message attachment",
-			attachments: []string{"audio_message"},
+			attachments: []object.MessagesMessageAttachment{{Type: "audio_message"}},
 			want:        "[voice]",
 		},
 		{
-			name:        "multiple attachments",
-			attachments: []string{"photo", "video", "audio"},
-			want:        "[photo] [video] [audio]",
+			name: "multiple attachments",
+			attachments: []object.MessagesMessageAttachment{
+				{Type: "photo"},
+				{Type: "video"},
+				{Type: "audio"},
+			},
+			want: "[photo] [video] [audio]",
+		},
+		{
+			name:        "unsupported attachment is ignored",
+			attachments: []object.MessagesMessageAttachment{{Type: "gift"}, {Type: "photo"}},
+			want:        "[photo]",
 		},
 	}
 
+	ch := &VKChannel{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var result string
-			for i, att := range tt.attachments {
-				if i > 0 {
-					result += " "
-				}
-				if att == "audio_message" {
-					result += "[voice]"
-				} else {
-					result += "[" + att + "]"
-				}
-			}
-			if result != tt.want {
-				t.Errorf("processAttachments() = %q, want %q", result, tt.want)
+			if got := ch.processAttachments(tt.attachments); got != tt.want {
+				t.Errorf("processAttachments() = %q, want %q", got, tt.want)
 			}
 		})
 	}
