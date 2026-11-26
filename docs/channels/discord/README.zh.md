@@ -18,6 +18,7 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
       "type": "discord",
       "token": "YOUR_BOT_TOKEN",
       "allow_from": ["YOUR_USER_ID"],
+      "commands_enabled": true,
       "group_trigger": {
         "mention_only": false
       },
@@ -34,10 +35,13 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
 | enabled      | bool   | 是   | 是否启用 Discord 频道            |
 | token        | string | 是   | Discord 机器人 Token             |
 | allow_from   | array  | 否   | 用户ID白名单，空表示允许所有用户 |
+| commands_enabled | bool | 否 | 是否启用此频道的斜杠命令。设为 `false` 会清空 Discord 命令菜单，并由 Agent 拒绝所有斜杠命令，默认为 `true` |
 | group_trigger | object | 否   | 群组触发设置（示例: { "mention_only": false }） |
 | allow_dm      | bool   | 否   | 是否接受私信和 DM 中的斜杠命令，默认为 `true`。环境变量：`PICOCLAW_CHANNELS_DISCORD_ALLOW_DM` |
 
 将 `allow_dm` 设置为 `false` 后，机器人会忽略私信和 DM 中的交互，同时继续处理服务器频道中的提及。
+
+将 `commands_enabled` 设置为 `false` 后，启动时会清空 Discord 斜杠命令菜单，并由 Agent 拒绝所有斜杠命令。此设置作用于整个 Discord 集成，而不是单个服务器或文本频道。
 
 ## 设置流程
 
