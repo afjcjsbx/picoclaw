@@ -1,0 +1,33 @@
+name: PR Code Statistics
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-code-stats-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Analyze pull request
+        uses: afjcjsbx/pr-code-stats@9a3a499cb911ae0d6073b8c8835959bd3a5fa0dc # v0.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
