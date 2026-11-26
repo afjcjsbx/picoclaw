@@ -1199,8 +1199,8 @@ Schema:
 | --- | --- | --- | --- |
 | `pattern` | string, required | none | FTS5 query, or LIKE if it contains `%` |
 | `scope` | `both`, `summary`, `message` | `both` | Which tables to search |
-| `role` | `user`, `assistant` | all | Applied to messages only |
-| `all_conversations` | boolean | false | **No effect** in the current implementation |
+| `role` | string | all | Message role filter: `user`, `assistant`, `tool`, or `system` |
+| `all_conversations` | boolean | false | `false` scopes the search to the current session; `true` searches every conversation in the shared database |
 | `since` | RFC3339 string | none | Lower time bound |
 | `before` | RFC3339 string | none | Upper time bound |
 | `last` | `6h`, `7d`, `2w`, `1m` | none | Relative lower bound, overrides `since` |
@@ -1210,8 +1210,9 @@ Schema:
 (lowercase, months are 30 days). It does not accept spaces, decimals, uppercase
 units, or years.
 
-An unrecognized `scope` value is not rejected. It matches neither branch, so the
-tool returns `success: true`, empty result arrays, and the "no matches" hint.
+Invalid `scope` or `role` values are rejected. When `all_conversations` is false
+and the current session cannot be resolved, the tool returns an empty result
+instead of widening the search.
 
 Search mode:
 
@@ -1229,8 +1230,7 @@ LIMIT semantics:
 - `limit == 0` becomes 20.
 - A positive limit is applied per scope, so a `both` search can return up to
   2 × limit rows.
-- A negative limit is not validated. The store only adds `LIMIT` when the value
-  is positive, so a negative limit returns all matching rows.
+- A negative limit is rejected by the tool. Values above 100 are clamped to 100.
 
 FTS5 query handling (`SanitizeFTS5Query`):
 
@@ -1310,37 +1310,43 @@ Notes:
 - The pattern is limited to 4096 bytes; `scope` and `role` are validated; a
   negative `limit` is rejected and values above 100 are clamped to 100. There is
   still no overall token cap.
-- The hint suggests `all_conversations`, which has no effect.
+- The hint suggests `all_conversations`, which performs a global search when
+  explicitly enabled.
 
-#### Conversation scoping defect
+#### Conversation scoping
 
-`GrepInput` has no conversation ID, and `RetrievalEngine.Grep` never sets
-`SearchInput.ConversationID`. The store therefore searches **all conversations**
-for every call. `all_conversations` is a no-op, and the documented default
-"current conversation only" is not implemented.
+By default, `short_grep` resolves the current conversation from the tool session
+key and passes its ID to the store. Both FTS5 and LIKE queries then add a
+`conversation_id` filter. If the session cannot be resolved, the tool returns an
+empty result rather than searching globally.
 
-Impact:
-
-- A model in one session can retrieve content from every other session,
-  including other users, channels, and agents that share the database.
-- `conversationId` is returned, but the model has no session key to interpret
-  it.
-- The privacy boundary is the process, not the conversation.
+Setting `all_conversations: true` intentionally removes that filter. The flag is
+part of the model-visible tool schema and is not guarded by a principal, tenant,
+or ownership check. A model caller can therefore request content from any
+indexed session in the shared database, including sessions belonging to other
+users, channels, or agents. The privacy boundary for global retrieval is the
+process/database, not the current conversation.
 
 ### `short_expand`
 
-Schema: `message_ids`, an array of strings. The implementation also accepts
-numbers, because the parser handles both `string` and `float64`.
+Schema: `message_ids`, an array of strings, plus an optional
+`all_conversations` boolean that defaults to false. The implementation also
+accepts numeric IDs, because the parser handles both `string` and `float64`.
 
 Behavior:
 
 1. Requires a non-empty array. Otherwise returns an error result.
 2. Parses each ID. Invalid strings return an error; non-string, non-number
    values are silently ignored.
-3. Fetches each message by global ID. Missing IDs are silently skipped.
-4. Preserves input order and duplicates.
-5. Sums stored `token_count` for found messages.
-6. Returns `success`, `tokenCount`, and `messages`.
+3. Unless `all_conversations` is true, resolves the current conversation from
+   the tool session key. An unknown session returns an error.
+4. Fetches each message by global ID. Missing IDs are silently skipped.
+5. In the default mode, rejects IDs outside the current conversation and reports
+   them in `rejectedMessageIds`. With `all_conversations: true`, accepts IDs from
+   any conversation in the database.
+6. Preserves input order and duplicates.
+7. Sums stored `token_count` for found messages.
+8. Returns `success`, `tokenCount`, `messages`, and `rejectedMessageIds`.
 
 Each message includes:
 
@@ -1362,8 +1368,10 @@ Important behavior:
   `[tool_result for ID: text]` string, so the text is still exposed.
 - `ReasoningContent` is stored but not included in the tool output.
 - There is no cap on the number of IDs or on returned tokens.
-- Any message ID in the database can be fetched, regardless of conversation.
-  This includes messages from other sessions and agents.
+- By default, IDs outside the current conversation are rejected. With
+  `all_conversations: true`, any message ID in the database can be fetched,
+  including messages from other sessions and agents. This global mode has no
+  principal, tenant, or ownership check.
 - Media MIME is empty for messages ingested through the agent adapter, because
   the adapter does not copy MIME into the media part.
 - Media URIs can reveal filesystem paths or internal references.
@@ -1571,7 +1579,7 @@ migration otherwise falls back to legacy and leaves the file in place.
 | `context_manager: seahorse` but memory behaves like legacy | Factory failed and fell back | Check the gateway log for "Failed to create context manager" |
 | Gateway takes minutes to become ready | Synchronous bootstrap of many large sessions | Enable pruning, reduce session count or history size |
 | `short_grep` returns nothing for a short query | Trigram FTS needs at least 3 characters; short queries use the slower unranked LIKE path | Use a longer pattern or `%..%` |
-| `short_grep` returns content from other chats | Conversation scoping is not implemented | Treat the database as process-wide; restrict access |
+| `short_grep` returns content from other chats | `all_conversations: true` was requested, or the database was accessed outside the tool scope | Remove global retrieval capability for untrusted users; treat the database as process-wide |
 | `/compact` says "A compaction is already running" | Async condensed loop holds the dedup slot | Retry after the loop finishes |
 | No new summaries despite a long chat | Fewer than 8 contiguous messages outside the 32-item fresh tail, or one huge message blocking the scan | Continue the conversation; compaction will catch up |
 | Database grows despite compaction | Compaction never deletes raw rows | Enable pruning or accept the disk cost |
@@ -1625,7 +1633,7 @@ the work when it has something to delete.
 | Condensed target | 2000 tokens |
 | Fallback summary | 2048 bytes |
 | Compact iterations | 20 per `CompactUntilUnder` |
-| Search results | 20 per scope by default, negative limit unbounded |
+| Search results | 20 per scope by default; tool rejects negative limits and clamps values above 100 |
 | Expand results | Unbounded |
 | Database connections | 2 |
 | Busy timeout | 5 seconds |
@@ -1638,11 +1646,13 @@ trust domain as the JSONL session files.
 
 Key points:
 
-- **Cross-conversation retrieval.** `short_grep` searches every conversation and
-  `short_expand` fetches any message ID. Any agent using the shared manager can
-  read any indexed session, including sessions of other agents, channels, and
-  users sharing the process. This is the most important privacy property to
-  understand before enabling Seahorse on a multi-user deployment.
+- **Cross-conversation retrieval.** Both tools default to the current
+  conversation. However, `all_conversations: true` is model-visible and has no
+  principal, tenant, or ownership check. In that mode `short_grep` searches
+  every conversation and `short_expand` fetches any message ID in the shared
+  database, including sessions of other agents, channels, and users. Treat global
+  retrieval as a privileged process-wide capability before enabling Seahorse on
+  a multi-user deployment.
 - **No encryption at rest.** The database is protected only by filesystem
   permissions. The directory is created with `0755`; the file mode follows the
   process umask, which is commonly `0644`. Other local users may be able to read
@@ -1700,18 +1710,19 @@ can decide whether they matter for a deployment.
 
 ### Retrieval and isolation
 
-1. **`short_grep` is not scoped to the current conversation.**
-   `GrepInput` has no conversation field and `RetrievalEngine.Grep` never sets
-   `SearchInput.ConversationID`. `all_conversations` is a no-op. Impact:
-   cross-session and cross-agent content disclosure.
-2. **`short_expand` accepts any message ID.**
-   There is no conversation check and no ownership check. Summary IDs from
-   `short_grep` cannot be expanded at all. Impact: the same disclosure as above,
-   plus unbounded output and no way to drill into a summary.
-3. **Tool descriptions overstate capabilities.**
-   `short_grep` documents `AND`/`OR`/`NOT` and current-conversation defaults that
-   the implementation does not provide. The heavy-compression warning references
-   a `describe` tool that does not exist.
+1. **Global retrieval is not authorization-scoped.**
+   Both tools default to the current conversation, but `all_conversations: true`
+   removes that filter without checking a principal, tenant, or owner. Impact:
+   cross-session and cross-agent content disclosure in multi-user deployments.
+2. **`short_expand` accepts any message ID in global mode.**
+   The default mode rejects out-of-conversation IDs, but global mode has no
+   ownership check. Summary IDs from `short_grep` cannot be expanded at all.
+   Impact: the same disclosure as above, plus unbounded output and no way to
+   drill into a summary.
+3. **Tool descriptions overstate query syntax.**
+   `short_grep` documents `AND`/`OR`/`NOT` operators, but the implementation
+   treats them as literal text. The heavy-compression warning references a
+   `describe` tool that does not exist.
 4. **Search time filters use summary creation time.**
    `since` and `before` filter `summaries.created_at`, not the time range the
    summary covers. A summary of last week's messages created today is treated as
