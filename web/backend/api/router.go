@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sipeed/picoclaw/pkg/updater"
 	"github.com/sipeed/picoclaw/web/backend/launcherconfig"
 )
 
@@ -30,6 +31,7 @@ type Handler struct {
 	weixinFlows map[string]*weixinFlow
 	wecomMu     sync.Mutex
 	wecomFlows  map[string]*wecomFlow
+	updateSelf  func(releaseURL, platform, arch, programName string) error
 }
 
 // NewHandler creates an instance of the API handler.
@@ -42,6 +44,7 @@ func NewHandler(configPath string) *Handler {
 		oauthState:                 make(map[string]string),
 		weixinFlows:                make(map[string]*weixinFlow),
 		wecomFlows:                 make(map[string]*wecomFlow),
+		updateSelf:                 updater.UpdateSelfFromRelease,
 	}
 }
 

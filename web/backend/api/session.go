@@ -1197,11 +1197,24 @@ func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	base := filepath.Join(dir, sanitizeSessionKey(key))
 	created := time.Now().UTC()
 	messages := parent.Messages[:cut+1]
+	meta := memory.SessionMeta{
+		Key: key, Summary: parent.Summary, Count: len(messages),
+		CreatedAt: created, UpdatedAt: created, ForkedFrom: parentID,
+		ForkIndex: request.MessageIndex, ForkTitle: transcript[request.MessageIndex].Content,
+		ForkDepth: parent.ForkDepth + 1,
+	}
+	if err := writeForkSession(base, messages, meta); err != nil {
+		http.Error(w, "failed to save fork", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"id": id, "forked_from": parentID, "fork_index": request.MessageIndex})
+}
 
+func writeForkSession(base string, messages []providers.Message, meta memory.SessionMeta) error {
 	file, err := os.OpenFile(base+".jsonl", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		http.Error(w, "failed to create fork", http.StatusInternalServerError)
-		return
+		return err
 	}
 	encoder := json.NewEncoder(file)
 	for _, msg := range messages {
@@ -1213,12 +1226,6 @@ func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = closeErr
 	}
-	meta := memory.SessionMeta{
-		Key: key, Summary: parent.Summary, Count: len(messages),
-		CreatedAt: created, UpdatedAt: created, ForkedFrom: parentID,
-		ForkIndex: request.MessageIndex, ForkTitle: transcript[request.MessageIndex].Content,
-		ForkDepth: parent.ForkDepth + 1,
-	}
 	metaData, metaErr := json.Marshal(meta)
 	if err == nil && metaErr == nil {
 		err = os.WriteFile(base+".meta.json", metaData, 0o600)
@@ -1228,11 +1235,8 @@ func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		_ = os.Remove(base + ".jsonl")
 		_ = os.Remove(base + ".meta.json")
-		http.Error(w, "failed to save fork", http.StatusInternalServerError)
-		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"id": id, "forked_from": parentID, "fork_index": request.MessageIndex})
+	return err
 }
 
 // handleDeleteSession deletes a specific session.
