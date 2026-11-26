@@ -544,7 +544,7 @@ Slash commands work in interactive CLI mode and in connected chat channels:
 | `/reload` | Reload the configuration file. |
 | `/<name> [arguments]` | Run a [custom prompt command](docs/guides/custom-commands.md) from the workspace or global `commands/` directory. |
 
-Use `/help <command>` for usage details. Availability depends on the channel; unsupported commands return an explicit error.
+Use `/help <command>` for usage details. To disable all commands on one configured channel, set `channel_list.<name>.commands_enabled` to `false`; it defaults to `true`. Disabled commands are hidden from command menus and return an explicit notice when invoked.
 
 ### Custom prompt commands
 
@@ -571,7 +571,7 @@ Invoke it like any other command:
 | No placeholder | Appends non-empty arguments after a blank line. |
 | `description` frontmatter | Shown in `/help` and the Web UI command palette. |
 
-Workspace commands override global commands with the same name, while built-in commands always win. Custom commands appear in `/help` on every channel; the Web UI, Telegram, and Discord also list compatible names in their command menus. See [Custom Prompt Commands](docs/guides/custom-commands.md) for precedence, examples, and limitations.
+Workspace commands override global commands with the same name, while built-in commands always win. Custom commands appear in `/help` unless disabled on that channel; the Web UI, Telegram, and Discord also list compatible names in their command menus. See [Custom Prompt Commands](docs/guides/custom-commands.md) for precedence, examples, and limitations.
 
 ### Scheduled tasks and reminders
 

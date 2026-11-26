@@ -105,6 +105,7 @@ func TestChannel_JSON_Unmarshal(t *testing.T) {
 		"enabled": true,
 		"type": "telegram",
 		"allow_from": ["user1", "user2"],
+		"commands_enabled": false,
 		"reasoning_channel_id": "-100xxx",
 		"settings": {
 			"base_url": "https://custom-api.example.com",
@@ -120,6 +121,9 @@ func TestChannel_JSON_Unmarshal(t *testing.T) {
 	assert.True(t, ch.Enabled)
 	assert.Equal(t, "telegram", ch.Type)
 	assert.Equal(t, FlexibleStringSlice{"user1", "user2"}, ch.AllowFrom)
+	assert.False(t, ch.CommandsAreEnabled())
+	require.NotNil(t, ch.CommandsEnabled)
+	assert.False(t, *ch.CommandsEnabled)
 	assert.Equal(t, "-100xxx", ch.ReasoningChannelID)
 	assert.False(t, ch.SettingsIsEmpty())
 
@@ -132,6 +136,36 @@ func TestChannel_JSON_Unmarshal(t *testing.T) {
 	assert.Equal(t, 2, cfg.Streaming.ThrottleSeconds)
 	// SecureString.UnmarshalJSON("[NOT_HERE]") → no-op → empty
 	assert.Equal(t, "", cfg.Token.String())
+}
+
+func TestChannelsConfig_GetForInboundResolvesUniqueType(t *testing.T) {
+	channels := ChannelsConfig{
+		"work-telegram": {Enabled: true, Type: ChannelTelegram},
+		"work-discord":  {Enabled: true, Type: ChannelDiscord},
+		"other-discord": {Enabled: true, Type: ChannelDiscord},
+	}
+
+	if got := channels.GetForInbound("work-telegram"); got != channels["work-telegram"] {
+		t.Fatalf("GetForInbound(work-telegram) = %#v, want exact entry", got)
+	}
+	if got := channels.GetForInbound(ChannelTelegram); got != channels["work-telegram"] {
+		t.Fatalf("GetForInbound(telegram) = %#v, want unique type entry", got)
+	}
+	if got := channels.GetForInbound(ChannelDiscord); got != nil {
+		t.Fatalf("GetForInbound(discord) = %#v, want nil for ambiguous type", got)
+	}
+}
+
+func TestChannel_CommandsAreEnabledDefaultsTrue(t *testing.T) {
+	var ch Channel
+	assert.True(t, ch.CommandsAreEnabled())
+
+	enabled := true
+	ch.CommandsEnabled = &enabled
+	assert.True(t, ch.CommandsAreEnabled())
+
+	enabled = false
+	assert.False(t, ch.CommandsAreEnabled())
 }
 
 func TestStreamingConfig_IsChannelGeneric(t *testing.T) {
@@ -312,10 +346,12 @@ func TestInitChannelList_RejectsNegativeStreamingDeliveryValues(t *testing.T) {
 // ═══════════════════════════════════════════════════
 
 func TestChannel_JSON_Marshal_SecureMasked(t *testing.T) {
+	disabled := false
 	ch := Channel{
-		Enabled: true,
-		Type:    ChannelTelegram,
-		name:    "my_telegram",
+		Enabled:         true,
+		Type:            ChannelTelegram,
+		name:            "my_telegram",
+		CommandsEnabled: &disabled,
 		Settings: mustParseRawNode(
 			`{"base_url": "https://api.telegram.org", "proxy": "socks5://127.0.0.1:1080", "token": "123456:SECRET"}`,
 		),
@@ -333,6 +369,7 @@ func TestChannel_JSON_Marshal_SecureMasked(t *testing.T) {
 	assert.NotContains(t, string(data), "SECRET")
 	assert.Contains(t, string(data), "base_url")
 	assert.Contains(t, string(data), "proxy")
+	assert.Contains(t, string(data), `"commands_enabled": false`)
 }
 
 func TestChannel_JSON_Marshal_OmitsUnconfiguredStreaming(t *testing.T) {

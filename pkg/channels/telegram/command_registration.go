@@ -38,6 +38,9 @@ func commandRegistrationDelay(attempt int) time.Duration {
 
 // RegisterCommands registers bot commands on Telegram platform.
 func (c *TelegramChannel) RegisterCommands(ctx context.Context, defs []commands.Definition) error {
+	if !c.commandsEnabled() {
+		defs = nil
+	}
 	botCommands := telegramBotCommands(defs)
 
 	current, err := c.bot.GetMyCommands(ctx, &telego.GetMyCommandsParams{})
@@ -115,10 +118,6 @@ func truncateTelegramCommandDescription(description string) string {
 }
 
 func (c *TelegramChannel) startCommandRegistration(ctx context.Context, defs []commands.Definition) {
-	if len(defs) == 0 {
-		return
-	}
-
 	register := c.registerFunc
 	if register == nil {
 		register = c.RegisterCommands

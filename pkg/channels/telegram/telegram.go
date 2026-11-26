@@ -223,12 +223,19 @@ func telegramMediaGroupDelay(telegramCfg *config.TelegramSettings) time.Duration
 }
 
 func (c *TelegramChannel) commandDefinitions() []commands.Definition {
+	if !c.commandsEnabled() {
+		return nil
+	}
 	if c.commandDefs != nil {
 		if defs := c.commandDefs(); len(defs) > 0 {
 			return defs
 		}
 	}
 	return commands.BuiltinDefinitions()
+}
+
+func (c *TelegramChannel) commandsEnabled() bool {
+	return c.bc == nil || c.bc.CommandsAreEnabled()
 }
 
 func (c *TelegramChannel) Start(ctx context.Context) error {
@@ -1128,9 +1135,17 @@ func telegramClearMediaCaptions(msg bus.OutboundMediaMessage) bus.OutboundMediaM
 
 func (c *TelegramChannel) handleCallbackQuery(ctx context.Context, query telego.CallbackQuery) error {
 	if kind, value, ok := telegramSkillCallback(query.Data); ok {
+		if !c.commandAvailable("use") {
+			c.answerCallbackQuery(ctx, query.ID, "Command not available.", true)
+			return nil
+		}
 		return c.handleSkillCallback(ctx, query, kind, value)
 	}
 	if kind, value, ok := telegramModelCallback(query.Data); ok {
+		if !c.commandAvailable("switch") {
+			c.answerCallbackQuery(ctx, query.ID, "Command not available.", true)
+			return nil
+		}
 		return c.handleModelCallback(ctx, query, kind, value)
 	}
 

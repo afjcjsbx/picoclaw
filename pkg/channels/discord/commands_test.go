@@ -8,6 +8,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/sipeed/picoclaw/pkg/commands"
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 func TestDiscordBotCommands_FiltersAndNormalizes(t *testing.T) {
@@ -86,6 +87,20 @@ func TestDiscordCommandDefinitions_FallsBackToBuiltins(t *testing.T) {
 	ch := &DiscordChannel{}
 	if got := ch.commandDefinitions(); len(got) != len(commands.BuiltinDefinitions()) {
 		t.Fatalf("commandDefinitions() = %d, want %d", len(got), len(commands.BuiltinDefinitions()))
+	}
+}
+
+func TestDiscordCommandDefinitions_EmptyWhenCommandsDisabled(t *testing.T) {
+	disabled := false
+	ch := &DiscordChannel{
+		bc: &config.Channel{CommandsEnabled: &disabled},
+	}
+
+	if got := ch.commandDefinitions(); len(got) != 0 {
+		t.Fatalf("commandDefinitions() = %+v, want empty", got)
+	}
+	if got := (&DiscordChannel{}).commandDefinitions(); len(got) == 0 {
+		t.Fatal("default channel should keep commands enabled")
 	}
 }
 

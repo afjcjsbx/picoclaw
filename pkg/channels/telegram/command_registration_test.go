@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/commands"
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 func TestTelegramBotCommands_FiltersAndNormalizes(t *testing.T) {
@@ -80,6 +81,42 @@ func TestTelegramCommandDefinitions_FallsBackToBuiltins(t *testing.T) {
 	ch := &TelegramChannel{}
 	if got := ch.commandDefinitions(); len(got) != len(commands.BuiltinDefinitions()) {
 		t.Fatalf("commandDefinitions() = %d, want %d", len(got), len(commands.BuiltinDefinitions()))
+	}
+}
+
+func TestTelegramCommandDefinitions_EmptyWhenCommandsDisabled(t *testing.T) {
+	disabled := false
+	ch := &TelegramChannel{
+		bc: &config.Channel{CommandsEnabled: &disabled},
+	}
+
+	if got := ch.commandDefinitions(); len(got) != 0 {
+		t.Fatalf("commandDefinitions() = %+v, want empty", got)
+	}
+	if got := (&TelegramChannel{}).commandDefinitions(); len(got) == 0 {
+		t.Fatal("default channel should keep commands enabled")
+	}
+}
+
+func TestStartCommandRegistration_RegistersEmptyCommandSet(t *testing.T) {
+	ch := &TelegramChannel{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registered := make(chan []commands.Definition, 1)
+	ch.registerFunc = func(_ context.Context, defs []commands.Definition) error {
+		registered <- defs
+		return nil
+	}
+	ch.startCommandRegistration(ctx, nil)
+
+	select {
+	case defs := <-registered:
+		if len(defs) != 0 {
+			t.Fatalf("registered definitions = %+v, want empty set", defs)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("empty command set was not registered")
 	}
 }
 

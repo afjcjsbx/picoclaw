@@ -98,7 +98,11 @@ func NewDiscordChannel(
 	if err := applyDiscordProxy(session, cfg.Proxy); err != nil {
 		return nil, err
 	}
-	base := channels.NewBaseChannel("discord", cfg, bus, bc.AllowFrom,
+	channelName := bc.Name()
+	if channelName == "" {
+		channelName = "discord"
+	}
+	base := channels.NewBaseChannel(channelName, cfg, bus, bc.AllowFrom,
 		channels.WithMaxMessageLength(2000),
 		channels.WithGroupTrigger(bc.GroupTrigger),
 		channels.WithReasoningChannelID(bc.ReasoningChannelID),

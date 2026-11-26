@@ -250,7 +250,8 @@ func TestMigrateV1ToV3(t *testing.T) {
 		"channels": {
 			"telegram": {
 				"token": "bot-token",
-				"base_url": "https://custom.api.com"
+				"base_url": "https://custom.api.com",
+				"commands_enabled": false
 			},
 			"discord": {
 				"mention_only": true,
@@ -285,7 +286,9 @@ func TestMigrateV1ToV3(t *testing.T) {
 	// telegram: flat fields moved to settings
 	telegram := channelList["telegram"].(map[string]any)
 	require.Equal(t, "telegram", telegram["type"])
+	require.Equal(t, false, telegram["commands_enabled"])
 	tgSettings := telegram["settings"].(map[string]any)
+	require.NotContains(t, tgSettings, "commands_enabled")
 	require.Equal(t, "bot-token", tgSettings["token"])
 	require.Equal(t, "https://custom.api.com", tgSettings["base_url"])
 

@@ -226,15 +226,22 @@ func (r *RawNode) IsEmpty() bool {
 //nolint:recvcheck
 type Channel struct {
 	name               string
-	Enabled            bool                `json:"enabled"                 yaml:"-"`
-	Type               string              `json:"type"                    yaml:"-"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"    yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    yaml:"-"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"        yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
-	Settings           RawNode             `json:"settings,omitzero"       yaml:"settings,omitempty"`
+	Enabled            bool                `json:"enabled"                    yaml:"-"`
+	Type               string              `json:"type"                       yaml:"-"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"       yaml:"-"`
+	CommandsEnabled    *bool               `json:"commands_enabled,omitempty" yaml:"-"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"       yaml:"-"`
+	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"    yaml:"-"`
+	Typing             TypingConfig        `json:"typing,omitempty"           yaml:"-"`
+	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"      yaml:"-"`
+	Settings           RawNode             `json:"settings,omitzero"          yaml:"settings,omitempty"`
 	extend             any
+}
+
+// CommandsAreEnabled reports whether slash commands are enabled for this
+// channel. An omitted value preserves the historical default of enabled.
+func (c *Channel) CommandsAreEnabled() bool {
+	return c == nil || c.CommandsEnabled == nil || *c.CommandsEnabled
 }
 
 // MarshalJSON implements json.Marshaler for Channel.
@@ -484,6 +491,39 @@ func (c ChannelsConfig) Get(name string) *Channel {
 	return c[name]
 }
 
+// GetForInbound resolves a channel config for an inbound channel name. It
+// prefers the configured map key and falls back to a unique enabled entry of
+// the same type, which covers adapters that publish their type name instead
+// of a custom configured name. Ambiguous multi-instance types return nil.
+func (c ChannelsConfig) GetForInbound(name string) *Channel {
+	if channel := c.Get(name); channel != nil {
+		return channel
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+
+	var match *Channel
+	for _, channel := range c {
+		if channel == nil || !channel.Enabled {
+			continue
+		}
+		channelType := channel.Type
+		if channelType == "" {
+			channelType = channel.Name()
+		}
+		if channelType != name {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = channel
+	}
+	return match
+}
+
 // GetByType returns the Channel for the given channel type, or nil if not found.
 func (c ChannelsConfig) GetByType(t string) *Channel {
 	if c == nil {
@@ -544,6 +584,7 @@ var BaseFieldNames = map[string]struct{}{
 	"enabled":              {},
 	"type":                 {},
 	"allow_from":           {},
+	"commands_enabled":     {},
 	"reasoning_channel_id": {},
 	"group_trigger":        {},
 	"typing":               {},

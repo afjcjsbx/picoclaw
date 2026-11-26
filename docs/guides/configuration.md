@@ -232,11 +232,41 @@ dammi le ultime news
 
 ### Unified Command Execution Policy
 
-- Generic slash commands are executed through a single path in `pkg/agent/loop.go` via `commands.Executor`.
+- Generic slash commands are executed through a single path in the agent loop via `commands.Executor`.
 - Channel adapters no longer consume generic commands locally; they forward inbound text to the bus/agent path. Telegram still auto-registers supported commands such as `/start`, `/help`, `/show`, `/list`, `/use` at startup.
 - Custom prompt commands from `<workspace>/commands/` and `<PICOCLAW_HOME>/commands/` are expanded into a user prompt and continue through the normal agent turn. See [Custom Prompt Commands](custom-commands.md).
-- Unknown slash command (for example `/foo`) passes through to normal LLM processing.
-- Registered but unsupported command on the current channel (for example `/show` on WhatsApp) returns an explicit user-facing error and stops further processing.
+- Unknown slash commands (for example `/foo`) pass through to normal LLM processing.
+
+#### Enable or Disable All Commands on One Channel
+
+Set `commands_enabled` to `false` on a `channel_list` entry to disable every slash command for that configured channel. The option is binary: all commands are enabled or all commands are disabled. An omitted value defaults to `true`.
+
+```json
+{
+  "channel_list": {
+    "telegram": {
+      "enabled": true,
+      "type": "telegram",
+      "commands_enabled": false,
+      "settings": {
+        "token": "YOUR_TELEGRAM_BOT_TOKEN"
+      }
+    },
+    "discord": {
+      "enabled": true,
+      "type": "discord",
+      "commands_enabled": true,
+      "settings": {
+        "token": "YOUR_DISCORD_BOT_TOKEN"
+      }
+    }
+  }
+}
+```
+
+When disabled, built-in commands, aliases, custom prompt commands, and `/stop` during an active turn are rejected with an explicit notice. The commands are removed from `/help`, the Web UI command palette when applicable, and Telegram/Discord command menus. Normal chat messages continue to work, and other configured channels are unaffected.
+
+This setting applies to the whole `channel_list.<name>` integration, not to an individual group, thread, or Discord text channel. Use the channel `allow_from` list when you need to restrict who can interact with the channel.
 
 ### Session Isolation
 

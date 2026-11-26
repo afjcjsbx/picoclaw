@@ -28,6 +28,8 @@ func TestHandleGetChannelConfig_ReturnsSecretPresenceWithoutLeakingSecrets(t *te
 	bcfg.AppID = "cli_test_app"
 	bcfg.AppSecret = *config.NewSecureString("feishu-secret-from-security")
 	bc.AllowFrom = config.FlexibleStringSlice{"ou_test_user"}
+	commandsDisabled := false
+	bc.CommandsEnabled = &commandsDisabled
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -74,6 +76,9 @@ func TestHandleGetChannelConfig_ReturnsSecretPresenceWithoutLeakingSecrets(t *te
 	allowFrom, ok := resp.Config["allow_from"].([]any)
 	if !ok || len(allowFrom) != 1 || allowFrom[0] != "ou_test_user" {
 		t.Fatalf("config.allow_from = %#v, want [\"ou_test_user\"]", resp.Config["allow_from"])
+	}
+	if got := resp.Config["commands_enabled"]; got != false {
+		t.Fatalf("config.commands_enabled = %#v, want false", got)
 	}
 	if _, exists := resp.Config["app_secret"]; exists {
 		t.Fatalf("config should omit app_secret, got %#v", resp.Config["app_secret"])

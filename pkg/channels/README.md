@@ -790,8 +790,9 @@ When the Agent finishes processing a message, Manager's `preSend` automatically:
 #### Add configuration entry
 
 Channels now use a unified map-based configuration (`map[string]*config.Channel`).
-Each channel entry stores common fields (`enabled`, `type`, `allow_from`, etc.) at
-the top level, with channel-specific settings in the `settings` sub-key:
+Each channel entry stores common fields (`enabled`, `type`, `allow_from`,
+`commands_enabled`, etc.) at the top level, with channel-specific settings in
+the `settings` sub-key:
 
 ```json
 {
@@ -800,6 +801,7 @@ the top level, with channel-specific settings in the `settings` sub-key:
       "enabled": true,
       "type": "matrix",
       "allow_from": ["@user:example.com"],
+      "commands_enabled": false,
       "settings": {
         "home_server": "https://matrix.org",
         "user_id": "@bot:example.com",

@@ -52,6 +52,45 @@ func TestHandleListCommands(t *testing.T) {
 	}
 }
 
+func TestHandleListCommands_EmptyWhenPicoCommandsDisabled(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.Channels.Get(config.ChannelPico).CommandsEnabled = boolPointer(false)
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/commands", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp slashCommandsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	byCommand := make(map[string]slashCommandItem, len(resp.Commands))
+	for _, item := range resp.Commands {
+		byCommand[item.Command] = item
+	}
+	if len(resp.Commands) != 0 {
+		t.Fatalf("commands = %+v, want empty palette", resp.Commands)
+	}
+}
+
+func boolPointer(value bool) *bool {
+	return &value
+}
+
 func TestHandleListCommands_IncludesWorkspaceCustomCommands(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

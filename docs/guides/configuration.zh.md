@@ -196,11 +196,41 @@ dammi le ultime news
 
 ### 统一命令执行策略
 
-- 通用斜杠命令通过 `pkg/agent/loop.go` 中的 `commands.Executor` 统一执行。
+- 通用斜杠命令通过 Agent 循环中的 `commands.Executor` 统一执行。
 - Channel 适配器不再在本地消费通用命令；它们只负责把入站文本转发到 bus/agent 路径。Telegram 仍会在启动时自动注册其支持的命令菜单，例如 `/start`、`/help`、`/show`、`/list`、`/use`。
 - 来自 `<workspace>/commands/` 和 `<PICOCLAW_HOME>/commands/` 的自定义提示词命令会展开为用户提示词，并继续走正常的 Agent 回合。详见 [Custom Prompt Commands](custom-commands.md)。
 - 未注册的斜杠命令（例如 `/foo`）会透传给 LLM 按普通输入处理。
-- 已注册但当前 channel 不支持的命令（例如 WhatsApp 上的 `/show`）会返回明确的用户可见错误，并停止后续处理。
+
+#### 在单个 Channel 上启用或禁用全部命令
+
+在 `channel_list` 的某个频道配置中将 `commands_enabled` 设为 `false`，即可禁用该已配置频道的所有斜杠命令。该选项是二元的：要么全部启用，要么全部禁用。省略时默认值为 `true`。
+
+```json
+{
+  "channel_list": {
+    "telegram": {
+      "enabled": true,
+      "type": "telegram",
+      "commands_enabled": false,
+      "settings": {
+        "token": "YOUR_TELEGRAM_BOT_TOKEN"
+      }
+    },
+    "discord": {
+      "enabled": true,
+      "type": "discord",
+      "commands_enabled": true,
+      "settings": {
+        "token": "YOUR_DISCORD_BOT_TOKEN"
+      }
+    }
+  }
+}
+```
+
+禁用后，内置命令、别名、自定义提示词命令以及活跃回合中的 `/stop` 都会返回明确提示并被拒绝。这些命令还会从 `/help`、Web UI 命令面板（如适用）以及 Telegram/Discord 命令菜单中隐藏。普通聊天消息仍可正常使用，其他已配置频道不受影响。
+
+此设置作用于整个 `channel_list.<name>` 集成，而不是单个群组、线程或 Discord 文本频道。如果需要限制谁可以与频道交互，请使用该频道的 `allow_from` 列表。
 
 ### Session 隔离
 

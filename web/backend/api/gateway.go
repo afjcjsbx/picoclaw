@@ -722,6 +722,7 @@ func computeChannelSignatures(channels config.ChannelsConfig) []string {
 			Enabled            bool                       `json:"enabled"`
 			Type               string                     `json:"type"`
 			AllowFrom          config.FlexibleStringSlice `json:"allow_from,omitempty"`
+			CommandsEnabled    bool                       `json:"commands_enabled"`
 			ReasoningChannelID string                     `json:"reasoning_channel_id,omitempty"`
 			GroupTrigger       config.GroupTriggerConfig  `json:"group_trigger,omitempty"`
 			Typing             config.TypingConfig        `json:"typing,omitempty"`
@@ -731,6 +732,7 @@ func computeChannelSignatures(channels config.ChannelsConfig) []string {
 			Enabled:            channel.Enabled,
 			Type:               channel.Type,
 			AllowFrom:          channel.AllowFrom,
+			CommandsEnabled:    channel.CommandsAreEnabled(),
 			ReasoningChannelID: channel.ReasoningChannelID,
 			GroupTrigger:       channel.GroupTrigger,
 			Typing:             channel.Typing,

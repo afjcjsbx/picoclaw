@@ -18,6 +18,10 @@ func (al *AgentLoop) tryHandleStopCommand(
 	if !ok || cmdName != "stop" {
 		return false
 	}
+	if !al.commandsEnabledForChannel(msg.Channel) {
+		al.publishActiveTurnCommandReply(ctx, msg, sessionKey, commandsDisabledReply)
+		return true
+	}
 
 	result, err := al.stopActiveTurnForSession(sessionKey)
 

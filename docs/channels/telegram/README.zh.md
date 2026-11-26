@@ -47,7 +47,7 @@ Telegram 频道支持消息表情回应（reaction）。收到消息时，网关
 
 ## 内置命令
 
-Telegram 会在启动时自动注册 PicoClaw 的顶级 Bot 命令，包括 `/start`、`/help`、`/show`、`/list` 和 `/use`。
+Telegram 会在启动时自动注册 PicoClaw 的顶级 Bot 命令，包括 `/start`、`/help`、`/show`、`/list` 和 `/use`。将 `channel_list.telegram.commands_enabled` 设为 `false` 会清空菜单，并由 Agent 拒绝所有斜杠命令。
 
 与技能相关的命令：
 
