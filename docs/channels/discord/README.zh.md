@@ -20,6 +20,9 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
       "allow_from": ["YOUR_USER_ID"],
       "group_trigger": {
         "mention_only": false
+      },
+      "settings": {
+        "allow_dm": true
       }
     }
   }
@@ -32,6 +35,9 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
 | token        | string | 是   | Discord 机器人 Token             |
 | allow_from   | array  | 否   | 用户ID白名单，空表示允许所有用户 |
 | group_trigger | object | 否   | 群组触发设置（示例: { "mention_only": false }） |
+| allow_dm      | bool   | 否   | 是否接受私信和 DM 中的斜杠命令，默认为 `true`。环境变量：`PICOCLAW_CHANNELS_DISCORD_ALLOW_DM` |
+
+将 `allow_dm` 设置为 `false` 后，机器人会忽略私信和 DM 中的交互，同时继续处理服务器频道中的提及。
 
 ## 设置流程
 

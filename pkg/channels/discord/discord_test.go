@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 type stubTTSProvider struct{}
@@ -333,4 +334,23 @@ func TestSend_NonToolFeedbackFinalizerStillStartsTTS(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected TTS to start for finalized tracked tool feedback reply")
 	}
+}
+
+func TestHandleMessage_IgnoresDirectMessagesWhenDisabled(t *testing.T) {
+	allowDM := false
+	ch := &DiscordChannel{config: &config.DiscordSettings{AllowDM: &allowDM}}
+	ch.handleMessage(nil, &discordgo.MessageCreate{Message: &discordgo.Message{
+		GuildID: "",
+		Author:  &discordgo.User{ID: "user-1"},
+		Content: "hello",
+	}})
+}
+
+func TestHandleInteractionCreate_IgnoresDirectMessagesWhenDisabled(t *testing.T) {
+	allowDM := false
+	ch := &DiscordChannel{config: &config.DiscordSettings{AllowDM: &allowDM}}
+	ch.handleInteractionCreate(nil, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		Type:    discordgo.InteractionApplicationCommand,
+		GuildID: "",
+	}})
 }

@@ -930,8 +930,15 @@ type FeishuSettings struct {
 }
 
 type DiscordSettings struct {
-	Token SecureString `json:"token,omitzero" yaml:"token,omitempty" env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
-	Proxy string       `json:"proxy"          yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
+	Token   SecureString `json:"token,omitzero"     yaml:"token,omitempty" env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
+	Proxy   string       `json:"proxy"              yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
+	AllowDM *bool        `json:"allow_dm,omitempty" yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_DM"`
+}
+
+// DMAllowed reports whether the Discord channel accepts direct messages.
+// An unset value preserves the historical default of allowing DMs.
+func (c DiscordSettings) DMAllowed() bool {
+	return c.AllowDM == nil || *c.AllowDM
 }
 
 type MaixCamSettings struct {
