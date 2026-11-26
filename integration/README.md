@@ -64,16 +64,6 @@ This is the reference MCP transport suite. It:
 
 That suite complements [`TestIntegration_StreamableHTTPCompatibility`](../pkg/mcp/manager_integration_test.go), which exercises the same area in-process. Together they cover both protocol behavior and real service wiring.
 
-### `gateway-stack`
-
-This suite exercises the gateway runtime wiring with real PicoClaw components and local fake transports. [`TestIntegration_GatewayStack`](../pkg/gateway/gateway_stack_integration_test.go) starts:
-
-- an OpenAI-compatible HTTP provider fixture;
-- a OneBot WebSocket fixture;
-- the real channel manager, message bus, agent loop, and gateway service setup.
-
-It sends an inbound OneBot message, verifies the provider request, and waits for the assistant response to return through OneBot. No external network or credentials are required.
-
 ## Suite Layout
 
 Each suite directory must contain:
