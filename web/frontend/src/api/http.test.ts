@@ -68,6 +68,69 @@ describe("launcherFetch", () => {
     expect(await result.text()).toBe("unauthorized")
   })
 
+  it("redirects JSON 401 responses to the launcher login", async () => {
+    const assign = vi.fn()
+    vi.stubGlobal("location", {
+      pathname: "/",
+      href: "http://localhost/",
+      assign,
+    })
+    const response = new Response(`{"error":"unauthorized"}`, {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response))
+
+    await expect(launcherFetch("/api/models")).resolves.toBe(response)
+    expect(assign).toHaveBeenCalledOnce()
+    expect(assign).toHaveBeenCalledWith("/launcher-login")
+  })
+
+  it.each(["/launcher-login", "/launcher-setup"])(
+    "does not redirect JSON 401 responses on %s",
+    async (pathname) => {
+      const assign = vi.fn()
+      vi.stubGlobal("location", {
+        pathname,
+        href: `http://localhost${pathname}`,
+        assign,
+      })
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(`{"error":"unauthorized"}`, {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      )
+
+      await launcherFetch("/api/auth/status")
+      expect(assign).not.toHaveBeenCalled()
+    },
+  )
+
+  it("does not redirect non-JSON 401 responses", async () => {
+    const assign = vi.fn()
+    vi.stubGlobal("location", {
+      pathname: "/",
+      href: "http://localhost/",
+      assign,
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("unauthorized", {
+          status: 401,
+          headers: { "content-type": "text/plain" },
+        }),
+      ),
+    )
+
+    await launcherFetch("/api/models")
+    expect(assign).not.toHaveBeenCalled()
+  })
+
   it("propagates network errors", async () => {
     vi.stubGlobal(
       "fetch",

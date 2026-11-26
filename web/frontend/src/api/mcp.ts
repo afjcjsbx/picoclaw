@@ -43,6 +43,14 @@ export function redactMCPText(value: string | undefined): string {
   if (!value) return ""
   return value
     .replace(
+      /\b(?:bearer\s+[a-z0-9._~+/=-]{8,})\b/gi,
+      REDACTED,
+    )
+    .replace(
+      /(?:jdbc:)?(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|mssql|sqlserver):\/\/[^\s]+/gi,
+      REDACTED,
+    )
+    .replace(
       /((?:api[_-]?key|token|secret|auth(?:orization)?|pass(?:word)?|pwd|credential|dsn|database[_-]?url|db[_-]?(?:url|uri)|connection[_-]?(?:string|uri)|postgres(?:ql)?[_-]?url|mongo(?:db)?[_-]?uri|redis[_-]?url)\s*[=:]\s*)([^\s,;&]+)/gi,
       `$1${REDACTED}`,
     )
@@ -51,13 +59,24 @@ export function redactMCPText(value: string | undefined): string {
       `$1${REDACTED}`,
     )
     .replace(
-      /\b(?:sk-[a-z0-9_-]{4,}|gh[pousr]_[a-z0-9_]{8,}|bearer\s+[a-z0-9._~+/=-]{8,})\b/gi,
+      /\b(?:sk-[a-z0-9_-]{4,}|gh[pousr]_[a-z0-9_]{8,})\b/gi,
       REDACTED,
     )
-    .replace(
-      /(?:jdbc:)?(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|mssql|sqlserver):\/\/[^\s]+/gi,
-      REDACTED,
-    )
+}
+
+function redactMCPArgs(args: string[]): string[] {
+  const redacted = args.map(redactMCPText)
+  for (let i = 0; i + 1 < redacted.length; i++) {
+    if (
+      /^--?[^\s=]*(?:key|token|secret|auth|pass|pwd|credential|dsn|database[_-]?url|db[_-]?(?:url|uri)|connection[_-]?(?:string|uri)|postgres(?:ql)?[_-]?url|mongo(?:db)?[_-]?uri|redis[_-]?url)[^\s=]*$/i.test(
+        redacted[i],
+      ) &&
+      !redacted[i+1].startsWith("--")
+    ) {
+      redacted[i+1] = REDACTED
+    }
+  }
+  return redacted
 }
 
 function sanitizeResponse(data: MCPDashboardResponse): MCPDashboardResponse {
@@ -68,7 +87,7 @@ function sanitizeResponse(data: MCPDashboardResponse): MCPDashboardResponse {
       transport: redactMCPText(server.transport),
       command: redactMCPText(server.command),
       launch_command: redactMCPText(server.launch_command),
-      args: (server.args ?? []).map(redactMCPText),
+      args: redactMCPArgs(server.args ?? []),
       error: redactMCPText(server.error),
       tools: (server.tools ?? []).map((tool) => ({
         ...tool,
