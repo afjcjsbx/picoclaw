@@ -1,6 +1,7 @@
 ---
 description: "Discord is a free voice, video, and text chat application designed for communities."
 ---
+
 > Back to [README](https://github.com/afjcjsbx/picoclaw/blob/main/README.md)
 
 # Discord
@@ -23,7 +24,6 @@ Discord is a free voice, video, and text chat application designed for communiti
     "discord": {
       "enabled": true,
       "type": "discord",
-      "token": "YOUR_BOT_TOKEN",
       "allow_from": ["YOUR_USER_ID"],
       "commands_enabled": true,
       "placeholder": {
@@ -35,33 +35,61 @@ Discord is a free voice, video, and text chat application designed for communiti
       },
       "reasoning_channel_id": "",
       "settings": {
+        "token": "YOUR_BOT_TOKEN",
         "proxy": "",
         "allow_dm": true,
-        "allow_attachments": true
+        "allow_attachments": true,
+        "channel_ids": ["YOUR_ENABLED_CHANNEL_ID"]
       }
     }
   }
 }
 ```
 
-| Field                | Type   | Required | Description                                                                 |
-| -------------------- | ------ | -------- | --------------------------------------------------------------------------- |
-| enabled              | bool   | Yes      | Whether to enable the Discord channel                                       |
-| token                | string | Yes      | Discord Bot Token                                                           |
-| allow_from           | array  | No       | Allowlist of user IDs; empty means all users are allowed                    |
-| commands_enabled     | bool   | No       | Whether slash commands are enabled on this channel; set to `false` to clear the Discord command menu and reject all slash commands. Defaults to `true` |
-| placeholder          | object | No       | Placeholder message config shown while the agent is working                 |
-| group_trigger        | object | No       | Group trigger settings (example: { "mention_only": false })                 |
-| reasoning_channel_id | string | No       | Optional target channel ID for reasoning/thinking output                    |
-| proxy                | string | No       | HTTP/SOCKS5 proxy URL for the Discord connection (e.g. `http://127.0.0.1:7890`). Env: `PICOCLAW_CHANNELS_DISCORD_PROXY` |
-| allow_dm             | bool   | No       | Whether the bot accepts direct messages and DM slash commands. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_DM` |
-| allow_attachments    | bool   | No       | Whether inbound attachments are downloaded and processed. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS` |
+| Field                      | Type   | Required | Description                                                                                                                                            |
+| -------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| enabled                    | bool   | Yes      | Whether to enable the Discord channel                                                                                                                  |
+| settings.token             | string | Yes      | Discord Bot Token                                                                                                                                      |
+| allow_from                 | array  | No       | Allowlist of user IDs; empty means all users are allowed                                                                                               |
+| commands_enabled           | bool   | No       | Whether slash commands are enabled on this channel; set to `false` to clear the Discord command menu and reject all slash commands. Defaults to `true` |
+| placeholder                | object | No       | Placeholder message config shown while the agent is working                                                                                            |
+| group_trigger              | object | No       | Group trigger settings (example: { "mention_only": false })                                                                                            |
+| reasoning_channel_id       | string | No       | Optional target channel ID for reasoning/thinking output                                                                                               |
+| settings.proxy             | string | No       | HTTP/SOCKS5 proxy URL for the Discord connection (e.g. `http://127.0.0.1:7890`). Env: `PICOCLAW_CHANNELS_DISCORD_PROXY`                                |
+| settings.allow_dm          | bool   | No       | Whether the bot accepts direct messages and DM slash commands. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_DM`                           |
+| settings.allow_attachments | bool   | No       | Whether inbound attachments are downloaded and processed. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS`                       |
+| settings.channel_ids       | array  | No       | Allowlist of Discord server channel IDs where PicoClaw may respond; empty means all server channels                                                    |
 
 Set `allow_dm` to `false` to make the bot ignore direct messages and DM interactions while continuing to handle mentions in guild channels.
 
 Set `allow_attachments` to `false` to ignore files sent to the bot. Attachments are not downloaded or forwarded to the agent, while message text is still processed. Attachment-only messages are ignored.
 
 Set `commands_enabled` to `false` to clear the Discord slash command menu at startup and make the agent reject all slash commands. The setting applies to the whole Discord integration, not to an individual guild or text channel.
+
+## Restrict responses to selected channels
+
+Use `settings.channel_ids` as an allowlist of Discord server channels where PicoClaw may respond. `group_trigger` still controls how a message triggers a response:
+
+```json
+{
+  "group_trigger": {
+    "mention_only": false
+  },
+  "settings": {
+    "channel_ids": ["123456789012345678", "234567890123456789"]
+  }
+}
+```
+
+With this configuration, PicoClaw responds only in the two listed channels and responds automatically without a mention.
+
+- Unlisted server channels are ignored, even when the bot is mentioned.
+- Set `mention_only: true` to require explicit mentions in listed channels.
+- Configured trigger prefixes still apply in listed channels.
+- Direct messages are unaffected by `channel_ids`; `settings.allow_dm` controls whether they are accepted.
+- An empty or omitted `channel_ids` list allows all server channels; `group_trigger` still applies.
+
+Use Discord channel IDs, not channel names. Enable Developer Mode in Discord, then right-click a channel and choose **Copy Channel ID**. The list can also be set with `PICOCLAW_CHANNELS_DISCORD_CHANNEL_IDS` as comma-separated IDs.
 
 ## Visible Execution Feedback
 

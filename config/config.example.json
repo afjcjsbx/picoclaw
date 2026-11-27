@@ -190,7 +190,8 @@
       "settings": {
         "token": "YOUR_DISCORD_BOT_TOKEN",
         "proxy": "",
-        "allow_dm": true
+        "allow_dm": true,
+        "channel_ids": []
       }
     },
     "qq": {

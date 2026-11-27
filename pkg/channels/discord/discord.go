@@ -548,6 +548,26 @@ func appendContent(content, suffix string) string {
 	return content + "\n" + suffix
 }
 
+func (c *DiscordChannel) shouldRespondInGuildChannel(
+	channelID string,
+	isMentioned bool,
+	content string,
+) (bool, string) {
+	if c.config != nil && len(c.config.ChannelIDs) > 0 {
+		allowed := false
+		for _, id := range c.config.ChannelIDs {
+			if strings.TrimSpace(id) == channelID {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false, content
+		}
+	}
+	return c.ShouldRespondInGroup(isMentioned, content)
+}
+
 func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m == nil || m.Author == nil {
 		return
@@ -598,10 +618,12 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 			}
 		}
 		content = c.stripBotMention(content)
-		respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
+		respond, cleaned := c.shouldRespondInGuildChannel(m.ChannelID, isMentioned, content)
 		if !respond {
-			logger.DebugCF("discord", "Group message ignored by group trigger", map[string]any{
-				"user_id": m.Author.ID,
+			logger.DebugCF("discord", "Guild message ignored", map[string]any{
+				"user_id":    m.Author.ID,
+				"channel_id": m.ChannelID,
+				"mentioned":  isMentioned,
 			})
 			return
 		}
