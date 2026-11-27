@@ -1099,6 +1099,15 @@ func (c *PicoChannel) broadcastSessionActivity(sessionID string, msg PicoMessage
 		return
 	}
 
+	// Tool cards are content updates, not turn lifecycle signals. Plugin hooks
+	// can publish them after the final response, so forwarding them as generic
+	// message activity would incorrectly mark a completed session as running.
+	kind, _ := msg.Payload[PayloadKeyKind].(string)
+	if strings.EqualFold(strings.TrimSpace(kind), MessageKindToolCalls) ||
+		strings.EqualFold(strings.TrimSpace(kind), MessageKindToolResult) {
+		return
+	}
+
 	payload := map[string]any{
 		PayloadKeyEvent: msg.Type,
 	}

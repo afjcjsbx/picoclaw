@@ -1037,6 +1037,29 @@ func TestBroadcastToSession_SendsActivityToAllSessionsObserver(t *testing.T) {
 	}
 }
 
+func TestBroadcastToSession_ToolCardsDoNotEmitSessionActivity(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{
+		id:        "observer",
+		conn:      observerConn,
+		sessionID: allSessionsSessionID,
+	})
+
+	for _, kind := range []string{MessageKindToolCalls, MessageKindToolResult} {
+		_ = ch.broadcastToSession("pico:s-target", newMessage(TypeMessageCreate, map[string]any{
+			PayloadKeyKind: kind,
+		}))
+	}
+
+	select {
+	case activity := <-observerMessages:
+		t.Fatalf("tool card emitted session activity: %+v", activity)
+	default:
+	}
+}
+
 func TestStartTyping_EmitsActivityWithoutSessionClient(t *testing.T) {
 	ch := newTestPicoChannel(t)
 	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)
