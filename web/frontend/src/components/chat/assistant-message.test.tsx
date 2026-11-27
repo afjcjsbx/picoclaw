@@ -53,6 +53,35 @@ describe("AssistantMessage activity", () => {
       screen.getByRole("button", { name: /Read file a.txt/ }),
     ).toHaveAttribute("aria-expanded", "false")
   })
+
+  it("renders namespaced plugin tools like other tool calls", () => {
+    render(
+      <AssistantMessage
+        content=""
+        kind="tool_calls"
+        toolCalls={[
+          {
+            id: "plugin-1",
+            function: {
+              name: "mem0:add_memory",
+              arguments: '{"text":"saved"}',
+            },
+            input: '{\n  "text": "saved"\n}',
+            output: '{"event_id":"saved"}',
+          },
+        ]}
+      />,
+    )
+
+    const trigger = screen.getByRole("button", { name: "mem0 add memory" })
+    expect(trigger).toHaveAttribute("aria-expanded", "false")
+    fireEvent.click(trigger)
+
+    expect(screen.getByText("chat.toolInputLabel")).toBeInTheDocument()
+    expect(screen.getByText("chat.toolOutputLabel")).toBeInTheDocument()
+    expect(screen.getByText(/"text": "saved"/)).toBeInTheDocument()
+    expect(screen.getByText('{"event_id":"saved"}')).toBeInTheDocument()
+  })
 })
 
 describe("AssistantMessage actions", () => {

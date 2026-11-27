@@ -21,6 +21,7 @@ import (
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/plugins"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 func agentPluginFixture(t *testing.T, cfg *config.Config, url string) string {
@@ -315,7 +316,11 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 			mu.Lock()
 			adds = append(adds, in)
 			mu.Unlock()
-			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: `{"event_id":"saved"}`}}}, nil, nil
+			return &sdk.CallToolResult{
+				Content: []sdk.Content{&sdk.TextContent{
+					Text: `{"event_id":"saved","echo":"test-mem0-token"}`,
+				}},
+			}, nil, nil
 		},
 	)
 	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
@@ -527,9 +532,67 @@ drainFeedback:
 		t.Fatalf("suppressed turn published tool feedback: %+v", msg)
 	default:
 	}
+
+	picoSession := "mem0-pico-session"
+	picoChat := "pico:" + picoSession
+	if err := captureHook.OnRuntimeEvent(ctx, runtimeevents.Event{
+		Kind: runtimeevents.KindAgentTurnEnd,
+		Scope: runtimeevents.Scope{
+			AgentID: agentID, SessionKey: picoSession, Channel: "pico", ChatID: picoChat,
+		},
+		Payload: TurnEndPayload{
+			Status:       TurnEndStatusCompleted,
+			UserMessage:  "remember this test-mem0-token",
+			FinalContent: "saved in pico",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var picoActivity []bus.OutboundMessage
+drainPicoActivity:
+	for {
+		select {
+		case msg := <-msgBus.OutboundChan():
+			picoActivity = append(picoActivity, msg)
+		default:
+			break drainPicoActivity
+		}
+	}
+	if len(picoActivity) != 2 {
+		t.Fatalf("pico MCP activity count = %d, want tool call and result: %+v", len(picoActivity), picoActivity)
+	}
+	toolCall := picoActivity[0]
+	toolResult := picoActivity[1]
+	if toolCall.Context.Raw[metadataKeyMessageKind] != messageKindToolCalls ||
+		toolResult.Context.Raw[metadataKeyMessageKind] != messageKindToolResult ||
+		toolCall.Channel != "pico" || toolCall.ChatID != picoChat {
+		t.Fatalf("unexpected pico MCP activity: call=%+v result=%+v", toolCall, toolResult)
+	}
+	var visibleCalls []utils.VisibleToolCall
+	if err := json.Unmarshal([]byte(toolCall.Context.Raw[metadataKeyToolCalls]), &visibleCalls); err != nil {
+		t.Fatal(err)
+	}
+	if len(visibleCalls) != 1 || visibleCalls[0].Function == nil ||
+		visibleCalls[0].Function.Name != "mem0:add_memory" ||
+		!strings.Contains(visibleCalls[0].Input, "saved in pico") {
+		t.Fatalf("unexpected pico MCP tool call: %+v", visibleCalls)
+	}
+	if toolResult.Context.Raw[metadataKeyToolCallID] != visibleCalls[0].ID ||
+		!strings.Contains(toolResult.Content, `"event_id":"saved"`) {
+		t.Fatalf("unexpected pico MCP tool result: %+v", toolResult)
+	}
+	if !strings.Contains(visibleCalls[0].Input, "[REDACTED]") ||
+		!strings.Contains(toolResult.Content, "[REDACTED]") {
+		t.Fatal("pico MCP activity did not redact the MCP credential")
+	}
+	if strings.Contains(toolCall.Context.Raw[metadataKeyToolCalls], "test-mem0-token") ||
+		strings.Contains(toolResult.Content, "test-mem0-token") {
+		t.Fatal("pico MCP activity exposed the MCP credential")
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
-	if len(searches) != 2 || len(adds) != 1 {
+	if len(searches) != 2 || len(adds) != 2 {
 		t.Fatalf("searches=%+v adds=%+v", searches, adds)
 	}
 	if !strings.Contains(searches[0].Query, "What did we decide?") ||
