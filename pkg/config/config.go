@@ -930,10 +930,11 @@ type FeishuSettings struct {
 }
 
 type DiscordSettings struct {
-	Token            SecureString `json:"token,omitzero"              yaml:"token,omitempty" env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
-	Proxy            string       `json:"proxy"                       yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
-	AllowDM          *bool        `json:"allow_dm,omitempty"          yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_DM"`
-	AllowAttachments *bool        `json:"allow_attachments,omitempty" yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS"`
+	Token            SecureString        `json:"token,omitzero"              yaml:"token,omitempty" env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
+	Proxy            string              `json:"proxy"                       yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
+	AllowDM          *bool               `json:"allow_dm,omitempty"          yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_DM"`
+	AllowAttachments *bool               `json:"allow_attachments,omitempty" yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS"`
+	ChannelIDs       FlexibleStringSlice `json:"channel_ids,omitempty"       yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_CHANNEL_IDS"`
 }
 
 // DMAllowed reports whether the Discord channel accepts direct messages.

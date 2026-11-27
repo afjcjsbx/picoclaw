@@ -34,6 +34,136 @@ func (*noopReader) Read(p []byte) (int, error) {
 	return 0, io.EOF
 }
 
+func TestShouldRespondInGuildChannel_ChannelIDsAllowlist(t *testing.T) {
+	tests := []struct {
+		name        string
+		channelIDs  config.FlexibleStringSlice
+		mentionOnly bool
+		prefixes    []string
+		channelID   string
+		mentioned   bool
+		content     string
+		wantRespond bool
+		wantContent string
+	}{
+		{
+			name:        "listed channel still requires mention",
+			channelIDs:  config.FlexibleStringSlice{"123", "456"},
+			mentionOnly: true,
+			channelID:   "123",
+			content:     "hello",
+			wantRespond: false,
+			wantContent: "hello",
+		},
+		{
+			name:        "listed channel responds when mentioned",
+			channelIDs:  config.FlexibleStringSlice{"123", "456"},
+			mentionOnly: true,
+			channelID:   "123",
+			mentioned:   true,
+			content:     "hello",
+			wantRespond: true,
+			wantContent: "hello",
+		},
+		{
+			name:        "unlisted channel ignores mention",
+			channelIDs:  config.FlexibleStringSlice{"123"},
+			mentionOnly: true,
+			channelID:   "456",
+			mentioned:   true,
+			content:     "hello",
+			wantRespond: false,
+			wantContent: "hello",
+		},
+		{
+			name:        "unlisted channel is disabled even in permissive mode",
+			channelIDs:  config.FlexibleStringSlice{"123"},
+			channelID:   "456",
+			content:     "hello",
+			wantRespond: false,
+			wantContent: "hello",
+		},
+		{
+			name:        "listed channel follows prefix requirement",
+			channelIDs:  config.FlexibleStringSlice{"123"},
+			prefixes:    []string{"!"},
+			channelID:   "123",
+			content:     "hello",
+			wantRespond: false,
+			wantContent: "hello",
+		},
+		{
+			name:        "listed channel responds to matching prefix",
+			channelIDs:  config.FlexibleStringSlice{"123"},
+			prefixes:    []string{"!"},
+			channelID:   "123",
+			content:     "!hello",
+			wantRespond: true,
+			wantContent: "hello",
+		},
+		{
+			name:        "empty list allows all channels but preserves mention only",
+			mentionOnly: true,
+			channelID:   "123",
+			content:     "hello",
+			wantRespond: false,
+			wantContent: "hello",
+		},
+		{
+			name:        "empty list allows mentioned messages in all channels",
+			mentionOnly: true,
+			channelID:   "123",
+			mentioned:   true,
+			content:     "hello",
+			wantRespond: true,
+			wantContent: "hello",
+		},
+		{
+			name:        "empty list allows permissive responses in all channels",
+			channelID:   "123",
+			content:     "hello",
+			wantRespond: true,
+			wantContent: "hello",
+		},
+		{
+			name:        "channel IDs are trimmed",
+			channelIDs:  config.FlexibleStringSlice{" 123 "},
+			mentionOnly: true,
+			channelID:   "123",
+			mentioned:   true,
+			content:     "hello",
+			wantRespond: true,
+			wantContent: "hello",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &DiscordChannel{
+				BaseChannel: channels.NewBaseChannel(
+					"discord",
+					nil,
+					bus.NewMessageBus(),
+					nil,
+					channels.WithGroupTrigger(config.GroupTriggerConfig{
+						MentionOnly: tt.mentionOnly,
+						Prefixes:    tt.prefixes,
+					}),
+				),
+				config: &config.DiscordSettings{ChannelIDs: tt.channelIDs},
+			}
+
+			respond, content := ch.shouldRespondInGuildChannel(tt.channelID, tt.mentioned, tt.content)
+			if respond != tt.wantRespond {
+				t.Fatalf("respond = %v, want %v", respond, tt.wantRespond)
+			}
+			if content != tt.wantContent {
+				t.Fatalf("content = %q, want %q", content, tt.wantContent)
+			}
+		})
+	}
+}
+
 func TestApplyDiscordProxy_CustomProxy(t *testing.T) {
 	session, err := discordgo.New("Bot test-token")
 	if err != nil {

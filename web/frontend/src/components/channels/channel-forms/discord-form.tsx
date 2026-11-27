@@ -100,6 +100,18 @@ export function DiscordForm({
             resetVersion={arrayFieldResetVersion}
           />
 
+          <ChannelArrayListField
+            label={t("channels.field.enabledChannels")}
+            hint={t("channels.form.desc.enabledChannels")}
+            value={asStringArray(config.channel_ids)}
+            onChange={(value) => onChange("channel_ids", value)}
+            placeholder={t("channels.field.enabledChannelsPlaceholder")}
+            parser={parseAllowFromInput}
+            fieldPath="channel_ids"
+            registerFlusher={registerArrayFieldFlusher}
+            resetVersion={arrayFieldResetVersion}
+          />
+
           <div>
             <SwitchCardField
               label={t("channels.field.allowAttachments")}

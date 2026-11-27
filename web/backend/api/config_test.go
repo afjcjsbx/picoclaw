@@ -368,6 +368,12 @@ func TestHandlePatchConfig_NormalizesStringChannelArrayFields(t *testing.T) {
 					"channels": "#ops,\n#dev,\n#ops",
 					"request_caps": "multi-prefix，echo-message\tbatch，multi-prefix"
 				}
+			},
+			"discord": {
+				"type": "discord",
+				"settings": {
+					"channel_ids": "123，456\n123"
+				}
 			}
 		}
 	}`))
@@ -442,6 +448,18 @@ func TestHandlePatchConfig_NormalizesStringChannelArrayFields(t *testing.T) {
 			"irc request_caps = %#v, want [\"multi-prefix\", \"echo-message\", \"batch\"]",
 			ircCfg.RequestCaps,
 		)
+	}
+
+	discordChannel := cfg.Channels[config.ChannelDiscord]
+	decoded, err = discordChannel.GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() discord error = %v", err)
+	}
+	discordCfg := decoded.(*config.DiscordSettings)
+	if len(discordCfg.ChannelIDs) != 2 ||
+		discordCfg.ChannelIDs[0] != "123" ||
+		discordCfg.ChannelIDs[1] != "456" {
+		t.Fatalf("discord channel_ids = %#v, want [\"123\", \"456\"]", discordCfg.ChannelIDs)
 	}
 }
 

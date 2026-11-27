@@ -29,6 +29,28 @@ type testDiscordConfig struct {
 	ApiKeys     SecureStrings `json:"api_keys,omitzero" yaml:"api_keys,omitempty"`
 }
 
+func TestDiscordSettings_ChannelIDsRoundTrip(t *testing.T) {
+	jsonData := `{
+		"enabled": true,
+		"type": "discord",
+		"settings": {
+			"token": "[NOT_HERE]",
+			"channel_ids": ["123", 456]
+		}
+	}`
+
+	var ch Channel
+	require.NoError(t, json.Unmarshal([]byte(jsonData), &ch))
+
+	var settings DiscordSettings
+	require.NoError(t, ch.Decode(&settings))
+	assert.Equal(t, FlexibleStringSlice{"123", "456"}, settings.ChannelIDs)
+
+	out, err := json.Marshal(ch)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `"channel_ids":["123","456"]`)
+}
+
 // ═══════════════════════════════════════════════════
 //  RawNode JSON/YAML round-trip
 // ═══════════════════════════════════════════════════
