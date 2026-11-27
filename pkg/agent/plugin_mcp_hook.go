@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
@@ -129,8 +131,26 @@ func (h *pluginMCPHook) call(
 	defer cancel()
 	args := expandHookArguments(h.spec.MCP.Arguments, variables)
 	args = redactHookArguments(args, h.cfg, h.tool)
-	h.publishToolFeedback(ctx, args, variables, event)
+	toolCallID, structured := h.publishPicoToolCall(ctx, args, event)
+	if !structured {
+		h.publishToolFeedback(ctx, args, variables, event)
+	}
 	result := h.tool.Execute(ctx, args)
+	if toolCallID != "" {
+		output := ""
+		if result != nil {
+			output = h.clean(result.ContentForLLM())
+		}
+		if output == "" {
+			switch {
+			case result == nil:
+				output = "MCP tool returned no result"
+			case result.IsError:
+				output = "MCP tool returned an error"
+			}
+		}
+		h.publishPicoToolResult(ctx, event, toolCallID, output)
+	}
 	if result == nil {
 		return nil, fmt.Errorf("MCP tool returned no result")
 	}
@@ -140,56 +160,134 @@ func (h *pluginMCPHook) call(
 	return result, nil
 }
 
+func (h *pluginMCPHook) activeTurnState(
+	ctx context.Context,
+	event *runtimeevents.Event,
+) *turnState {
+	ts := turnStateFromContext(ctx)
+	if ts == nil && h.al != nil && event != nil && event.Scope.SessionKey != "" {
+		ts = h.al.getActiveTurnState(event.Scope.SessionKey)
+	}
+	return ts
+}
+
+func (h *pluginMCPHook) toolActivityMessage(
+	ctx context.Context,
+	event *runtimeevents.Event,
+) (bus.OutboundMessage, bool) {
+	if h.al == nil || h.al.bus == nil || h.cfg == nil || !h.cfg.Agents.Defaults.IsToolFeedbackEnabled() {
+		return bus.OutboundMessage{}, false
+	}
+	if event != nil && event.Attrs["suppress_tool_feedback"] == true {
+		return bus.OutboundMessage{}, false
+	}
+
+	if ts := h.activeTurnState(ctx, event); ts != nil {
+		if !shouldPublishToolFeedback(h.cfg, ts) {
+			return bus.OutboundMessage{}, false
+		}
+		msg := outboundMessageForTurn(ts, "")
+		if msg.Context.Raw == nil {
+			msg.Context.Raw = make(map[string]string, 2)
+		}
+		return msg, true
+	}
+	if event == nil || event.Scope.Channel == "" || event.Scope.ChatID == "" {
+		return bus.OutboundMessage{}, false
+	}
+	inbound := bus.NewOutboundContext(event.Scope.Channel, event.Scope.ChatID, "")
+	inbound.Account = event.Scope.Account
+	inbound.ChatType = event.Scope.ChatType
+	inbound.TopicID = event.Scope.TopicID
+	inbound.SpaceID = event.Scope.SpaceID
+	inbound.SpaceType = event.Scope.SpaceType
+	inbound.SenderID = event.Scope.SenderID
+	inbound.Raw = make(map[string]string, 2)
+	return bus.OutboundMessage{
+		Channel:    event.Scope.Channel,
+		ChatID:     event.Scope.ChatID,
+		Context:    inbound,
+		AgentID:    event.Scope.AgentID,
+		SessionKey: event.Scope.SessionKey,
+	}, true
+}
+
+func (h *pluginMCPHook) publishToolActivity(ctx context.Context, msg bus.OutboundMessage) {
+	if h.al == nil || h.al.bus == nil {
+		return
+	}
+	if msg.Context.Raw == nil {
+		msg.Context.Raw = make(map[string]string, 1)
+	}
+	pubCtx, pubCancel := context.WithTimeout(ctx, 3*time.Second)
+	_ = h.al.bus.PublishOutbound(pubCtx, msg)
+	pubCancel()
+}
+
+// Plugin hooks run outside the model tool loop. Mirror the normal Pico
+// tool_calls/tool_result protocol so they render as standard tool cards.
+func (h *pluginMCPHook) publishPicoToolCall(
+	ctx context.Context,
+	args map[string]any,
+	event *runtimeevents.Event,
+) (string, bool) {
+	msg, ok := h.toolActivityMessage(ctx, event)
+	if !ok || !strings.EqualFold(strings.TrimSpace(msg.Channel), "pico") {
+		return "", false
+	}
+
+	toolCallID := "plugin-" + uuid.NewString()
+	visibleToolCalls := utils.BuildVisibleToolCalls(
+		[]providers.ToolCall{{
+			ID:        toolCallID,
+			Type:      "function",
+			Name:      h.pluginID + ":" + h.tool.RemoteName(),
+			Arguments: args,
+		}},
+		h.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
+	)
+	rawToolCalls, err := json.Marshal(visibleToolCalls)
+	if err != nil {
+		logger.WarnCF("plugins", "Failed to serialize pico MCP hook tool call", map[string]any{
+			"plugin": h.pluginID, "hook": h.spec.Name, "error": err.Error(),
+		})
+		return "", false
+	}
+	msg.Context.Raw[metadataKeyMessageKind] = messageKindToolCalls
+	msg.Context.Raw[metadataKeyToolCalls] = string(rawToolCalls)
+	h.publishToolActivity(ctx, msg)
+	return toolCallID, true
+}
+
+func (h *pluginMCPHook) publishPicoToolResult(
+	ctx context.Context,
+	event *runtimeevents.Event,
+	toolCallID, output string,
+) {
+	msg, ok := h.toolActivityMessage(ctx, event)
+	if !ok || !strings.EqualFold(strings.TrimSpace(msg.Channel), "pico") {
+		return
+	}
+	msg.Content = output
+	msg.Context.Raw[metadataKeyMessageKind] = messageKindToolResult
+	msg.Context.Raw[metadataKeyToolCallID] = toolCallID
+	h.publishToolActivity(ctx, msg)
+}
+
 func (h *pluginMCPHook) publishToolFeedback(
 	ctx context.Context,
 	args map[string]any,
 	variables map[string]any,
 	event *runtimeevents.Event,
 ) {
-	if h.al == nil || h.al.bus == nil || h.cfg == nil || !h.cfg.Agents.Defaults.IsToolFeedbackEnabled() {
+	msg, ok := h.toolActivityMessage(ctx, event)
+	if !ok {
 		return
-	}
-	if event != nil && event.Attrs["suppress_tool_feedback"] == true {
-		return
-	}
-
-	ts := turnStateFromContext(ctx)
-	if ts == nil && event != nil && event.Scope.SessionKey != "" {
-		ts = h.al.getActiveTurnState(event.Scope.SessionKey)
-	}
-	var msg bus.OutboundMessage
-	if ts != nil {
-		if !shouldPublishToolFeedback(h.cfg, ts) {
-			return
-		}
-	} else {
-		if event == nil || event.Scope.Channel == "" || event.Scope.ChatID == "" {
-			return
-		}
-		inbound := bus.NewOutboundContext(event.Scope.Channel, event.Scope.ChatID, "")
-		inbound.Account = event.Scope.Account
-		inbound.ChatType = event.Scope.ChatType
-		inbound.TopicID = event.Scope.TopicID
-		inbound.SpaceID = event.Scope.SpaceID
-		inbound.SpaceType = event.Scope.SpaceType
-		inbound.SenderID = event.Scope.SenderID
-		inbound.Raw = map[string]string{metadataKeyMessageKind: messageKindToolFeedback}
-		msg = bus.OutboundMessage{
-			Context:    inbound,
-			AgentID:    event.Scope.AgentID,
-			SessionKey: event.Scope.SessionKey,
-		}
 	}
 
 	userMessage, _ := variables["user_message"].(string)
 	explanation := ""
-	channel := ""
-	if ts != nil {
-		channel = ts.channel
-	} else if event != nil {
-		channel = event.Scope.Channel
-	}
-	if !strings.EqualFold(strings.TrimSpace(channel), "pico") &&
+	if !strings.EqualFold(strings.TrimSpace(msg.Channel), "pico") &&
 		strings.TrimSpace(userMessage) != "" {
 		explanation = utils.ToolFeedbackContinuationHint + ": " + h.clean(userMessage)
 	}
@@ -198,16 +296,8 @@ func (h *pluginMCPHook) publishToolFeedback(
 		explanation,
 		toolFeedbackArgsPreview(args, h.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength()),
 	)
-	if ts != nil {
-		msg = outboundMessageForTurnWithOptions(
-			ts,
-			msg.Content,
-			outboundTurnMessageOptions{kind: messageKindToolFeedback},
-		)
-	}
-	pubCtx, pubCancel := context.WithTimeout(ctx, 3*time.Second)
-	_ = h.al.bus.PublishOutbound(pubCtx, msg)
-	pubCancel()
+	msg.Context.Raw[metadataKeyMessageKind] = messageKindToolFeedback
+	h.publishToolActivity(ctx, msg)
 }
 
 func (h *pluginMCPHook) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLMHookRequest, HookDecision, error) {
