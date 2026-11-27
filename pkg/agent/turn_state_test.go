@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/usage"
@@ -117,6 +118,61 @@ func TestTurnStateAddUsageAggregatesCalls(t *testing.T) {
 	}
 	if got := ts.GetTurnUsage(); got == nil || !reflect.DeepEqual(*got, want) {
 		t.Fatalf("GetTurnUsage() = %+v, want %+v", got, want)
+	}
+}
+
+func TestTurnStateTimingAggregatesToolsAndTTFT(t *testing.T) {
+	ts := &turnState{}
+	ts.AddUsage("model", &providers.UsageInfo{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
+	ts.recordToolDuration(150 * time.Millisecond)
+	ts.recordToolDuration(50 * time.Millisecond)
+	ts.recordToolDuration(0)
+	ts.recordTTFT(2 * time.Second)
+	ts.recordTTFT(4 * time.Second)
+	ts.recordTTFT(0)
+
+	got := ts.GetTurnUsage()
+	if got == nil {
+		t.Fatal("GetTurnUsage() = nil, want aggregate")
+	}
+	if got.ToolDurationMS != 200 {
+		t.Fatalf("ToolDurationMS = %d, want 200", got.ToolDurationMS)
+	}
+	if got.AverageTTFTMS != 3000 {
+		t.Fatalf("AverageTTFTMS = %d, want 3000", got.AverageTTFTMS)
+	}
+	if got.ElapsedMS != 0 {
+		t.Fatalf("ElapsedMS = %d, want 0 before the turn is sealed", got.ElapsedMS)
+	}
+}
+
+func TestTurnStateSealTurnUsageFreezesElapsed(t *testing.T) {
+	ts := &turnState{startedAt: time.Now().Add(-2 * time.Second)}
+	ts.AddUsage("model", &providers.UsageInfo{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
+
+	ts.sealTurnUsage()
+	first := ts.GetTurnUsage()
+	if first == nil || first.ElapsedMS < 1900 {
+		t.Fatalf("sealed usage = %+v, want elapsed turn duration", first)
+	}
+
+	ts.mu.Lock()
+	ts.startedAt = time.Now().Add(-time.Hour)
+	ts.mu.Unlock()
+	ts.sealTurnUsage()
+	if second := ts.GetTurnUsage(); second == nil || second.ElapsedMS != first.ElapsedMS {
+		t.Fatalf("second sealed usage = %+v, want unchanged elapsed %d", second, first.ElapsedMS)
+	}
+}
+
+func TestTurnStateTimingDoesNotCreateUsageWithoutTokensOrCost(t *testing.T) {
+	ts := &turnState{startedAt: time.Now()}
+	ts.recordToolDuration(time.Second)
+	ts.recordTTFT(time.Second)
+	ts.sealTurnUsage()
+
+	if got := ts.GetTurnUsage(); got != nil {
+		t.Fatalf("GetTurnUsage() = %+v, want nil for timing-only turn", got)
 	}
 }
 

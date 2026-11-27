@@ -593,6 +593,9 @@ func tokenUsageFromProviders(usage *providers.UsageInfo) *bus.TokenUsage {
 		Requests:            usage.Requests,
 		ContextTokens:       usage.ContextTokens,
 		DurationMS:          usage.DurationMS,
+		ElapsedMS:           usage.ElapsedMS,
+		ToolDurationMS:      usage.ToolDurationMS,
+		AverageTTFTMS:       usage.AverageTTFTMS,
 	}
 }
 

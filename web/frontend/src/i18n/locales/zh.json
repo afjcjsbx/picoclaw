@@ -109,6 +109,23 @@
     "deleteSessionConfirm": "“{{title}}”及其消息历史将被永久删除，此操作无法撤销。",
     "deleteSessionFailed": "无法删除会话",
     "messagesCount": "{{count}} 条消息",
+    "turnStats": {
+      "open": "本轮统计",
+      "title": "本轮统计",
+      "model": "模型",
+      "defaultModel": "（默认）",
+      "response": "响应",
+      "responseRate": "~{{rate}} tok/s",
+      "wholeTurn": "整轮耗时",
+      "wholeTurnRate": "~{{rate}} tok/s",
+      "elapsed": "总耗时",
+      "modelTime": "模型耗时",
+      "toolTime": "工具耗时",
+      "averageTtft": "平均 TTFT",
+      "steps": "步数",
+      "tokens": "Tokens",
+      "cache": "缓存"
+    },
     "usage": {
       "summary": "输入 {{input}} · 输出 {{output}}",
       "throughputValue": "{{rate}} tok/s",

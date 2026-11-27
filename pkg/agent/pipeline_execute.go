@@ -225,6 +225,7 @@ toolLoop:
 
 	// No pending steering: finalize or break depending on allResponsesHandled
 	if exec.allResponsesHandled {
+		ts.sealTurnUsage()
 		summaryMsg := providers.Message{
 			Role:        "assistant",
 			Content:     handledToolResponseSummary,

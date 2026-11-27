@@ -323,10 +323,15 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	if finalMessage.Usage == nil {
 		t.Fatal("expected final message usage to be persisted")
 	}
-	// The provider call is timed at runtime; zero the measurement so this test
+	if finalMessage.Usage.ElapsedMS <= 0 {
+		t.Fatalf("final message elapsed = %d, want sealed turn duration", finalMessage.Usage.ElapsedMS)
+	}
+	// The provider call is timed at runtime; zero the measurements so this test
 	// asserts the aggregated counters without depending on wall-clock time.
 	gotUsage := *finalMessage.Usage
 	gotUsage.DurationMS = 0
+	gotUsage.ElapsedMS = 0
+	gotUsage.ToolDurationMS = 0
 	if got, want := gotUsage, (providers.UsageInfo{
 		PromptTokens:     120 + 200,
 		CompletionTokens: 30 + 50,

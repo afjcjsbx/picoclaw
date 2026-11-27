@@ -30,6 +30,7 @@ import rehypeSanitize from "rehype-sanitize"
 import remarkGfm from "remark-gfm"
 
 import { MarkdownCodeBlock } from "@/components/chat/message-code-block"
+import { TurnStats } from "@/components/chat/turn-stats"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -59,6 +60,7 @@ interface AssistantMessageProps {
   attachments?: ChatAttachment[]
   kind?: AssistantMessageKind
   modelName?: string
+  isDefaultModel?: boolean
   onFork?: () => void
   onOpenFile?: (path: string) => void
   filePathAliases?: Record<string, string>
@@ -550,6 +552,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   attachments = [],
   kind = "normal",
   modelName,
+  isDefaultModel = false,
   onFork,
   onOpenFile,
   filePathAliases,
@@ -863,6 +866,13 @@ export const AssistantMessage = memo(function AssistantMessage({
                   >
                     <ForkArrowIcon className="size-3.5" />
                   </Button>
+                )}
+                {hasUsage && usage && (
+                  <TurnStats
+                    usage={usage}
+                    modelName={modelName}
+                    isDefaultModel={isDefaultModel}
+                  />
                 )}
               </>
             )}

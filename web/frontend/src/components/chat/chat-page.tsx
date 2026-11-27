@@ -1188,6 +1188,9 @@ export function ChatPage() {
                   attachments={msg.attachments}
                   kind={msg.kind}
                   modelName={msg.modelName}
+                  isDefaultModel={
+                    Boolean(msg.modelName) && msg.modelName === defaultModelName
+                  }
                   onOpenFile={handleOpenFile}
                   filePathAliases={filePathAliasesByMessage.get(msg.id)}
                   onFork={

@@ -85,6 +85,9 @@ type sessionUsage struct {
 	Requests            int     `json:"requests,omitempty"`
 	ContextTokens       int     `json:"context_tokens,omitempty"`
 	DurationMS          int64   `json:"duration_ms,omitempty"`
+	ElapsedMS           int64   `json:"elapsed_ms,omitempty"`
+	ToolDurationMS      int64   `json:"tool_duration_ms,omitempty"`
+	AverageTTFTMS       int64   `json:"average_ttft_ms,omitempty"`
 }
 
 func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
@@ -104,6 +107,9 @@ func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
 		Requests:            usage.Requests,
 		ContextTokens:       usage.ContextTokens,
 		DurationMS:          usage.DurationMS,
+		ElapsedMS:           usage.ElapsedMS,
+		ToolDurationMS:      usage.ToolDurationMS,
+		AverageTTFTMS:       usage.AverageTTFTMS,
 	}
 }
 

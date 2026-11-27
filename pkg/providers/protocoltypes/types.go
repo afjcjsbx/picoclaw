@@ -91,6 +91,16 @@ type UsageInfo struct {
 	// means the duration was not recorded, as for usage from older sessions.
 	DurationMS int64 `json:"duration_ms,omitempty"`
 
+	// ElapsedMS is the wall-clock duration of the turn, from agent turn start
+	// to final model/tool work, before persistence and post-turn compaction.
+	ElapsedMS int64 `json:"elapsed_ms,omitempty"`
+	// ToolDurationMS is wall-clock time spent executing tools. Parallel tool
+	// batches count their shared wall span once rather than summing each call.
+	ToolDurationMS int64 `json:"tool_duration_ms,omitempty"`
+	// AverageTTFTMS is the average time to first non-empty token across the
+	// turn's successful streaming model calls. Zero means no sample was observed.
+	AverageTTFTMS int64 `json:"average_ttft_ms,omitempty"`
+
 	// ByModel splits a turn aggregate by the model that served each call. It is
 	// set only when the turn used more than one model, for example after a
 	// light-model escalation, so per-model totals stay exact.

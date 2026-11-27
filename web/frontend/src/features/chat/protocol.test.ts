@@ -99,6 +99,39 @@ describe("handlePicoMessage message.create", () => {
     })
   })
 
+  it("keeps turn timing metrics from the live usage payload", () => {
+    handlePicoMessage(
+      {
+        type: "message.create",
+        session_id: SESSION,
+        payload: {
+          message_id: "m1",
+          content: "hello",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: 150,
+            duration_ms: 48_300,
+            elapsed_ms: 85_000,
+            tool_duration_ms: 36_000,
+            average_ttft_ms: 2000,
+          },
+        },
+      },
+      SESSION,
+    )
+
+    expect(getChatState().messages[0].usage).toEqual({
+      input_tokens: 100,
+      output_tokens: 50,
+      total_tokens: 150,
+      duration_ms: 48_300,
+      elapsed_ms: 85_000,
+      tool_duration_ms: 36_000,
+      average_ttft_ms: 2000,
+    })
+  })
+
   it("records tool calls from the payload", () => {
     handlePicoMessage(
       {

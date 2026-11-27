@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  cacheHitRate,
   estimateUsageCostUsd,
+  formatCompactTokenCount,
+  formatDuration,
   formatTokenCount,
   formatTokensPerSecond,
   formatUsageCostUsd,
@@ -68,6 +71,30 @@ describe("parseTokenUsage", () => {
       requests: 5,
       context_tokens: 24_310,
       duration_ms: 64_200,
+    })
+  })
+
+  it("keeps wall-clock, tool, and first-token timing when present", () => {
+    expect(
+      parseTokenUsage({
+        usage: {
+          input_tokens: 100,
+          output_tokens: 50,
+          total_tokens: 150,
+          duration_ms: 48_300,
+          elapsed_ms: 85_000,
+          tool_duration_ms: 36_000,
+          average_ttft_ms: 2000,
+        },
+      }),
+    ).toEqual({
+      input_tokens: 100,
+      output_tokens: 50,
+      total_tokens: 150,
+      duration_ms: 48_300,
+      elapsed_ms: 85_000,
+      tool_duration_ms: 36_000,
+      average_ttft_ms: 2000,
     })
   })
 
@@ -196,6 +223,20 @@ describe("tokensPerSecond", () => {
     ).toBe(250)
   })
 
+  it("can divide output tokens by whole-turn time", () => {
+    expect(
+      tokensPerSecond(
+        {
+          output_tokens: 500,
+          total_tokens: 500,
+          duration_ms: 2000,
+          elapsed_ms: 5000,
+        },
+        5000,
+      ),
+    ).toBe(100)
+  })
+
   it("returns undefined without output tokens or a duration", () => {
     expect(tokensPerSecond({ total_tokens: 0 })).toBeUndefined()
     expect(
@@ -211,5 +252,48 @@ describe("tokensPerSecond", () => {
     expect(formatTokensPerSecond(42.36)).toBe("42.4")
     expect(formatTokensPerSecond(3.456)).toBe("3.46")
     expect(formatTokensPerSecond(0)).toBe("0")
+  })
+})
+
+describe("turn stats formatting", () => {
+  it("formats sub-minute durations with one decimal", () => {
+    expect(formatDuration(0)).toBe("0.0s")
+    expect(formatDuration(2000)).toBe("2.0s")
+    expect(formatDuration(28_420)).toBe("28.4s")
+  })
+
+  it("formats durations of at least one minute as minutes and seconds", () => {
+    expect(formatDuration(60_000)).toBe("1m 0s")
+    expect(formatDuration(85_000)).toBe("1m 25s")
+  })
+
+  it("formats compact token counts", () => {
+    expect(formatCompactTokenCount(999)).toBe("999")
+    expect(formatCompactTokenCount(2000)).toBe("2.0K")
+    expect(formatCompactTokenCount(13_500)).toBe("13.5K")
+    expect(formatCompactTokenCount(1_000_000)).toBe("1.0M")
+  })
+})
+
+describe("cacheHitRate", () => {
+  it("returns the share of input tokens served from cache", () => {
+    expect(
+      cacheHitRate({
+        input_tokens: 1000,
+        cache_read_tokens: 990,
+        total_tokens: 1100,
+      }),
+    ).toBe(99)
+  })
+
+  it("returns undefined without input tokens or cache data", () => {
+    expect(cacheHitRate({ total_tokens: 0 })).toBeUndefined()
+    expect(
+      cacheHitRate({
+        input_tokens: 0,
+        cache_read_tokens: 10,
+        total_tokens: 10,
+      }),
+    ).toBeUndefined()
   })
 })

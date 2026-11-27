@@ -11,12 +11,15 @@ func TestSetTokenUsagePayloadTurnCounters(t *testing.T) {
 	t.Run("populates turn usage block when counts present", func(t *testing.T) {
 		payload := map[string]any{PayloadKeyContent: "hi"}
 		setTokenUsagePayload(payload, &bus.TokenUsage{
-			InputTokens:   1234,
-			OutputTokens:  567,
-			TotalTokens:   1801,
-			Requests:      4,
-			ContextTokens: 320,
-			DurationMS:    4200,
+			InputTokens:    1234,
+			OutputTokens:   567,
+			TotalTokens:    1801,
+			Requests:       4,
+			ContextTokens:  320,
+			DurationMS:     4200,
+			ElapsedMS:      8500,
+			ToolDurationMS: 3600,
+			AverageTTFTMS:  700,
 		})
 
 		raw, ok := payload[PayloadKeyUsage]
@@ -44,6 +47,15 @@ func TestSetTokenUsagePayloadTurnCounters(t *testing.T) {
 		}
 		if usage["duration_ms"] != int64(4200) {
 			t.Errorf("duration_ms = %v, want 4200", usage["duration_ms"])
+		}
+		if usage["elapsed_ms"] != int64(8500) {
+			t.Errorf("elapsed_ms = %v, want 8500", usage["elapsed_ms"])
+		}
+		if usage["tool_duration_ms"] != int64(3600) {
+			t.Errorf("tool_duration_ms = %v, want 3600", usage["tool_duration_ms"])
+		}
+		if usage["average_ttft_ms"] != int64(700) {
+			t.Errorf("average_ttft_ms = %v, want 700", usage["average_ttft_ms"])
 		}
 	})
 

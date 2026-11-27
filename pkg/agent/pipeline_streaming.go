@@ -66,7 +66,13 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 
 	chunkCount := 0
 	firstChunkAt := time.Time{}
+	firstTokenAt := time.Time{}
 	lastChunkAt := time.Time{}
+	recordFirstToken := func(content string) {
+		if firstTokenAt.IsZero() && strings.TrimSpace(content) != "" {
+			firstTokenAt = time.Now()
+		}
+	}
 	recordChunk := func() {
 		now := time.Now()
 		chunkCount++
@@ -87,6 +93,8 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			exec.llmOpts,
 			func(chunk providers.StreamChunk) {
 				recordChunk()
+				recordFirstToken(chunk.ReasoningContent)
+				recordFirstToken(chunk.Content)
 				if !exec.suppressReasoning && strings.TrimSpace(chunk.ReasoningContent) != "" {
 					publisher.UpdateReasoning(ctx, chunk.ReasoningContent)
 				}
@@ -104,6 +112,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			exec.llmOpts,
 			func(accumulated string) {
 				recordChunk()
+				recordFirstToken(accumulated)
 				publisher.Update(ctx, accumulated)
 			},
 		)
@@ -164,6 +173,9 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	}
 
 	if response != nil {
+		if !firstTokenAt.IsZero() {
+			ts.recordTTFT(firstTokenAt.Sub(streamStart))
+		}
 		exec.streamingPublisher = publisher
 	}
 
