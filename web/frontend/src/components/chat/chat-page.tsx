@@ -37,6 +37,7 @@ import {
   type ChatInputDisabledReason,
 } from "@/components/chat/chat-composer"
 import { ChatEmptyState } from "@/components/chat/chat-empty-state"
+import { ConversationNavigator } from "@/components/chat/conversation-navigator"
 import { FilePreviewPanel } from "@/components/chat/file-preview-panel"
 import { ModelSelector } from "@/components/chat/model-selector"
 import { TypingIndicator } from "@/components/chat/typing-indicator"
@@ -778,7 +779,7 @@ function SplitConversationPane({
             element.scrollHeight - element.scrollTop <=
             element.clientHeight + 10
         }}
-        className="chat-scroll-fade min-h-0 flex-1 overflow-y-auto px-3"
+        className="chat-scroll-fade min-h-0 flex-1 overflow-y-auto px-3 pl-5"
       >
         {!isLoaded ? (
           <div className="text-muted-foreground py-6 text-center text-sm">
@@ -795,6 +796,20 @@ function SplitConversationPane({
           </div>
         )}
       </div>
+      <ConversationNavigator
+        scrollRef={scrollRef}
+        label={t("chat.scrollNavigator", {
+          defaultValue: "Navigate conversation",
+        })}
+        messageLabel={(role, index, preview) =>
+          t(
+            role === "user"
+              ? "chat.jumpToUserMessage"
+              : "chat.jumpToAssistantMessage",
+            { index: index + 1, preview },
+          )
+        }
+      />
     </section>
   )
 }
@@ -1170,6 +1185,12 @@ export function ChatPage() {
         <div
           key={msg.id}
           data-chat-index={messageIndex}
+          data-chat-role={msg.role}
+          data-chat-kind={msg.kind ?? "normal"}
+          data-chat-preview={msg.content
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 80)}
           className={`group flex w-full flex-col ${activityChild ? "gap-0" : "gap-1"}`}
         >
           {msg.role === "assistant" ? (
@@ -1624,21 +1645,37 @@ export function ChatPage() {
               />
             </div>
           ) : (
-            <div
-              ref={scrollRef}
-              data-session-scroll={activeSessionId}
-              onScroll={handleScroll}
-              className="chat-scroll-fade min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 md:px-8 lg:px-24 xl:px-48"
-            >
-              <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-8">
-                {messages.length === 0 && !isTyping && activeEmptyState}
-                {renderMessages(
-                  messages,
-                  activeSessionId,
-                  historyStart,
-                  isTyping,
-                )}
+            <div className="relative flex min-h-0 flex-1">
+              <div
+                ref={scrollRef}
+                data-session-scroll={activeSessionId}
+                onScroll={handleScroll}
+                className="chat-scroll-fade min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 md:px-8 lg:px-24 xl:px-48"
+              >
+                <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-8">
+                  {messages.length === 0 && !isTyping && activeEmptyState}
+                  {renderMessages(
+                    messages,
+                    activeSessionId,
+                    historyStart,
+                    isTyping,
+                  )}
+                </div>
               </div>
+              <ConversationNavigator
+                scrollRef={scrollRef}
+                label={t("chat.scrollNavigator", {
+                  defaultValue: "Navigate conversation",
+                })}
+                messageLabel={(role, index, preview) =>
+                  t(
+                    role === "user"
+                      ? "chat.jumpToUserMessage"
+                      : "chat.jumpToAssistantMessage",
+                    { index: index + 1, preview },
+                  )
+                }
+              />
             </div>
           )}
 

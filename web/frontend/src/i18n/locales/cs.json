@@ -116,6 +116,9 @@
     "activeSplitPane": "Aktivní",
     "removeSplitPane": "Odebrat konverzaci z rozděleného zobrazení",
     "resizeSplitPane": "Změnit velikost panelů konverzací",
+    "scrollNavigator": "Procházet konverzaci",
+    "jumpToUserMessage": "Přejít na otázku {{index}}: {{preview}}",
+    "jumpToAssistantMessage": "Přejít na odpověď {{index}}: {{preview}}",
     "paneLayout": "Rozložení panelů",
     "addSplitPane": "Přidat panel",
     "splitLayouts": {

@@ -27,7 +27,7 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: "http://localhost:18800",
-        changeOrigin: true,
+        changeOrigin: false,
       },
       "/pico/media": {
         target: "http://localhost:18800",
