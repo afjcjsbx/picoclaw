@@ -22,6 +22,8 @@ With `auto`, PicoClaw picks the first *ready* provider (enabled and fully config
 
 With `provider: "multi"`, PicoClaw randomizes all ready providers and queries up to `multi_concurrency` of them in parallel. If a provider fails or returns no results, the next randomized provider is started. The first non-empty result is returned unchanged and the remaining requests are canceled; results are not aggregated or deduplicated.
 
+Sogou uses its public WAP search page and can occasionally return an anti-bot challenge instead of results. PicoClaw does not solve CAPTCHAs; use another configured provider when that happens.
+
 ## Web Fetcher
 General settings for fetching and processing webpage content.
 

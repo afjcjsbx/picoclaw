@@ -2187,10 +2187,18 @@ func TestWebTool_SogouSearch_Success(t *testing.T) {
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				rec := httptest.NewRecorder()
 				fmt.Fprint(rec, `<html><body>
-<a class=resultLink href="/link?url=https%3A%2F%2Fexample.com%2Fa" id="sogou_vr_0_0">Result A</a>
-<div class="clamp3">Snippet A</div>
-<a class=resultLink href="/link?url=https%3A%2F%2Fexample.com%2Fb" id="sogou_vr_0_1">Result B</a>
-<div class="clamp3">Snippet B</div>
+<div class="results">
+  <div class="reactResult" id="sogou_vr_30010588_1">
+    <a class="title__saTitle_287f" href="/tracking/url">Result A</a>
+    <script type="application/json">{"title":"Result A","url":"https://example.com/a","content":"Snippet <em>A</em> &amp; more","date":"2026-11-27"}</script>
+  </div>
+  <div class="reactResult" id="sogou_vr_30010582_1">
+    <a class="title__saTitle_287f" href="/tracking/url">Result B</a>
+    <script type="application/json">{"title":"Result B","url":"https://example.com/b","summary":"Snippet B"}</script>
+  </div>
+  <script type="application/json">{"title":"Result A","url":"https://example.com/a","content":"duplicate"}</script>
+  <script type="application/json">{not valid json}</script>
+</div>
 </body></html>`)
 				return rec.Result(), nil
 			}),
@@ -2201,8 +2209,20 @@ func TestWebTool_SogouSearch_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search() error: %v", err)
 	}
-	if !strings.Contains(out, "via Sogou") || !strings.Contains(out, "https://example.com/a") {
-		t.Fatalf("unexpected output: %s", out)
+	for _, want := range []string{
+		"via Sogou",
+		"https://example.com/a",
+		"https://example.com/b",
+		"Snippet A & more",
+		"Snippet B",
+		"2026-11-27",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if got := strings.Count(out, "https://example.com/a"); got != 1 {
+		t.Fatalf("URL occurrence count = %d, want 1:\n%s", got, out)
 	}
 }
 

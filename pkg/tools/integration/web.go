@@ -89,11 +89,11 @@ var (
 	reDDGSnippet = regexp.MustCompile(
 		`<a class="result__snippet[^"]*".*?>([\s\S]*?)</a>`,
 	)
-	reSogouTitle = regexp.MustCompile(
-		`<a\s+class="?resultLink"?\s+href="([^"]+)"[^>]*id="sogou_vr_\d+_\d+"[^>]*>\s*(.*?)\s*</a>`,
+	// Sogou's WAP results now embed structured result data in JSON scripts.
+	// Parsing those payloads avoids coupling the provider to generated CSS classes.
+	reSogouResultJSON = regexp.MustCompile(
+		`(?is)<script\b[^>]*\btype\s*=\s*["']application/json["'][^>]*>(.*?)</script>`,
 	)
-	reSogouSnippet = regexp.MustCompile(`<div class="clamp\d*[^"]*">\s*(.*?)\s*</div>`)
-	reSogouRealURL = regexp.MustCompile(`url=([^&]+)`)
 
 	// reBlankLineRuns matches two or more newlines, allowing spaces and tabs
 	// on the blank lines between them. Search snippets are collapsed with it
@@ -190,18 +190,6 @@ func normalizeSearchSnippet(text string) string {
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = reBlankLineRuns.ReplaceAllString(text, "\n")
 	return strings.Trim(text, "\n")
-}
-
-func extractSogouURL(href string) string {
-	match := reSogouRealURL.FindStringSubmatch(href)
-	if len(match) < 2 {
-		return ""
-	}
-	decoded, err := url.QueryUnescape(match[1])
-	if err != nil {
-		return ""
-	}
-	return decoded
 }
 
 func applySogouRangeHint(query string, rangeCode string) string {
@@ -1145,6 +1133,54 @@ func (p *GeminiSearchProvider) Search(
 	return strings.Join(lines, "\n"), nil
 }
 
+func parseSogouResults(pageHTML string, count int) []SearchResultItem {
+	matches := reSogouResultJSON.FindAllStringSubmatch(pageHTML, -1)
+	results := make([]SearchResultItem, 0, count)
+	seenURLs := make(map[string]bool)
+
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+
+		var item struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
+			Summary string `json:"summary"`
+			Date    string `json:"date"`
+		}
+		if err := json.Unmarshal([]byte(match[1]), &item); err != nil {
+			continue
+		}
+
+		title := strings.TrimSpace(html.UnescapeString(stripTags(item.Title)))
+		link := strings.TrimSpace(html.UnescapeString(item.URL))
+		if title == "" || link == "" || seenURLs[link] {
+			continue
+		}
+
+		snippet := item.Content
+		if strings.TrimSpace(snippet) == "" {
+			snippet = item.Summary
+		}
+		snippet = strings.TrimSpace(html.UnescapeString(stripTags(snippet)))
+
+		seenURLs[link] = true
+		results = append(results, SearchResultItem{
+			Title:     title,
+			URL:       link,
+			Snippet:   snippet,
+			Published: strings.TrimSpace(item.Date),
+		})
+		if len(results) >= count {
+			break
+		}
+	}
+
+	return results
+}
+
 func (p *SogouSearchProvider) Search(
 	ctx context.Context,
 	query string,
@@ -1182,36 +1218,12 @@ func (p *SogouSearchProvider) Search(
 			break
 		}
 
-		matches := reSogouTitle.FindAllStringSubmatch(html, -1)
-		for _, match := range matches {
-			if len(match) < 3 {
+		for _, item := range parseSogouResults(html, count) {
+			if seenURLs[item.URL] {
 				continue
 			}
-
-			title := stripTags(match[2])
-			link := extractSogouURL(match[1])
-			if title == "" || link == "" || seenURLs[link] {
-				continue
-			}
-			seenURLs[link] = true
-
-			start := strings.Index(html, match[0])
-			snippet := ""
-			if start >= 0 {
-				after := html[start+len(match[0]):]
-				if len(after) > 2000 {
-					after = after[:2000]
-				}
-				if snippetMatch := reSogouSnippet.FindStringSubmatch(after); len(snippetMatch) > 1 {
-					snippet = stripTags(snippetMatch[1])
-				}
-			}
-
-			results = append(results, SearchResultItem{
-				Title:   title,
-				URL:     link,
-				Snippet: snippet,
-			})
+			seenURLs[item.URL] = true
+			results = append(results, item)
 			if len(results) >= count {
 				break
 			}
@@ -1224,7 +1236,7 @@ func (p *SogouSearchProvider) Search(
 
 	lines := []string{fmt.Sprintf("Results for: %s (via Sogou)", query)}
 	for i, item := range results {
-		lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Snippet)
+		lines = appendSearchResult(lines, i+1, item.Title, item.URL, item.Snippet, item.Published)
 	}
 	return strings.Join(lines, "\n"), nil
 }
