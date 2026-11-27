@@ -797,6 +797,190 @@ func useHelpText(skills ...string) string {
 	)
 }
 
+const testApprovalToken = "0123456789abcdef0123456789abcdef"
+
+func TestTelegramApprovalKeyboardMarkup(t *testing.T) {
+	markup := telegramApprovalKeyboardMarkup(map[string]string{
+		"message_kind":     "approval",
+		"approval_token":   testApprovalToken,
+		"approval_command": `"docker ps"`,
+	})
+	require.NotNil(t, markup)
+	require.Len(t, markup.InlineKeyboard, 1)
+	require.Len(t, markup.InlineKeyboard[0], 2)
+
+	approve := markup.InlineKeyboard[0][0]
+	deny := markup.InlineKeyboard[0][1]
+	require.Equal(t, "✅ Approve", approve.Text)
+	require.Equal(t, "pa:a:"+testApprovalToken, approve.CallbackData)
+	require.Equal(t, "❌ Deny", deny.Text)
+	require.Equal(t, "pa:d:"+testApprovalToken, deny.CallbackData)
+	require.LessOrEqual(t, len(approve.CallbackData), telegramMaxCallbackDataBytes)
+	require.LessOrEqual(t, len(deny.CallbackData), telegramMaxCallbackDataBytes)
+}
+
+func TestTelegramApprovalKeyboardMarkup_RequiresApprovalAndToken(t *testing.T) {
+	require.Nil(t, telegramApprovalKeyboardMarkup(nil))
+	require.Nil(t, telegramApprovalKeyboardMarkup(map[string]string{
+		"approval_token": testApprovalToken,
+	}), "a non-approval message must not get buttons")
+	require.Nil(t, telegramApprovalKeyboardMarkup(map[string]string{
+		"message_kind": "approval",
+	}), "an approval without a token must not get buttons")
+	require.Nil(t, telegramApprovalKeyboardMarkup(map[string]string{
+		"message_kind":   "approval",
+		"approval_token": strings.Repeat("z", 32),
+	}), "a non-hex token must not get buttons")
+}
+
+func TestTelegramApprovalCallback(t *testing.T) {
+	decision, token, ok := telegramApprovalCallback("pa:a:" + testApprovalToken)
+	require.True(t, ok)
+	require.Equal(t, telegramApprovalApprove, decision)
+	require.Equal(t, testApprovalToken, token)
+
+	decision, token, ok = telegramApprovalCallback("pa:d:" + testApprovalToken)
+	require.True(t, ok)
+	require.Equal(t, telegramApprovalDeny, decision)
+	require.Equal(t, testApprovalToken, token)
+
+	for _, data := range []string{
+		"",
+		"pa:",
+		"pa:x:" + testApprovalToken,
+		"pa:a:",
+		"pa:a:1234",
+		"pa:a:" + strings.Repeat("z", 32),
+		"pc:/list model",
+	} {
+		_, _, ok := telegramApprovalCallback(data)
+		require.False(t, ok, "callback data %q should be rejected", data)
+	}
+}
+
+func TestSend_ApprovalPromptAttachesDecisionKeyboard(t *testing.T) {
+	var body []byte
+	caller := &stubCaller{
+		callFn: func(_ context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			if !strings.Contains(url, "sendMessage") {
+				t.Fatalf("unexpected API call: %s", url)
+			}
+			body = append([]byte(nil), data.BodyRaw...)
+			return successResponse(t), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "12345",
+		Content: "Approval required for an unknown exec command.",
+		Context: bus.InboundContext{
+			Channel: "telegram",
+			ChatID:  "12345",
+			Raw: map[string]string{
+				"message_kind":   "approval",
+				"approval_token": testApprovalToken,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	markup, ok := payload["reply_markup"].(map[string]any)
+	require.True(t, ok)
+	rows, ok := markup["inline_keyboard"].([]any)
+	require.True(t, ok)
+	require.Len(t, rows, 1)
+
+	row, ok := rows[0].([]any)
+	require.True(t, ok)
+	require.Len(t, row, 2)
+	approve, ok := row[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "pa:a:"+testApprovalToken, approve["callback_data"])
+}
+
+func TestHandleCallbackQuery_ApprovalPublishesDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data string
+		want string
+	}{
+		{name: "approve", data: "pa:a:" + testApprovalToken, want: "approve " + testApprovalToken},
+		{name: "deny", data: "pa:d:" + testApprovalToken, want: "deny " + testApprovalToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cleared bool
+			caller := &stubCaller{
+				callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+					switch {
+					case strings.Contains(url, "answerCallbackQuery"):
+						return &ta.Response{Ok: true, Result: []byte("true")}, nil
+					case strings.Contains(url, "editMessageReplyMarkup"):
+						cleared = true
+						return successResponse(t), nil
+					default:
+						t.Fatalf("unexpected API call: %s", url)
+						return nil, nil
+					}
+				},
+			}
+			ch, messageBus := newCallbackTestChannel(t, caller, nil)
+
+			err := ch.handleCallbackQuery(context.Background(), telego.CallbackQuery{
+				ID:   "cb-approval-" + tc.name,
+				From: telego.User{ID: 777, FirstName: "Alice"},
+				Data: tc.data,
+				Message: &telego.Message{
+					MessageID: 42,
+					Chat:      telego.Chat{ID: 12345, Type: "private"},
+				},
+			})
+			require.NoError(t, err)
+
+			select {
+			case inbound := <-messageBus.InboundChan():
+				require.Equal(t, tc.want, inbound.Content)
+				require.Equal(t, "telegram", inbound.Channel)
+				require.Equal(t, "12345", inbound.ChatID)
+				require.Equal(t, "777", inbound.SenderID)
+			case <-time.After(time.Second):
+				t.Fatal("no inbound message published")
+			}
+			require.True(t, cleared, "approval keyboard should be removed after a decision")
+			requireCallbackAnswered(t, caller)
+		})
+	}
+}
+
+func TestHandleCallbackQuery_ApprovalRejectsUnauthorizedUser(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+			if !strings.Contains(url, "answerCallbackQuery") {
+				t.Fatalf("unexpected API call: %s", url)
+			}
+			return &ta.Response{Ok: true, Result: []byte("true")}, nil
+		},
+	}
+	ch, messageBus := newCallbackTestChannel(t, caller, []string{"999"})
+
+	err := ch.handleCallbackQuery(context.Background(), telego.CallbackQuery{
+		ID:      "cb-approval-unauthorized",
+		From:    telego.User{ID: 777, FirstName: "Alice"},
+		Data:    "pa:a:" + testApprovalToken,
+		Message: &telego.Message{MessageID: 42, Chat: telego.Chat{ID: 12345, Type: "private"}},
+	})
+	require.NoError(t, err)
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("unexpected inbound message: %+v", inbound)
+	case <-time.After(100 * time.Millisecond):
+	}
+	requireCallbackAnswered(t, caller)
+}
+
 func modelListText(models ...string) string {
 	if len(models) == 0 {
 		return "No models configured"

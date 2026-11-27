@@ -61,6 +61,10 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 
 The Telegram channel supports message reactions. The gateway acknowledges each inbound message with a 👀 reaction and removes it when the reply is sent, and the `reaction` tool can add the same reaction on demand.
 
+## Command approvals
+
+When `tools.exec.unknown_command_policy` is `ask` (the default) and the agent cannot classify a command, it asks the originating user before running it. In Telegram the prompt includes **✅ Approve** and **❌ Deny** inline buttons, so you can answer without retyping `approve <token>` or `deny <token>`. The buttons disappear after a decision, and only the user who started the request can approve or deny it; typing the reply still works.
+
 ## Built-in Commands
 
 Telegram auto-registers PicoClaw's top-level bot commands at startup, including `/start`, `/help`, `/show`, `/list`, and `/use`. Setting `channel_list.telegram.commands_enabled` to `false` clears the menu and makes the agent reject all slash commands.

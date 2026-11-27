@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -15,6 +16,14 @@ const (
 	telegramCommandCallbackPrefix = "pc:"
 	telegramCommandButtonsPerRow  = 3
 	telegramMaxCallbackDataBytes  = 64
+
+	telegramApprovalCallbackPrefix = "pa:"
+	telegramApprovalApproveAction  = "a:"
+	telegramApprovalDenyAction     = "d:"
+	// telegramApprovalTokenRunes is the hex length of the agent's exec approval
+	// token. Keeping the token verbatim gives the agent an unambiguous target
+	// even when several approvals are pending.
+	telegramApprovalTokenRunes = 32
 
 	telegramSkillCallbackPrefix = "pu:"
 	telegramSkillPageAction     = "p:"
@@ -96,6 +105,86 @@ func telegramCommandMenuMarkup(text string, defs []commands.Definition) *telego.
 	return &telego.InlineKeyboardMarkup{
 		InlineKeyboard: chunkInlineButtons(buttons, telegramCommandButtonsPerRow),
 	}
+}
+
+// telegramApprovalKeyboardMarkup builds the Approve/Deny inline keyboard for an
+// exec approval prompt. It returns nil unless the outbound message is an
+// approval that carries a well-formed token, so unrelated messages never get
+// buttons. Each button answers the exact pending request instead of asking the
+// user to retype the token on a phone.
+func telegramApprovalKeyboardMarkup(raw map[string]string) *telego.InlineKeyboardMarkup {
+	if len(raw) == 0 {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(raw["message_kind"]), "approval") {
+		return nil
+	}
+	token := strings.TrimSpace(raw["approval_token"])
+	if !telegramValidApprovalToken(token) {
+		return nil
+	}
+
+	return &telego.InlineKeyboardMarkup{
+		InlineKeyboard: [][]telego.InlineKeyboardButton{{
+			{
+				Text:         "✅ Approve",
+				CallbackData: telegramApprovalCallbackPrefix + telegramApprovalApproveAction + token,
+			},
+			{
+				Text:         "❌ Deny",
+				CallbackData: telegramApprovalCallbackPrefix + telegramApprovalDenyAction + token,
+			},
+		}},
+	}
+}
+
+// telegramApprovalDecision is the agent-facing verb sent when a button is
+// tapped. The values match the approval replies the agent already accepts.
+type telegramApprovalDecision string
+
+const (
+	telegramApprovalApprove telegramApprovalDecision = "approve"
+	telegramApprovalDeny    telegramApprovalDecision = "deny"
+)
+
+// telegramApprovalCallback parses the data emitted by
+// telegramApprovalKeyboardMarkup. The token shape is validated here so forged
+// callback data cannot reach the agent as an approval reply.
+func telegramApprovalCallback(data string) (
+	telegramApprovalDecision,
+	string,
+	bool,
+) {
+	data = strings.TrimSpace(data)
+	if !strings.HasPrefix(data, telegramApprovalCallbackPrefix) {
+		return "", "", false
+	}
+
+	rest := strings.TrimPrefix(data, telegramApprovalCallbackPrefix)
+	var decision telegramApprovalDecision
+	switch {
+	case strings.HasPrefix(rest, telegramApprovalApproveAction):
+		decision = telegramApprovalApprove
+		rest = strings.TrimPrefix(rest, telegramApprovalApproveAction)
+	case strings.HasPrefix(rest, telegramApprovalDenyAction):
+		decision = telegramApprovalDeny
+		rest = strings.TrimPrefix(rest, telegramApprovalDenyAction)
+	default:
+		return "", "", false
+	}
+
+	if !telegramValidApprovalToken(rest) {
+		return "", "", false
+	}
+	return decision, rest, true
+}
+
+func telegramValidApprovalToken(token string) bool {
+	if len(token) != telegramApprovalTokenRunes {
+		return false
+	}
+	decoded, err := hex.DecodeString(token)
+	return err == nil && len(decoded) == telegramApprovalTokenRunes/2
 }
 
 // telegramUseCommandMenuMarkup builds the paginated skill picker for the /use

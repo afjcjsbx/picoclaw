@@ -330,11 +330,15 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 	}
 
 	// Command usage replies get an inline keyboard built from the command
-	// definitions. Tool feedback is excluded: it is an ephemeral progress
-	// update, not a command result.
-	var commandMarkup *telego.InlineKeyboardMarkup
+	// definitions. Exec approval prompts get Approve/Deny buttons so the user
+	// can answer without retyping the token. Tool feedback is excluded: it is an
+	// ephemeral progress update, not a command result.
+	var actionMarkup *telego.InlineKeyboardMarkup
 	if !isToolFeedback {
-		commandMarkup = telegramCommandMenuMarkup(msg.Content, c.commandDefinitions())
+		actionMarkup = telegramApprovalKeyboardMarkup(msg.Context.Raw)
+		if actionMarkup == nil {
+			actionMarkup = telegramCommandMenuMarkup(msg.Content, c.commandDefinitions())
+		}
 	}
 
 	trackedChatID := telegramToolFeedbackChatKey(msg.ChatID, &msg.Context)
@@ -348,7 +352,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 		}
 	}
 	trackedMsgID, hasTrackedMsg := c.currentToolFeedbackMessage(trackedChatID)
-	if !isToolFeedback && commandMarkup == nil {
+	if !isToolFeedback && actionMarkup == nil {
 		if msgIDs, handled := c.finalizeToolFeedbackMessageForChat(ctx, trackedChatID, msg); handled {
 			return msgIDs, nil
 		}
@@ -367,13 +371,13 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 		chunk := queue[0]
 		queue = queue[1:]
 
-		// Attach the command keyboard only to the last chunk. If this chunk
+		// Attach the inline keyboard only to the last chunk. If this chunk
 		// gets split further, it is not sent and the final sub-chunk receives
 		// the keyboard instead.
 		chunkIsFinal := len(queue) == 0
 		var chunkMarkup *telego.InlineKeyboardMarkup
 		if chunkIsFinal {
-			chunkMarkup = commandMarkup
+			chunkMarkup = actionMarkup
 		}
 
 		content := parseContent(chunk, useMarkdownV2)
@@ -1134,6 +1138,9 @@ func telegramClearMediaCaptions(msg bus.OutboundMediaMessage) bus.OutboundMediaM
 }
 
 func (c *TelegramChannel) handleCallbackQuery(ctx context.Context, query telego.CallbackQuery) error {
+	if decision, token, ok := telegramApprovalCallback(query.Data); ok {
+		return c.handleApprovalCallback(ctx, query, decision, token)
+	}
 	if kind, value, ok := telegramSkillCallback(query.Data); ok {
 		if !c.commandAvailable("use") {
 			c.answerCallbackQuery(ctx, query.ID, "Command not available.", true)
@@ -1199,6 +1206,64 @@ func (c *TelegramChannel) runCallbackCommand(
 		})
 	}
 	return nil
+}
+
+// handleApprovalCallback answers an inline Approve/Deny tap. The decision is
+// injected as the same "approve <token>"/"deny <token>" text a user would type,
+// so the agent's existing approval path stays the single authority. The agent
+// still checks that the tapping user owns the pending request, which means a
+// visible keyboard in a group cannot approve another user's command.
+func (c *TelegramChannel) handleApprovalCallback(
+	ctx context.Context,
+	query telego.CallbackQuery,
+	decision telegramApprovalDecision,
+	token string,
+) error {
+	if query.Message == nil {
+		c.answerCallbackQuery(ctx, query.ID, "", false)
+		return nil
+	}
+
+	sender := telegramCallbackSender(query.From)
+	if !c.IsAllowedSender(sender) {
+		c.answerCallbackQuery(ctx, query.ID, "You are not allowed to answer this approval.", true)
+		return nil
+	}
+
+	// Acknowledge the tap immediately: the agent's confirmation arrives as a
+	// separate message, and a late answer makes Telegram spin the button.
+	c.answerCallbackQuery(ctx, query.ID, "Approval sent.", false)
+	// Removing the keyboard prevents a second tap from sending a duplicate
+	// decision for the same token.
+	c.clearApprovalKeyboard(ctx, query)
+
+	chatID, inboundCtx := telegramCallbackInboundContext(c.Name(), query)
+	content := string(decision) + " " + token
+	if err := c.HandleInboundContext(ctx, chatID, content, nil, inboundCtx, sender); err != nil {
+		logger.WarnCF("telegram", "Failed to handle approval callback", map[string]any{
+			"decision": string(decision),
+			"error":    err.Error(),
+		})
+	}
+	return nil
+}
+
+// clearApprovalKeyboard removes the inline keyboard after a decision. Telegram
+// treats an empty inline keyboard as a request to remove the markup.
+func (c *TelegramChannel) clearApprovalKeyboard(ctx context.Context, query telego.CallbackQuery) {
+	chat := query.Message.GetChat()
+	_, err := c.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+		ChatID:      tu.ID(chat.ID),
+		MessageID:   query.Message.GetMessageID(),
+		ReplyMarkup: &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}},
+	})
+	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+		logger.DebugCF("telegram", "Failed to clear approval keyboard", map[string]any{
+			"chat_id":    chat.ID,
+			"message_id": query.Message.GetMessageID(),
+			"error":      err.Error(),
+		})
+	}
 }
 
 func (c *TelegramChannel) handleSkillCallback(
