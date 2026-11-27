@@ -51,6 +51,7 @@ import {
   slashQueryFromInput,
   storeSlashRecents,
 } from "@/features/chat/slash-commands"
+import type { ConversationUsageStats } from "@/features/chat/usage"
 import { useAudioRecorder } from "@/hooks/use-audio-recorder"
 import { cn } from "@/lib/utils"
 import type { ChatAttachment, ContextUsage } from "@/store/chat"
@@ -86,11 +87,13 @@ interface ChatComposerProps {
   onRemoveFollowUp: (id: string) => void
   modelSelector?: ReactNode
   onContextDetail?: () => void
+  onContextOpen?: () => void
   inputDisabledReason: ChatInputDisabledReason | null
   canSend: boolean
   isTyping: boolean
   isDragActive: boolean
   contextUsage?: ContextUsage
+  conversationUsage?: ConversationUsageStats
   slashCommands?: SlashCommand[]
   promptHistory?: string[]
   focusSignal?: number
@@ -123,11 +126,13 @@ export function ChatComposer({
   onRemoveFollowUp,
   modelSelector,
   onContextDetail,
+  onContextOpen,
   inputDisabledReason,
   canSend,
   isTyping,
   isDragActive,
   contextUsage,
+  conversationUsage,
   slashCommands = [],
   promptHistory = [],
   focusSignal = 0,
@@ -439,7 +444,7 @@ export function ChatComposer({
         <div
           ref={surfaceRef}
           className={cn(
-            "bg-muted/60 dark:bg-muted relative flex w-full flex-col rounded-3xl border border-border p-3 shadow-none transition-colors",
+            "bg-muted/60 dark:bg-muted border-border relative flex w-full flex-col rounded-3xl border p-3 shadow-none transition-colors",
             isDragActive &&
               "dark:border-brand/70 dark:bg-brand/10 border-violet-400/70 bg-violet-500/10",
           )}
@@ -580,6 +585,8 @@ export function ChatComposer({
               {contextUsage && (
                 <ContextUsageRing
                   usage={contextUsage}
+                  conversationUsage={conversationUsage}
+                  onOpen={onContextOpen}
                   onDetailClick={onContextDetail}
                 />
               )}

@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest"
 
+import type { ChatMessage } from "@/store/chat"
+
 import {
   cacheHitRate,
   estimateUsageCostUsd,
   formatCompactTokenCount,
+  formatContextTokenCount,
+  formatConversationCostUsd,
   formatDuration,
   formatTokenCount,
   formatTokensPerSecond,
   formatUsageCostUsd,
+  lastReplyCacheHitRate,
   parseTokenUsage,
   resolveModelPricing,
+  summarizeConversationUsage,
   tokensPerSecond,
 } from "./usage"
 
@@ -295,5 +301,77 @@ describe("cacheHitRate", () => {
         total_tokens: 10,
       }),
     ).toBeUndefined()
+  })
+})
+
+describe("formatContextTokenCount", () => {
+  it("uses compact lower-case units for the context window", () => {
+    expect(formatContextTokenCount(999)).toBe("999")
+    expect(formatContextTokenCount(42_000)).toBe("42k")
+    expect(formatContextTokenCount(118_400)).toBe("118k")
+    expect(formatContextTokenCount(1_000_000)).toBe("1m")
+    expect(formatContextTokenCount(1_200_000)).toBe("1.2m")
+    expect(formatContextTokenCount(12_300_000)).toBe("12m")
+  })
+})
+
+describe("formatConversationCostUsd", () => {
+  it("keeps the screenshot-style precision without trailing zeros", () => {
+    expect(formatConversationCostUsd(undefined)).toBe("—")
+    expect(formatConversationCostUsd(0)).toBe("$0.00")
+    expect(formatConversationCostUsd(0.04)).toBe("$0.04")
+    expect(formatConversationCostUsd(0.172)).toBe("$0.172")
+    expect(formatConversationCostUsd(1.5)).toBe("$1.50")
+  })
+})
+
+describe("conversation usage helpers", () => {
+  const messages = [
+    {
+      id: "user-1",
+      role: "user",
+      content: "question",
+      timestamp: 0,
+    },
+    {
+      id: "assistant-1",
+      role: "assistant",
+      content: "first",
+      timestamp: 1,
+      modelName: "gpt-4o",
+      usage: {
+        input_tokens: 1_000_000,
+        output_tokens: 0,
+        total_tokens: 1_000_000,
+        cache_read_tokens: 900_000,
+      },
+    },
+    {
+      id: "assistant-2",
+      role: "assistant",
+      content: "second",
+      timestamp: 2,
+      modelName: "gpt-4o",
+      usage: {
+        input_tokens: 200,
+        output_tokens: 100,
+        total_tokens: 300,
+        cache_read_tokens: 150,
+        cost_usd: 0.05,
+      },
+    },
+  ] satisfies ChatMessage[]
+
+  it("sums input, output, and per-message cost", () => {
+    const summary = summarizeConversationUsage(messages)
+    expect(summary.inputTokens).toBe(1_000_200)
+    expect(summary.outputTokens).toBe(100)
+    // The first message is estimated from list prices, the second reports its
+    // own cost.
+    expect(summary.costUsd).toBeCloseTo(2.5 + 0.05, 6)
+  })
+
+  it("reports the cache hit rate of the last reply with usage", () => {
+    expect(lastReplyCacheHitRate(messages)).toBe(75)
   })
 })

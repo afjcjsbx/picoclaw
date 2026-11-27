@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/usage"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -26,6 +27,7 @@ import (
 func (h *Handler) registerSessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", h.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/search", h.handleSearchSessions)
+	mux.HandleFunc("GET /api/sessions/{id}/usage", h.handleGetSessionUsage)
 	mux.HandleFunc("GET /api/sessions/{id}", h.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{id}/fork", h.handleForkSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.handleDeleteSession)
@@ -83,6 +85,7 @@ type sessionUsage struct {
 	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
 	CostUSD             float64 `json:"cost_usd,omitempty"`
 	Requests            int     `json:"requests,omitempty"`
+	Turns               int     `json:"turns,omitempty"`
 	ContextTokens       int     `json:"context_tokens,omitempty"`
 	DurationMS          int64   `json:"duration_ms,omitempty"`
 	ElapsedMS           int64   `json:"elapsed_ms,omitempty"`
@@ -111,6 +114,81 @@ func sessionMessageUsage(usage *providers.UsageInfo) *sessionUsage {
 		ToolDurationMS:      usage.ToolDurationMS,
 		AverageTTFTMS:       usage.AverageTTFTMS,
 	}
+}
+
+// sessionUsageTotals converts a cumulative usage summary into the shape the
+// session API exposes. Cache counters are a subset of the input tokens.
+func sessionUsageTotals(summary usage.Summary) sessionUsage {
+	return sessionUsage{
+		InputTokens:         summary.InputTokens,
+		OutputTokens:        summary.OutputTokens,
+		TotalTokens:         summary.TotalTokens,
+		CacheReadTokens:     summary.CacheReadTokens,
+		CacheCreationTokens: summary.CacheCreationTokens,
+		CostUSD:             summary.CostUSD,
+		Requests:            summary.Requests,
+		Turns:               summary.Turns,
+	}
+}
+
+// usageSummaryFromMessages sums the provider-reported usage persisted on each
+// turn's terminal assistant message. It is the fallback for sessions whose
+// metadata predates the cumulative usage counters.
+func usageSummaryFromMessages(messages []providers.Message) usage.Summary {
+	var summary usage.Summary
+	for _, msg := range messages {
+		if msg.Usage == nil {
+			continue
+		}
+		summary.AddMessage(msg.ModelName, *msg.Usage)
+	}
+	summary.SortModels()
+	return summary
+}
+
+// sessionUsageSummary returns the cumulative usage of a stored session. The
+// metadata counters are authoritative because they also cover turns truncated
+// or cleared from the transcript. Sessions written before counters existed are
+// summed from their messages.
+func (h *Handler) sessionUsageSummary(dir, sessionID string) (usage.Summary, error) {
+	ref, err := h.findPicoJSONLSession(dir, sessionID)
+	if err == nil {
+		metaPath := filepath.Join(dir, sanitizeSessionKey(ref.Key)+".meta.json")
+		meta, metaErr := h.readSessionMeta(metaPath, ref.Key)
+		if metaErr != nil {
+			return usage.Summary{}, metaErr
+		}
+		if meta.UsageTracked {
+			var summary usage.Summary
+			if meta.Usage != nil {
+				summary = *meta.Usage
+			}
+			summary.SortModels()
+			return summary, nil
+		}
+
+		messages, readErr := h.readSessionMessages(
+			filepath.Join(dir, sanitizeSessionKey(ref.Key)+".jsonl"),
+			0,
+		)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return usage.Summary{}, readErr
+		}
+		return usageSummaryFromMessages(messages), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return usage.Summary{}, err
+	}
+
+	legacyRef, legacyErr := h.findLegacyPicoSession(dir, sessionID)
+	if legacyErr != nil {
+		return usage.Summary{}, legacyErr
+	}
+	sess, legacyErr := h.readLegacySession(legacyRef.Path)
+	if legacyErr != nil {
+		return usage.Summary{}, legacyErr
+	}
+	return usageSummaryFromMessages(sess.Messages), nil
 }
 
 type sessionChatAttachment struct {
@@ -1153,6 +1231,38 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		"forked_from": sess.ForkedFrom,
 		"fork_index":  sess.ForkIndex,
 	})
+}
+
+// handleGetSessionUsage returns the cumulative token usage and cost of a
+// session. The totals come from the session's usage counters, so they also
+// cover turns that are no longer part of the transcript.
+//
+//	GET /api/sessions/{id}/usage
+func (h *Handler) handleGetSessionUsage(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		http.Error(w, "missing session id", http.StatusBadRequest)
+		return
+	}
+
+	dir, _, err := h.sessionRuntimeSettings()
+	if err != nil {
+		http.Error(w, "failed to resolve sessions directory", http.StatusInternalServerError)
+		return
+	}
+
+	summary, err := h.sessionUsageSummary(dir, sessionID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "session not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "failed to read session usage", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sessionUsageTotals(summary))
 }
 
 func (h *Handler) handleForkSession(w http.ResponseWriter, r *http.Request) {
