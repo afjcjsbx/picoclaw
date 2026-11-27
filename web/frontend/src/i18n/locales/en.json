@@ -124,6 +124,7 @@
     "removeSplitPane": "Remove conversation from split",
     "resizeSplitPane": "Resize conversation panes",
     "scrollNavigator": "Navigate conversation",
+    "scrollToBottom": "Scroll to bottom",
     "jumpToUserMessage": "Go to question {{index}}: {{preview}}",
     "jumpToAssistantMessage": "Go to answer {{index}}: {{preview}}",
     "paneLayout": "Pane layout",

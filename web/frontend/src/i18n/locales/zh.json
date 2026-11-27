@@ -99,6 +99,7 @@
     "sessionRunning": "正在生成回复",
     "sessionUnread": "未读更新",
     "scrollNavigator": "导航对话",
+    "scrollToBottom": "滚动到底部",
     "jumpToUserMessage": "跳到问题 {{index}}：{{preview}}",
     "jumpToAssistantMessage": "跳到回答 {{index}}：{{preview}}",
     "noHistory": "暂无对话历史",

@@ -40,6 +40,7 @@ import { ChatEmptyState } from "@/components/chat/chat-empty-state"
 import { ConversationNavigator } from "@/components/chat/conversation-navigator"
 import { FilePreviewPanel } from "@/components/chat/file-preview-panel"
 import { ModelSelector } from "@/components/chat/model-selector"
+import { ScrollToBottomButton } from "@/components/chat/scroll-to-bottom-button"
 import { TypingIndicator } from "@/components/chat/typing-indicator"
 import { UserMessage } from "@/components/chat/user-message"
 import { PageHeader } from "@/components/page-header"
@@ -811,6 +812,10 @@ function SplitConversationPane({
             { index: index + 1, preview },
           )
         }
+      />
+      <ScrollToBottomButton
+        scrollRef={scrollRef}
+        label={t("chat.scrollToBottom", { defaultValue: "Scroll to bottom" })}
       />
     </section>
   )
@@ -1690,6 +1695,12 @@ export function ChatPage() {
                     { index: index + 1, preview },
                   )
                 }
+              />
+              <ScrollToBottomButton
+                scrollRef={scrollRef}
+                label={t("chat.scrollToBottom", {
+                  defaultValue: "Scroll to bottom",
+                })}
               />
             </div>
           )}
