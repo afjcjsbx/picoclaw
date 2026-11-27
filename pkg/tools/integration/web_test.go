@@ -712,6 +712,72 @@ func TestWebTool_WebFetch_HTMLExtraction(t *testing.T) {
 	}
 }
 
+// TestWebTool_WebFetch_MarkdownFallback verifies that an empty Markdown
+// extraction falls back to plaintext without changing successful conversions.
+func TestWebTool_WebFetch_MarkdownFallback(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	tests := []struct {
+		name          string
+		body          string
+		wantExtractor string
+		wantText      string
+	}{
+		{
+			name: "empty markdown falls back to plaintext",
+			body: `<html><body><main class="pageHolder skip_popup">` +
+				`<h2>Recovered title</h2><p>Recovered body</p></main></body></html>`,
+			wantExtractor: "text",
+			wantText:      "Recovered body",
+		},
+		{
+			name:          "non-empty markdown does not fall back",
+			body:          `<html><body><main><h2>Markdown title</h2><p>Markdown body</p></main></body></html>`,
+			wantExtractor: "markdown",
+			wantText:      "## Markdown title",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			tool, err := NewWebFetchTool(50000, "markdown", testFetchLimit)
+			if err != nil {
+				t.Fatalf("failed to create web fetch tool: %v", err)
+			}
+
+			result := tool.Execute(context.Background(), map[string]any{"url": server.URL})
+			if result.IsError {
+				t.Fatalf("expected success, got %q", result.ForLLM)
+			}
+
+			var envelope struct {
+				Status    int    `json:"status"`
+				Extractor string `json:"extractor"`
+				Text      string `json:"text"`
+			}
+			if err := json.Unmarshal([]byte(result.ForLLM), &envelope); err != nil {
+				t.Fatalf("failed to decode result: %v", err)
+			}
+			if envelope.Status != http.StatusOK {
+				t.Errorf("status = %d, want %d", envelope.Status, http.StatusOK)
+			}
+			if envelope.Extractor != tt.wantExtractor {
+				t.Errorf("extractor = %q, want %q", envelope.Extractor, tt.wantExtractor)
+			}
+			if !strings.Contains(envelope.Text, tt.wantText) {
+				t.Errorf("text = %q, want it to contain %q", envelope.Text, tt.wantText)
+			}
+		})
+	}
+}
+
 // TestWebFetchTool_extractText verifies text extraction preserves newlines
 func TestWebFetchTool_extractText(t *testing.T) {
 	tool := &WebFetchTool{}

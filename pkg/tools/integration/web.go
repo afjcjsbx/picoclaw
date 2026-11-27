@@ -2617,7 +2617,14 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			if err != nil {
 				return ErrorResult(fmt.Sprintf("failed to HTML to markdown: %v", err))
 			}
-			extractor = "markdown"
+			if strings.TrimSpace(text) == "" {
+				logger.DebugCF("tool", "Markdown extraction returned empty content, falling back to plaintext",
+					map[string]any{"url": urlStr})
+				text = t.extractText(bodyStr)
+				extractor = "text"
+			} else {
+				extractor = "markdown"
+			}
 
 		default:
 			text = t.extractText(bodyStr)
