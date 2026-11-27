@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -344,6 +345,178 @@ func TestHandleMessage_IgnoresDirectMessagesWhenDisabled(t *testing.T) {
 		Author:  &discordgo.User{ID: "user-1"},
 		Content: "hello",
 	}})
+}
+
+func TestHandleMessage_InboundAttachmentsConfig(t *testing.T) {
+	const attachmentURL = "://invalid-attachment-url"
+	allowAttachments := true
+	disallowAttachments := false
+
+	tests := []struct {
+		name              string
+		allowAttachments  *bool
+		content           string
+		referencedContent string
+		omitAttachment    bool
+		wantInbound       bool
+		wantContent       string
+		wantMedia         []string
+	}{
+		{
+			name:        "unset processes text and attachment",
+			content:     "hello",
+			wantInbound: true,
+			wantContent: "hello\n[attachment: " + attachmentURL + "]",
+			wantMedia:   []string{attachmentURL},
+		},
+		{
+			name:             "explicit true processes text and attachment",
+			allowAttachments: &allowAttachments,
+			content:          "hello",
+			wantInbound:      true,
+			wantContent:      "hello\n[attachment: " + attachmentURL + "]",
+			wantMedia:        []string{attachmentURL},
+		},
+		{
+			name:             "false keeps text and ignores attachment",
+			allowAttachments: &disallowAttachments,
+			content:          "hello",
+			wantInbound:      true,
+			wantContent:      "hello",
+			wantMedia:        []string{},
+		},
+		{
+			name:             "false ignores attachment-only message",
+			allowAttachments: &disallowAttachments,
+			wantInbound:      false,
+		},
+		{
+			name:              "false ignores attachment-only reply with quoted content",
+			allowAttachments:  &disallowAttachments,
+			referencedContent: "quoted hello",
+			wantInbound:       false,
+		},
+		{
+			name:              "false keeps quoted text when message has no attachments",
+			allowAttachments:  &disallowAttachments,
+			referencedContent: "quoted hello",
+			omitAttachment:    true,
+			wantInbound:       true,
+			wantContent:       "[quoted message from quoted-user]: quoted hello\n\n",
+			wantMedia:         []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messageBus := bus.NewMessageBus()
+			session, err := discordgo.New("Bot test-token")
+			if err != nil {
+				t.Fatalf("discordgo.New() error = %v", err)
+			}
+			session.State.User = &discordgo.User{ID: "bot-1"}
+
+			ch := &DiscordChannel{
+				BaseChannel: channels.NewBaseChannel("discord", nil, messageBus, []string{"*"}),
+				session:     session,
+				config:      &config.DiscordSettings{AllowAttachments: tt.allowAttachments},
+				ctx:         context.Background(),
+			}
+
+			message := &discordgo.Message{
+				ID:        "msg-1",
+				ChannelID: "chat-1",
+				Author:    &discordgo.User{ID: "user-1", Username: "user"},
+				Content:   tt.content,
+			}
+			if !tt.omitAttachment {
+				message.Attachments = []*discordgo.MessageAttachment{{
+					URL:      attachmentURL,
+					Filename: "image.png",
+				}}
+			}
+			if tt.referencedContent != "" {
+				message.MessageReference = &discordgo.MessageReference{MessageID: "ref-1"}
+				message.ReferencedMessage = &discordgo.Message{
+					Content: tt.referencedContent,
+					Author:  &discordgo.User{ID: "user-2", Username: "quoted-user"},
+				}
+			}
+
+			ch.handleMessage(session, &discordgo.MessageCreate{Message: message})
+
+			if !tt.wantInbound {
+				select {
+				case inbound := <-messageBus.InboundChan():
+					t.Fatalf("unexpected inbound message: %#v", inbound)
+				default:
+					return
+				}
+			}
+
+			select {
+			case inbound := <-messageBus.InboundChan():
+				if inbound.Content != tt.wantContent {
+					t.Fatalf("inbound.Content = %q, want %q", inbound.Content, tt.wantContent)
+				}
+				if !reflect.DeepEqual(inbound.Media, tt.wantMedia) {
+					t.Fatalf("inbound.Media = %#v, want %#v", inbound.Media, tt.wantMedia)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timeout waiting for inbound message")
+			}
+		})
+	}
+}
+
+func TestHandleMessage_DisabledAttachmentsSkipsDownload(t *testing.T) {
+	var requests atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxy.Close()
+
+	messageBus := bus.NewMessageBus()
+	session, err := discordgo.New("Bot test-token")
+	if err != nil {
+		t.Fatalf("discordgo.New() error = %v", err)
+	}
+	session.State.User = &discordgo.User{ID: "bot-1"}
+
+	allowAttachments := false
+	ch := &DiscordChannel{
+		BaseChannel: channels.NewBaseChannel("discord", nil, messageBus, []string{"*"}),
+		session:     session,
+		config: &config.DiscordSettings{
+			Proxy:            proxy.URL,
+			AllowAttachments: &allowAttachments,
+		},
+		ctx: context.Background(),
+	}
+
+	ch.handleMessage(session, &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID:        "msg-1",
+		ChannelID: "chat-1",
+		Author:    &discordgo.User{ID: "user-1", Username: "user"},
+		Content:   "hello",
+		Attachments: []*discordgo.MessageAttachment{{
+			URL:      "http://8.8.8.8/image.png",
+			Filename: "image.png",
+		}},
+	}})
+
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("attachment download requests = %d, want 0", got)
+	}
+	select {
+	case inbound := <-messageBus.InboundChan():
+		if inbound.Content != "hello" || len(inbound.Media) != 0 {
+			t.Fatalf("unexpected inbound message: %#v", inbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for inbound message")
+	}
 }
 
 func TestHandleInteractionCreate_IgnoresDirectMessagesWhenDisabled(t *testing.T) {

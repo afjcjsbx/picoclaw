@@ -36,7 +36,8 @@ Discord is a free voice, video, and text chat application designed for communiti
       "reasoning_channel_id": "",
       "settings": {
         "proxy": "",
-        "allow_dm": true
+        "allow_dm": true,
+        "allow_attachments": true
       }
     }
   }
@@ -54,8 +55,11 @@ Discord is a free voice, video, and text chat application designed for communiti
 | reasoning_channel_id | string | No       | Optional target channel ID for reasoning/thinking output                    |
 | proxy                | string | No       | HTTP/SOCKS5 proxy URL for the Discord connection (e.g. `http://127.0.0.1:7890`). Env: `PICOCLAW_CHANNELS_DISCORD_PROXY` |
 | allow_dm             | bool   | No       | Whether the bot accepts direct messages and DM slash commands. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_DM` |
+| allow_attachments    | bool   | No       | Whether inbound attachments are downloaded and processed. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS` |
 
 Set `allow_dm` to `false` to make the bot ignore direct messages and DM interactions while continuing to handle mentions in guild channels.
+
+Set `allow_attachments` to `false` to ignore files sent to the bot. Attachments are not downloaded or forwarded to the agent, while message text is still processed. Attachment-only messages are ignored.
 
 Set `commands_enabled` to `false` to clear the Discord slash command menu at startup and make the agent reject all slash commands. The setting applies to the whole Discord integration, not to an individual guild or text channel.
 

@@ -23,7 +23,8 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
         "mention_only": false
       },
       "settings": {
-        "allow_dm": true
+        "allow_dm": true,
+        "allow_attachments": true
       }
     }
   }
@@ -38,8 +39,11 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
 | commands_enabled | bool | 否 | 是否启用此频道的斜杠命令。设为 `false` 会清空 Discord 命令菜单，并由 Agent 拒绝所有斜杠命令，默认为 `true` |
 | group_trigger | object | 否   | 群组触发设置（示例: { "mention_only": false }） |
 | allow_dm      | bool   | 否   | 是否接受私信和 DM 中的斜杠命令，默认为 `true`。环境变量：`PICOCLAW_CHANNELS_DISCORD_ALLOW_DM` |
+| allow_attachments | bool | 否 | 是否下载并处理入站附件，默认为 `true`。环境变量：`PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS` |
 
 将 `allow_dm` 设置为 `false` 后，机器人会忽略私信和 DM 中的交互，同时继续处理服务器频道中的提及。
+
+将 `allow_attachments` 设置为 `false` 后，机器人会忽略用户发送的文件。附件不会被下载或转发给 Agent，但消息文本仍会处理；仅包含附件的消息将被忽略。
 
 将 `commands_enabled` 设置为 `false` 后，启动时会清空 Discord 斜杠命令菜单，并由 Agent 拒绝所有斜杠命令。此设置作用于整个 Discord 集成，而不是单个服务器或文本频道。
 

@@ -611,6 +611,11 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		content = c.stripBotMention(content)
 	}
 
+	attachmentsAllowed := c.config == nil || c.config.AttachmentsAllowed()
+	if !attachmentsAllowed && len(m.Attachments) > 0 && content == "" {
+		return
+	}
+
 	// Resolve Discord refs in main content before concatenation to avoid
 	// double-expanding links that appear in the referenced message.
 	content = c.resolveDiscordRefs(s, content, m.GuildID)
@@ -631,7 +636,11 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 
 	senderID := m.Author.ID
 
-	mediaPaths := make([]string, 0, len(m.Attachments))
+	attachments := m.Attachments
+	if !attachmentsAllowed {
+		attachments = nil
+	}
+	mediaPaths := make([]string, 0, len(attachments))
 
 	scope := channels.BuildMediaScope("discord", m.ChannelID, m.ID)
 
@@ -651,7 +660,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		return localPath // fallback
 	}
 
-	for _, attachment := range m.Attachments {
+	for _, attachment := range attachments {
 		localPath := c.downloadAttachment(attachment.URL, attachment.Filename)
 		if localPath != "" {
 			mediaPaths = append(mediaPaths, storeMedia(localPath, attachment))
