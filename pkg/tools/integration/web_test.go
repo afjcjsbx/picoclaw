@@ -2601,9 +2601,9 @@ func TestWebTool_AutoProviderRoutesQueryLanguageBetweenSogouAndDuckDuckGo(t *tes
 		maxResults: 5,
 		providerResolver: func(query string) []searchProviderCandidate {
 			if prefersDuckDuckGoQuery(query) {
-				return []searchProviderCandidate{{name: "duckduckgo", provider: duckProvider, maxResults: 3}}
+				return []searchProviderCandidate{{provider: duckProvider, maxResults: 3}}
 			}
-			return []searchProviderCandidate{{name: "sogou", provider: sogouProvider, maxResults: 5}}
+			return []searchProviderCandidate{{provider: sogouProvider, maxResults: 5}}
 		},
 	}
 

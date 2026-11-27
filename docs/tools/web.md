@@ -19,7 +19,7 @@ Provider settings and fetch settings live under `tools.web.*`.
 
 With `auto`, PicoClaw picks the first *ready* provider (enabled and fully configured for its type). Order: `perplexity`, `brave`, `kagi`, `searxng`, `tavily`, `gemini`, `keenable`; then `sogou`/`duckduckgo` (choosing between the two based on the query when both are ready); finally `baidu_search` and `glm_search`. Sogou, DuckDuckGo, and Keenable work without a key; SearXNG needs a `base_url`; the other providers need an API key. A ready provider configured explicitly in `provider` wins over the order.
 
-At execution time, ready providers are tried in that order until one returns results. Transport errors, API failures, CAPTCHA/anti-bot responses, and empty result sets advance to the next provider. An explicitly configured provider is attempted first, followed by the normal fallback order. If every provider fails, the tool returns an error containing each provider's failure instead of a misleading empty result.
+At execution time, Sogou and DuckDuckGo CAPTCHA pages are reported as provider errors. When that happens, PicoClaw tries the next ready provider in the same order, with an explicitly configured provider attempted first. Other errors and empty result sets keep their existing behavior and are returned directly. If every attempted provider returns CAPTCHA, the tool returns the last CAPTCHA error.
 
 ## Web Fetcher
 General settings for fetching and processing webpage content.

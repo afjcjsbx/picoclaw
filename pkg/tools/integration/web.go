@@ -89,6 +89,9 @@ var (
 	reDDGSnippet = regexp.MustCompile(
 		`<a class="result__snippet[^"]*".*?>([\s\S]*?)</a>`,
 	)
+	reDuckDuckGoCaptchaScript = regexp.MustCompile(
+		`(?i)<script\b[^>]*\bsrc\s*=\s*["'][^"']*anomaly\.js["'][^>]*>`,
+	)
 	reSogouTitle = regexp.MustCompile(
 		`<a\s+class="?resultLink"?\s+href="([^"]+)"[^>]*id="sogou_vr_\d+_\d+"[^>]*>\s*(.*?)\s*</a>`,
 	)
@@ -142,6 +145,8 @@ func (it *APIKeyIterator) Next() (string, bool) {
 type SearchProvider interface {
 	Search(ctx context.Context, query string, count int, rangeCode string) (string, error)
 }
+
+var errProviderCaptcha = errors.New("CAPTCHA")
 
 type SearchResultItem struct {
 	Title     string
@@ -1180,7 +1185,7 @@ func (p *SogouSearchProvider) Search(
 		html := string(body)
 		if bytes.Contains(body, []byte(`id="anti-box"`)) &&
 			bytes.Contains(body, []byte(`id="verify-form"`)) {
-			return "", errors.New("Sogou blocked automated search with CAPTCHA")
+			return "", fmt.Errorf("Sogou blocked automated search with %w", errProviderCaptcha)
 		}
 		if len(html) < 200 {
 			break
@@ -1261,7 +1266,7 @@ func (p *DuckDuckGoSearchProvider) Search(
 		return "", err
 	}
 	if isDuckDuckGoCaptcha(status, body) {
-		return "", errors.New("DuckDuckGo blocked automated search with CAPTCHA")
+		return "", fmt.Errorf("DuckDuckGo blocked automated search with %w", errProviderCaptcha)
 	}
 	if status != http.StatusOK {
 		return "", fmt.Errorf("DuckDuckGo returned status %d", status)
@@ -1275,7 +1280,7 @@ func isDuckDuckGoCaptcha(status int, body []byte) bool {
 		return true
 	}
 	lower := bytes.ToLower(body)
-	return bytes.Contains(lower, []byte("anomaly.js")) ||
+	return reDuckDuckGoCaptchaScript.Match(body) ||
 		(bytes.Contains(lower, []byte("captcha")) && bytes.Contains(lower, []byte(`id="challenge"`)))
 }
 
@@ -1711,7 +1716,6 @@ func (p *BaiduSearchProvider) Search(
 }
 
 type searchProviderCandidate struct {
-	name       string
 	provider   SearchProvider
 	maxResults int
 }
@@ -2171,8 +2175,7 @@ func prefersDuckDuckGoQuery(text string) bool {
 }
 
 func (opts WebSearchToolOptions) buildProviderResolver() (func(query string) []searchProviderCandidate, error) {
-	providersByName := make(map[string]SearchProvider, len(knownWebSearchProviders))
-	maxResultsByName := make(map[string]int, len(knownWebSearchProviders))
+	providersByName := make(map[string]searchProviderCandidate, len(knownWebSearchProviders))
 
 	for _, name := range knownWebSearchProviders {
 		if !opts.providerReady(name) {
@@ -2185,22 +2188,20 @@ func (opts WebSearchToolOptions) buildProviderResolver() (func(query string) []s
 		if provider == nil {
 			continue
 		}
-		providersByName[name] = provider
-		maxResultsByName[name] = maxResults
+		providersByName[name] = searchProviderCandidate{
+			provider:   provider,
+			maxResults: maxResults,
+		}
 	}
 
 	return func(query string) []searchProviderCandidate {
 		candidates := make([]searchProviderCandidate, 0, len(providersByName))
 		for _, name := range webSearchProviderOrder(opts, query) {
-			provider, ok := providersByName[name]
+			candidate, ok := providersByName[name]
 			if !ok {
 				continue
 			}
-			candidates = append(candidates, searchProviderCandidate{
-				name:       name,
-				provider:   provider,
-				maxResults: maxResultsByName[name],
-			})
+			candidates = append(candidates, candidate)
 		}
 		return candidates
 	}, nil
@@ -2288,7 +2289,6 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		candidates = t.providerResolver(query)
 	} else if t.provider != nil {
 		candidates = []searchProviderCandidate{{
-			name:       "configured",
 			provider:   t.provider,
 			maxResults: t.maxResults,
 		}}
@@ -2297,8 +2297,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult("search provider is not configured")
 	}
 
-	var failures []string
-	lastEmptyResult := ""
+	var lastCaptchaErr error
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return ErrorResult(fmt.Sprintf("search failed: %v", err))
@@ -2311,11 +2310,10 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 		result, err := candidate.provider.Search(ctx, query, count, rangeCode)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", candidate.name, err))
-			continue
-		}
-		if isEmptySearchResult(result) {
-			lastEmptyResult = result
+			if !errors.Is(err, errProviderCaptcha) {
+				return ErrorResult(fmt.Sprintf("search failed: %v", err))
+			}
+			lastCaptchaErr = err
 			continue
 		}
 
@@ -2325,23 +2323,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		}
 	}
 
-	if len(failures) > 0 {
-		if lastEmptyResult != "" {
-			failures = append(failures, "other providers returned no results")
-		}
-		return ErrorResult("search failed: all providers failed: " + strings.Join(failures, "; "))
-	}
-	return &ToolResult{
-		ForLLM:  lastEmptyResult,
-		ForUser: lastEmptyResult,
-	}
-}
-
-func isEmptySearchResult(result string) bool {
-	trimmed := strings.TrimSpace(result)
-	return trimmed == "" ||
-		strings.HasPrefix(trimmed, "No results for:") ||
-		strings.HasPrefix(trimmed, "No results found or extraction failed.")
+	return ErrorResult(fmt.Sprintf("search failed: all providers blocked by CAPTCHA; last error: %v", lastCaptchaErr))
 }
 
 type WebFetchTool struct {
