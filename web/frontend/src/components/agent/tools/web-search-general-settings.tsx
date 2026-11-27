@@ -65,6 +65,36 @@ export function WebSearchGeneralSettings({
           </Select>
         </SettingRow>
 
+        {draft.provider === "multi" && (
+          <SettingRow
+            label={t(
+              "pages.agent.tools.web_search.multi_concurrency",
+              "Parallel Providers",
+            )}
+            description={t(
+              "pages.agent.tools.web_search.multi_concurrency_hint",
+              "Maximum number of randomized providers queried at the same time. The first non-empty result wins.",
+            )}
+          >
+            <Input
+              type="number"
+              min={1}
+              max={11}
+              className="bg-muted/40 hover:bg-muted/60 focus-visible:bg-background focus-visible:ring-foreground/5 focus:border-border/80 w-full rounded-xl border-transparent shadow-none transition-all duration-300 sm:w-64"
+              value={draft.multi_concurrency || 3}
+              onChange={(event) => {
+                const parsed = Number(event.target.value)
+                onUpdateDraft((current) => ({
+                  ...current,
+                  multi_concurrency: Number.isFinite(parsed)
+                    ? Math.max(1, Math.trunc(parsed))
+                    : 3,
+                }))
+              }}
+            />
+          </SettingRow>
+        )}
+
         <SettingRow
           label={t("pages.agent.tools.web_search.proxy", "Proxy Configuration")}
           description={t(

@@ -361,11 +361,12 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				Provider:        "auto",
-				PreferNative:    true,
-				Proxy:           "",
-				FetchLimitBytes: 10 * 1024 * 1024, // 10MB by default
-				Format:          "plaintext",
+				Provider:         "auto",
+				MultiConcurrency: 3,
+				PreferNative:     true,
+				Proxy:            "",
+				FetchLimitBytes:  10 * 1024 * 1024, // 10MB by default
+				Format:           "plaintext",
 				Brave: BraveConfig{
 					Enabled:    false,
 					MaxResults: 5,

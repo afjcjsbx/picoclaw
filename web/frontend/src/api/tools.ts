@@ -39,6 +39,7 @@ export interface WebSearchProviderConfig {
 export interface WebSearchConfigResponse {
   provider: string
   current_service: string
+  multi_concurrency: number
   prefer_native: boolean
   proxy?: string
   providers: WebSearchProviderOption[]

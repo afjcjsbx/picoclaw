@@ -1849,6 +1849,9 @@ func TestDefaultConfig_WebProviderIsAuto(t *testing.T) {
 	if cfg.Tools.Web.Provider != "auto" {
 		t.Fatalf("DefaultConfig().Tools.Web.Provider = %q, want auto", cfg.Tools.Web.Provider)
 	}
+	if cfg.Tools.Web.MultiConcurrency != 3 {
+		t.Fatalf("DefaultConfig().Tools.Web.MultiConcurrency = %d, want 3", cfg.Tools.Web.MultiConcurrency)
+	}
 }
 
 func TestConfigExample_WebProviderIsAuto(t *testing.T) {
