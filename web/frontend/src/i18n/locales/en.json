@@ -116,6 +116,9 @@
     "activeSplitPane": "Active",
     "removeSplitPane": "Remove conversation from split",
     "resizeSplitPane": "Resize conversation panes",
+    "scrollNavigator": "Navigate conversation",
+    "jumpToUserMessage": "Go to question {{index}}: {{preview}}",
+    "jumpToAssistantMessage": "Go to answer {{index}}: {{preview}}",
     "paneLayout": "Pane layout",
     "addSplitPane": "Add pane",
     "splitLayouts": {
