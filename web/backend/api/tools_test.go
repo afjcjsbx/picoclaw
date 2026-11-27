@@ -324,6 +324,7 @@ func TestHandleGetWebSearchConfig(t *testing.T) {
 	}
 	cfg.Tools.Web.PreferNative = false
 	cfg.Tools.Web.Provider = "sogou"
+	cfg.Tools.Web.MultiConcurrency = 4
 	cfg.Tools.Web.Sogou.Enabled = true
 	cfg.Tools.Web.Sogou.MaxResults = 6
 	cfg.Tools.Web.Brave.Enabled = true
@@ -353,6 +354,21 @@ func TestHandleGetWebSearchConfig(t *testing.T) {
 	}
 	if resp.CurrentService != "sogou" {
 		t.Fatalf("current_service = %q, want sogou", resp.CurrentService)
+	}
+	if resp.MultiConcurrency != 4 {
+		t.Fatalf("multi_concurrency = %d, want 4", resp.MultiConcurrency)
+	}
+	foundMulti := false
+	for _, provider := range resp.Providers {
+		if provider.ID == "multi" {
+			foundMulti = true
+			if !provider.Configured {
+				t.Fatal("multi provider should be configured when Sogou is ready")
+			}
+		}
+	}
+	if !foundMulti {
+		t.Fatal("expected multi provider option")
 	}
 	if !resp.Settings["brave"].APIKeySet {
 		t.Fatalf("brave api_key_set should be true: %#v", resp.Settings["brave"])
@@ -424,6 +440,7 @@ func TestHandleUpdateWebSearchConfig(t *testing.T) {
 		"/api/tools/web-search-config",
 		bytes.NewBufferString(`{
 			"provider":"brave",
+			"multi_concurrency":4,
 			"prefer_native":false,
 			"proxy":"http://127.0.0.1:7890",
 			"settings":{
@@ -446,6 +463,9 @@ func TestHandleUpdateWebSearchConfig(t *testing.T) {
 	}
 	if updated.Tools.Web.Provider != "brave" {
 		t.Fatalf("provider = %q, want brave", updated.Tools.Web.Provider)
+	}
+	if updated.Tools.Web.MultiConcurrency != 4 {
+		t.Fatalf("multi_concurrency = %d, want 4", updated.Tools.Web.MultiConcurrency)
 	}
 	if updated.Tools.Web.PreferNative {
 		t.Fatal("prefer_native should be false after update")
@@ -537,6 +557,23 @@ func TestHandleUpdateWebSearchConfig_PreservesAndReplacesMultiKeys(t *testing.T)
 	if got := updated.Tools.Web.Brave.APIKeys.Values(); len(got) != 2 ||
 		got[0] != "brave-new-1" || got[1] != "brave-new-2" {
 		t.Fatalf("brave api keys should be replaced by api_keys, got %#v", got)
+	}
+}
+
+func TestNormalizeWebSearchProvider_Multi(t *testing.T) {
+	if got := normalizeWebSearchProvider(" Multi "); got != "multi" {
+		t.Fatalf("normalizeWebSearchProvider() = %q, want multi", got)
+	}
+}
+
+func TestResolveCurrentWebSearchProvider_MultiMode(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.Web.Provider = "multi"
+	cfg.Tools.Web.Sogou.Enabled = true
+	cfg.Tools.Web.DuckDuckGo.Enabled = true
+
+	if got := resolveCurrentWebSearchProvider(cfg); got != "multi" {
+		t.Fatalf("resolveCurrentWebSearchProvider() = %q, want multi", got)
 	}
 }
 

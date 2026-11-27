@@ -58,19 +58,21 @@ type webSearchProviderConfig struct {
 }
 
 type webSearchConfigResponse struct {
-	Provider       string                             `json:"provider"`
-	CurrentService string                             `json:"current_service"`
-	PreferNative   bool                               `json:"prefer_native"`
-	Proxy          string                             `json:"proxy,omitempty"`
-	Providers      []webSearchProviderOption          `json:"providers"`
-	Settings       map[string]webSearchProviderConfig `json:"settings"`
+	Provider         string                             `json:"provider"`
+	CurrentService   string                             `json:"current_service"`
+	MultiConcurrency int                                `json:"multi_concurrency"`
+	PreferNative     bool                               `json:"prefer_native"`
+	Proxy            string                             `json:"proxy,omitempty"`
+	Providers        []webSearchProviderOption          `json:"providers"`
+	Settings         map[string]webSearchProviderConfig `json:"settings"`
 }
 
 type webSearchConfigRequest struct {
-	Provider     string                             `json:"provider"`
-	PreferNative bool                               `json:"prefer_native"`
-	Proxy        string                             `json:"proxy"`
-	Settings     map[string]webSearchProviderConfig `json:"settings"`
+	Provider         string                             `json:"provider"`
+	MultiConcurrency int                                `json:"multi_concurrency"`
+	PreferNative     bool                               `json:"prefer_native"`
+	Proxy            string                             `json:"proxy"`
+	Settings         map[string]webSearchProviderConfig `json:"settings"`
 }
 
 // toolCatalog mirrors the built-in tool families documented in
@@ -561,6 +563,9 @@ func (h *Handler) handleUpdateWebSearchConfig(w http.ResponseWriter, r *http.Req
 	}
 
 	cfg.Tools.Web.Provider = provider
+	if req.MultiConcurrency > 0 {
+		cfg.Tools.Web.MultiConcurrency = req.MultiConcurrency
+	}
 	cfg.Tools.Web.PreferNative = req.PreferNative
 	cfg.Tools.Web.Proxy = strings.TrimSpace(req.Proxy)
 
@@ -655,6 +660,8 @@ func normalizeWebSearchProvider(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "", "auto":
 		return "auto"
+	case "multi":
+		return "multi"
 	case "sogou",
 		"brave",
 		"tavily",
@@ -771,6 +778,12 @@ func buildWebSearchConfigResponse(cfg *config.Config) webSearchConfigResponse {
 				cfg.Tools.Web.Provider == "auto",
 		},
 		{
+			ID:         "multi",
+			Label:      "Multi (random parallel)",
+			Configured: integrationtools.WebSearchProviderReady(opts, "multi"),
+			Current:    cfg.Tools.Web.Provider == "multi",
+		},
+		{
 			ID:         "sogou",
 			Label:      "Sogou",
 			Configured: integrationtools.WebSearchProviderReady(opts, "sogou"),
@@ -851,12 +864,13 @@ func buildWebSearchConfigResponse(cfg *config.Config) webSearchConfigResponse {
 	}
 
 	return webSearchConfigResponse{
-		Provider:       provider,
-		CurrentService: current,
-		PreferNative:   cfg.Tools.Web.PreferNative,
-		Proxy:          cfg.Tools.Web.Proxy,
-		Providers:      providers,
-		Settings:       settings,
+		Provider:         provider,
+		CurrentService:   current,
+		MultiConcurrency: cfg.Tools.Web.MultiConcurrency,
+		PreferNative:     cfg.Tools.Web.PreferNative,
+		Proxy:            cfg.Tools.Web.Proxy,
+		Providers:        providers,
+		Settings:         settings,
 	}
 }
 

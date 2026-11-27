@@ -1264,9 +1264,12 @@ func (p *DuckDuckGoSearchProvider) Search(
 
 	req.Header.Set("User-Agent", userAgent)
 
-	body, _, err := sendSearchRequest(p.client, req)
+	body, status, err := sendSearchRequest(p.client, req)
 	if err != nil {
 		return "", err
+	}
+	if status != http.StatusOK {
+		return "", fmt.Errorf("DuckDuckGo returned status %d", status)
 	}
 
 	return p.extractResults(string(body), count, query)
@@ -1707,10 +1710,14 @@ type WebSearchTool struct {
 	provider         SearchProvider
 	maxResults       int
 	providerResolver func(query string) (SearchProvider, int)
+	multiProviders   []webSearchProvider
+	multiConcurrency int
+	shuffleProviders func([]webSearchProvider)
 }
 
 type WebSearchToolOptions struct {
 	Provider              string
+	MultiConcurrency      int
 	BraveAPIKeys          []string
 	BraveMaxResults       int
 	BraveEnabled          bool
@@ -1755,6 +1762,7 @@ type WebSearchToolOptions struct {
 func WebSearchToolOptionsFromConfig(cfg *config.Config) WebSearchToolOptions {
 	return WebSearchToolOptions{
 		Provider:              cfg.Tools.Web.Provider,
+		MultiConcurrency:      cfg.Tools.Web.MultiConcurrency,
 		BraveAPIKeys:          cfg.Tools.Web.Brave.APIKeys.Values(),
 		BraveMaxResults:       cfg.Tools.Web.Brave.MaxResults,
 		BraveEnabled:          cfg.Tools.Web.Brave.Enabled,
@@ -1835,6 +1843,13 @@ func isKnownWebSearchProvider(name string) bool {
 
 func (opts WebSearchToolOptions) providerReady(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "multi":
+		for _, provider := range knownWebSearchProviders {
+			if opts.providerReady(provider) {
+				return true
+			}
+		}
+		return false
 	case "sogou":
 		return opts.SogouEnabled
 	case "duckduckgo":
@@ -1865,7 +1880,10 @@ func (opts WebSearchToolOptions) providerReady(name string) bool {
 
 func (opts WebSearchToolOptions) normalizedProviderName() string {
 	providerName := strings.ToLower(strings.TrimSpace(opts.Provider))
-	if providerName != "" && providerName != "auto" && !isKnownWebSearchProvider(providerName) {
+	if providerName != "" &&
+		providerName != "auto" &&
+		providerName != "multi" &&
+		!isKnownWebSearchProvider(providerName) {
 		// Tolerate stale or manually edited config values at runtime by
 		// treating them as "auto" and falling back to the next ready provider.
 		return "auto"
@@ -1875,6 +1893,12 @@ func (opts WebSearchToolOptions) normalizedProviderName() string {
 
 func (opts WebSearchToolOptions) resolveProviderName(query string) (string, error) {
 	providerName := opts.normalizedProviderName()
+	if providerName == "multi" {
+		if opts.providerReady("multi") {
+			return "multi", nil
+		}
+		return "", nil
+	}
 	if providerName != "" && providerName != "auto" && opts.providerReady(providerName) {
 		return providerName, nil
 	}
@@ -1912,7 +1936,7 @@ func (opts WebSearchToolOptions) resolveProviderName(query string) (string, erro
 
 func (opts WebSearchToolOptions) providerByName(name string) (SearchProvider, int, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "auto":
+	case "", "auto", "multi":
 		return nil, 0, nil
 	case "sogou":
 		if !opts.providerReady("sogou") {
@@ -2147,9 +2171,13 @@ func prefersDuckDuckGoQuery(text string) bool {
 	return false
 }
 
-func (opts WebSearchToolOptions) buildProviderResolver() (func(query string) (SearchProvider, int), error) {
-	providersByName := make(map[string]SearchProvider, len(knownWebSearchProviders))
-	maxResultsByName := make(map[string]int, len(knownWebSearchProviders))
+func (opts WebSearchToolOptions) buildProviderRegistry() (
+	func(query string) (SearchProvider, int),
+	[]webSearchProvider,
+	error,
+) {
+	providersByName := make(map[string]webSearchProvider, len(knownWebSearchProviders))
+	providers := make([]webSearchProvider, 0, len(knownWebSearchProviders))
 
 	for _, name := range knownWebSearchProviders {
 		if !opts.providerReady(name) {
@@ -2157,13 +2185,18 @@ func (opts WebSearchToolOptions) buildProviderResolver() (func(query string) (Se
 		}
 		provider, maxResults, err := opts.providerByName(name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if provider == nil {
 			continue
 		}
-		providersByName[name] = provider
-		maxResultsByName[name] = maxResults
+		candidate := webSearchProvider{
+			name:       name,
+			provider:   provider,
+			maxResults: maxResults,
+		}
+		providersByName[name] = candidate
+		providers = append(providers, candidate)
 	}
 
 	return func(query string) (SearchProvider, int) {
@@ -2171,20 +2204,30 @@ func (opts WebSearchToolOptions) buildProviderResolver() (func(query string) (Se
 		if err != nil {
 			return nil, 0
 		}
-		provider, ok := providersByName[name]
+		candidate, ok := providersByName[name]
 		if !ok {
 			return nil, 0
 		}
-		return provider, maxResultsByName[name]
-	}, nil
+		return candidate.provider, candidate.maxResults
+	}, providers, nil
 }
 
 func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
-	resolver, err := opts.buildProviderResolver()
+	resolver, providers, err := opts.buildProviderRegistry()
 	if err != nil {
 		return nil, err
 	}
+	if len(providers) == 0 {
+		return nil, nil
+	}
+
 	provider, maxResults := resolver("")
+	var multiProviders []webSearchProvider
+	if opts.normalizedProviderName() == "multi" {
+		provider = providers[0].provider
+		maxResults = providers[0].maxResults
+		multiProviders = providers
+	}
 	if provider == nil {
 		return nil, nil
 	}
@@ -2193,6 +2236,8 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		provider:         provider,
 		maxResults:       maxResults,
 		providerResolver: resolver,
+		multiProviders:   multiProviders,
+		multiConcurrency: opts.MultiConcurrency,
 	}, nil
 }
 
@@ -2235,6 +2280,40 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	}
 	query = strings.TrimSpace(query)
 
+	rangeCode, err := normalizeSearchRange("")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if rawRange, exists := args["range"]; exists {
+		rangeStr, ok := rawRange.(string)
+		if !ok {
+			return ErrorResult("range must be a string")
+		}
+		rangeCode, err = normalizeSearchRange(rangeStr)
+		if err != nil {
+			return ErrorResult(err.Error())
+		}
+	}
+
+	if len(t.multiProviders) > 0 {
+		count64, countErr := toolshared.Int64Arg(args, "count", 10)
+		if countErr != nil {
+			return ErrorResult(countErr.Error())
+		}
+		count := 10
+		if count64 > 0 && count64 <= 10 {
+			count = int(count64)
+		}
+		result, searchErr := t.searchMulti(ctx, query, count, rangeCode)
+		if searchErr != nil {
+			return ErrorResult(fmt.Sprintf("search failed: %v", searchErr))
+		}
+		return &ToolResult{
+			ForLLM:  result,
+			ForUser: result,
+		}
+	}
+
 	provider := t.provider
 	maxResults := t.maxResults
 	if t.providerResolver != nil {
@@ -2251,21 +2330,6 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	count := maxResults
 	if count64 > 0 && count64 <= 10 {
 		count = min(int(count64), maxResults)
-	}
-
-	rangeCode, err := normalizeSearchRange("")
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-	if rawRange, exists := args["range"]; exists {
-		rangeStr, ok := rawRange.(string)
-		if !ok {
-			return ErrorResult("range must be a string")
-		}
-		rangeCode, err = normalizeSearchRange(rangeStr)
-		if err != nil {
-			return ErrorResult(err.Error())
-		}
 	}
 
 	result, err := provider.Search(ctx, query, count, rangeCode)

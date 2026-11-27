@@ -1521,6 +1521,9 @@ type WebToolsConfig struct {
 	GLMSearch   GLMSearchConfig    `yaml:"glm_search,omitempty"                                   json:"glm_search"`
 	BaiduSearch BaiduSearchConfig  `yaml:"baidu_search,omitempty"                                 json:"baidu_search"`
 	Provider    string             `yaml:"-"                                                      json:"provider,omitempty" env:"PICOCLAW_TOOLS_WEB_PROVIDER"`
+	// MultiConcurrency limits how many ready providers are queried at once when
+	// Provider is "multi". Non-positive values use the default.
+	MultiConcurrency int `yaml:"-" json:"multi_concurrency,omitempty" env:"PICOCLAW_TOOLS_WEB_MULTI_CONCURRENCY"`
 	// PreferNative controls whether to use provider-native web search when
 	// the active LLM supports it (e.g. OpenAI web_search_preview). When true,
 	// the client-side web_search tool is hidden to avoid duplicate search surfaces,

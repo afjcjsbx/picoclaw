@@ -14,10 +14,13 @@ Provider settings and fetch settings live under `tools.web.*`.
 
 | Config              | Type   | Default  | Description                                                                                   |
 |---------------------|--------|----------|-----------------------------------------------------------------------------------------------|
-| `provider`          | string | `auto`   | Search provider to use: `auto`, `brave`, `duckduckgo`, `gemini`, `glm_search`, `baidu_search`, `kagi`, `keenable`, `perplexity`, `searxng`, `sogou`, or `tavily`. Unknown values fall back to `auto` |
-| `prefer_native`     | bool   | `true`   | Prefer the active LLM's built-in web search (for example OpenAI's native search) over the configured search engines. The client-side `web_search` tool is hidden while native search is available, and PicoClaw falls back to it automatically |
+| `provider`          | string | `auto`   | Search provider to use: `auto`, `multi`, `brave`, `duckduckgo`, `gemini`, `glm_search`, `baidu_search`, `kagi`, `keenable`, `perplexity`, `searxng`, `sogou`, or `tavily`. Unknown values fall back to `auto` |
+| `multi_concurrency` | int    | 3       | Maximum number of ready providers queried concurrently when `provider` is `multi` |
+| `prefer_native`     | bool   | `true`  | Prefer the active LLM's built-in web search (for example OpenAI's native search) over the configured search engines. The client-side `web_search` tool is hidden while native search is available, and PicoClaw falls back to it automatically |
 
 With `auto`, PicoClaw picks the first *ready* provider (enabled and fully configured for its type). Order: `perplexity`, `brave`, `kagi`, `searxng`, `tavily`, `gemini`, `keenable`; then `sogou`/`duckduckgo` (choosing between the two based on the query when both are ready); finally `baidu_search` and `glm_search`. Sogou, DuckDuckGo, and Keenable work without a key; SearXNG needs a `base_url`; the other providers need an API key. A ready provider configured explicitly in `provider` wins over the order.
+
+With `provider: "multi"`, PicoClaw randomizes all ready providers and queries up to `multi_concurrency` of them in parallel. If a provider fails or returns no results, the next randomized provider is started. The first non-empty result is returned unchanged and the remaining requests are canceled; results are not aggregated or deduplicated.
 
 Sogou uses its public WAP search page and can occasionally return an anti-bot challenge instead of results. PicoClaw does not solve CAPTCHAs; use another configured provider when that happens.
 
