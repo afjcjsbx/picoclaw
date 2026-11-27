@@ -27,14 +27,12 @@ export interface ChatToolCall {
   type?: string
   function?: ChatToolCallFunction
   extraContent?: ChatToolCallExtraContent
+  input?: string
+  output?: string
 }
 
 export type AssistantMessageKind =
-  | "normal"
-  | "thought"
-  | "tool_calls"
-  | "tool_feedback"
-  | "approval"
+  "normal" | "thought" | "tool_calls" | "tool_feedback" | "approval"
 
 export interface ChatApproval {
   token: string
@@ -88,10 +86,7 @@ export interface ContextUsage {
 }
 
 export type ConnectionState =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "error"
+  "disconnected" | "connecting" | "connected" | "error"
 
 export interface ChatStoreState {
   messages: ChatMessage[]

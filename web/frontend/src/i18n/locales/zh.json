@@ -63,6 +63,13 @@
     },
     "reasoningLabel": "思考",
     "toolCallsLabel": "工具调用",
+    "toolInputLabel": "输入",
+    "toolOutputLabel": "输出",
+    "toolOutputEmpty": "无输出",
+    "activityThoughtsCount_one": "{{count}} 个想法",
+    "activityThoughtsCount_other": "{{count}} 个想法",
+    "activityToolsCount_one": "{{count}} 个工具",
+    "activityToolsCount_other": "{{count}} 个工具",
     "approval": {
       "title": "需要批准命令",
       "description": "智能体想要运行风险分类器无法识别的命令。",

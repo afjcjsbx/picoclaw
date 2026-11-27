@@ -84,6 +84,13 @@
     },
     "reasoningLabel": "Reasoning",
     "toolCallsLabel": "Tool calls",
+    "toolInputLabel": "Input",
+    "toolOutputLabel": "Output",
+    "toolOutputEmpty": "No output",
+    "activityThoughtsCount_one": "{{count}} thought",
+    "activityThoughtsCount_other": "{{count}} thoughts",
+    "activityToolsCount_one": "{{count}} tool",
+    "activityToolsCount_other": "{{count}} tools",
     "approval": {
       "title": "Command approval required",
       "description": "The agent wants to run a command the risk classifier could not identify.",

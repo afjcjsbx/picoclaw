@@ -1,6 +1,7 @@
 import {
   IconBrain,
   IconCheck,
+  IconChevronDown,
   IconClockHour4,
   IconCode,
   IconCoins,
@@ -21,7 +22,7 @@ import {
   IconVolume,
   IconWorld,
 } from "@tabler/icons-react"
-import { type ReactNode, memo, useRef, useState } from "react"
+import { type ReactNode, memo } from "react"
 import { useTranslation } from "react-i18next"
 import ReactMarkdown from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
@@ -32,6 +33,11 @@ import remarkGfm from "remark-gfm"
 import { MarkdownCodeBlock } from "@/components/chat/message-code-block"
 import { TurnStats } from "@/components/chat/turn-stats"
 import { Button } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
   Tooltip,
   TooltipContent,
@@ -454,97 +460,126 @@ function WebFavicon({ src }: { src: string }) {
   )
 }
 
-function HoverPreview({
+function formatToolInput(value: string) {
+  if (!value.trim()) return "{}"
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+}
+
+function ReasoningItem({
   content,
-  className,
-  children,
-  href,
+  onOpenFile,
+  filePathAliases,
 }: {
   content: string
-  className: string
-  children: ReactNode
-  href?: string
+  onOpenFile?: (path: string) => void
+  filePathAliases?: Record<string, string>
 }) {
-  const spanRef = useRef<HTMLSpanElement>(null)
-  const linkRef = useRef<HTMLAnchorElement>(null)
-  const [open, setOpen] = useState(false)
-
-  const handleOpenChange = (next: boolean) => {
-    const trigger = spanRef.current ?? linkRef.current
-    setOpen(
-      next &&
-        !!trigger &&
-        (trigger.scrollWidth > trigger.clientWidth ||
-          trigger.scrollHeight > trigger.clientHeight),
-    )
-  }
-
-  const trigger = href ? (
-    <a
-      ref={linkRef}
-      href={href}
-      target="_blank"
-      rel="noreferrer noopener"
-      tabIndex={0}
-      className={className}
-    >
-      {children}
-    </a>
-  ) : (
-    <span ref={spanRef} tabIndex={0} className={className}>
-      {children}
-    </span>
-  )
+  const { t } = useTranslation()
 
   return (
-    <TooltipProvider delayDuration={120} skipDelayDuration={0}>
-      <Tooltip open={open} onOpenChange={handleOpenChange}>
-        <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-        <TooltipContent
-          side="top"
-          className="max-h-[min(60vh,24rem)] max-w-[min(32rem,calc(100vw-2rem))] overflow-y-auto break-words whitespace-pre-wrap dark:border dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-        >
-          {content}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Collapsible className="group/reasoning min-w-0">
+      <CollapsibleTrigger className="hover:bg-muted/40 focus-visible:ring-ring flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] leading-5 focus-visible:ring-2 focus-visible:outline-none">
+        <IconChevronDown className="text-muted-foreground size-3.5 shrink-0 transition-transform group-data-[state=closed]/reasoning:-rotate-90" />
+        <IconBrain className="text-muted-foreground size-3.5 shrink-0" />
+        <span className="text-foreground/80 text-[13px] leading-5 font-medium">
+          {t("chat.reasoningLabel")}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="text-muted-foreground ml-5 max-h-96 overflow-auto border-l py-1 pl-3 text-[13px] leading-6 [overflow-wrap:anywhere] whitespace-pre-wrap">
+          <FilePathText
+            text={content}
+            onOpenFile={onOpenFile}
+            filePathAliases={filePathAliases}
+          />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
-function compactReasoningPreview(value: string) {
-  return value
-    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
-    .replace(/[*_#`~]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-}
+function ToolCallItem({
+  toolCall,
+  onOpenFile,
+  filePathAliases,
+}: {
+  toolCall: ChatToolCall
+  onOpenFile?: (path: string) => void
+  filePathAliases?: Record<string, string>
+}) {
+  const { t } = useTranslation()
+  const name = toolCall.function?.name?.trim() ?? ""
+  const argumentsText = toolCall.function?.arguments?.trim() ?? ""
+  const display = getToolDisplay(name, argumentsText)
+  const Icon = display.icon
+  const input = formatToolInput(toolCall.input ?? argumentsText)
+  const output = toolCall.output ?? ""
+  const triggerLabel = [display.label, display.detail].filter(Boolean).join(" ")
 
-function groupToolCalls(toolCalls: ChatToolCall[]) {
-  const groups = new Map<
-    string,
-    Array<{
-      id: string
-      name: string
-      display: ReturnType<typeof getToolDisplay>
-    }>
-  >()
-
-  toolCalls.forEach((toolCall, index) => {
-    const name = toolCall.function?.name?.trim() ?? ""
-    const arguments_ = toolCall.function?.arguments?.trim() ?? ""
-    if (!name && !arguments_) return
-
-    const display = getToolDisplay(name, arguments_)
-    const group = groups.get(display.label) ?? []
-    group.push({
-      id: toolCall.id ?? `${name}-${index}`,
-      name,
-      display,
-    })
-    groups.set(display.label, group)
-  })
-
-  return [...groups.entries()]
+  return (
+    <Collapsible className="group/tool min-w-0">
+      <CollapsibleTrigger
+        aria-label={triggerLabel}
+        className="hover:bg-muted/40 focus-visible:ring-ring flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <IconChevronDown className="text-muted-foreground size-3.5 shrink-0 transition-transform group-data-[state=closed]/tool:-rotate-90" />
+        {display.href && display.faviconUrl ? (
+          <WebFavicon src={display.faviconUrl} />
+        ) : (
+          <Icon className="text-muted-foreground size-3.5 shrink-0" />
+        )}
+        <span className="text-foreground/80 shrink-0 text-[13px] leading-5 font-medium">
+          {display.label}
+        </span>
+        {display.detail && (
+          <span
+            className={cn(
+              "text-muted-foreground min-w-0 flex-1 truncate text-xs",
+              name === "exec" && "font-mono",
+            )}
+          >
+            {display.detail}
+          </span>
+        )}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="ml-5 min-w-0 space-y-3 border-l py-2 pl-3">
+          {toolCall.extraContent?.toolFeedbackExplanation && (
+            <div className="text-muted-foreground text-[13px] leading-6 [overflow-wrap:anywhere] whitespace-pre-wrap">
+              <div className="text-foreground/70 mb-1 text-xs font-medium">
+                {t("chat.toolCallExplanationLabel")}
+              </div>
+              <FilePathText
+                text={toolCall.extraContent.toolFeedbackExplanation}
+                onOpenFile={onOpenFile}
+                filePathAliases={filePathAliases}
+              />
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="text-foreground/70 mb-1 text-xs font-medium">
+              {t("chat.toolInputLabel")}
+            </div>
+            <pre className="bg-muted/40 text-muted-foreground max-h-80 overflow-auto rounded-md border p-3 font-mono text-xs leading-5 [overflow-wrap:anywhere] whitespace-pre-wrap">
+              {input}
+            </pre>
+          </div>
+          <div className="min-w-0">
+            <div className="text-foreground/70 mb-1 text-xs font-medium">
+              {t("chat.toolOutputLabel")}
+            </div>
+            <pre className="bg-muted/40 text-muted-foreground max-h-80 overflow-auto rounded-md border p-3 font-mono text-xs leading-5 [overflow-wrap:anywhere] whitespace-pre-wrap">
+              {output || t("chat.toolOutputEmpty")}
+            </pre>
+          </div>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
 }
 
 export const AssistantMessage = memo(function AssistantMessage({
@@ -579,19 +614,6 @@ export const AssistantMessage = memo(function AssistantMessage({
     ? t("chat.copiedLabel")
     : t("chat.copyMessage")
   const forkMessageLabel = t("chat.forkAtMessage")
-  const toolCallGroups = groupToolCalls(toolCalls)
-  const reasoningText = compactReasoningPreview(content)
-  const reasoningPreview =
-    reasoningText.length > 512
-      ? `${reasoningText.slice(0, 512).replace(/[\uD800-\uDBFF]$/, "")}…`
-      : reasoningText
-  const toolFeedbackContent = content.trim().replace(/^🔧\s*/, "")
-  const toolFeedbackSummary = content
-    .trim()
-    .replace(/```(?:json)?|`/gi, "")
-    .replace(/\s+/g, " ")
-    .replace(/^🔧\s*/, "")
-    .trim()
   const hasUsage =
     usage !== undefined &&
     (usage.total_tokens > 0 || usage.cost_usd !== undefined)
@@ -623,96 +645,18 @@ export const AssistantMessage = memo(function AssistantMessage({
           )}
         >
           {isToolCalls && hasToolCalls && (
-            <div className="space-y-0">
-              {toolCallGroups.map(([label, calls]) => {
-                const first = calls[0]
-                const { display, name } = first
-                const isWebFetch = name === "web_fetch"
-                const isGroup = calls.length > 1
-
-                return (
-                  <div key={label} className="min-w-0">
-                    {isGroup ? (
-                      <>
-                        <div className="flex min-w-0 items-center gap-2 py-0 text-[13px] leading-5">
-                          <display.icon className="text-muted-foreground size-3.5 shrink-0" />
-                          <span className="text-foreground/80 truncate font-medium">
-                            {label}
-                          </span>
-                        </div>
-                        {calls.map(({ id, name: callName, display: item }) =>
-                          item.detail ? (
-                            <div
-                              key={id}
-                              className="ml-5 flex min-w-0 items-center gap-2 py-0 text-xs leading-5"
-                            >
-                              {item.href && item.faviconUrl ? (
-                                <HoverPreview
-                                  content={item.detail}
-                                  className="text-muted-foreground hover:text-foreground flex min-w-0 items-center gap-1 truncate hover:underline"
-                                  href={item.href}
-                                >
-                                  <WebFavicon src={item.faviconUrl} />
-                                  <span className="truncate">
-                                    {item.detail}
-                                  </span>
-                                </HoverPreview>
-                              ) : (
-                                <HoverPreview
-                                  content={item.detail}
-                                  className={`text-muted-foreground min-w-0 flex-1 truncate ${callName === "exec" ? "font-mono" : ""}`}
-                                >
-                                  <FilePathText
-                                    text={item.detail}
-                                    onOpenFile={onOpenFile}
-                                    filePath={item.filePath}
-                                    filePathAliases={filePathAliases}
-                                  />
-                                </HoverPreview>
-                              )}
-                            </div>
-                          ) : null,
-                        )}
-                      </>
-                    ) : (
-                      <div className="flex min-w-0 items-center gap-2 overflow-hidden py-0 text-[13px] leading-5">
-                        {isWebFetch && display.href && display.faviconUrl ? (
-                          <WebFavicon src={display.faviconUrl} />
-                        ) : (
-                          <display.icon className="text-muted-foreground size-3.5 shrink-0" />
-                        )}
-                        <span
-                          className={`text-foreground/80 shrink-0 truncate font-medium ${display.detail ? "max-w-[45%]" : "max-w-full"}`}
-                        >
-                          {label}
-                        </span>
-                        {display.detail &&
-                          (display.href ? (
-                            <HoverPreview
-                              content={display.detail}
-                              className="text-muted-foreground hover:text-foreground min-w-0 flex-1 truncate text-xs hover:underline"
-                              href={display.href}
-                            >
-                              {display.detail}
-                            </HoverPreview>
-                          ) : (
-                            <HoverPreview
-                              content={display.detail}
-                              className={`text-muted-foreground min-w-0 flex-1 truncate text-xs ${name === "exec" ? "font-mono" : ""}`}
-                            >
-                              <FilePathText
-                                text={display.detail}
-                                onOpenFile={onOpenFile}
-                                filePath={display.filePath}
-                                filePathAliases={filePathAliases}
-                              />
-                            </HoverPreview>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+            <div className="space-y-0.5">
+              {toolCalls.map((toolCall, index) => (
+                <ToolCallItem
+                  key={
+                    toolCall.id ??
+                    `${toolCall.function?.name ?? "tool"}-${index}`
+                  }
+                  toolCall={toolCall}
+                  onOpenFile={onOpenFile}
+                  filePathAliases={filePathAliases}
+                />
+              ))}
             </div>
           )}
           {!isThought && !isToolCalls && !isToolFeedback && hasText && (
@@ -746,40 +690,26 @@ export const AssistantMessage = memo(function AssistantMessage({
       )}
 
       {isThought && hasText && (
-        <div className="flex min-w-0 items-center gap-2 py-0 text-[13px] leading-5">
-          <IconBrain
-            aria-hidden="true"
-            className="text-muted-foreground size-3.5 shrink-0"
-          />
-          <HoverPreview
-            content={reasoningText}
-            className="text-muted-foreground min-w-0 flex-1 truncate whitespace-nowrap italic"
-          >
-            <FilePathText
-              text={reasoningPreview}
-              onOpenFile={onOpenFile}
-              filePathAliases={filePathAliases}
-            />
-          </HoverPreview>
-        </div>
+        <ReasoningItem
+          content={content}
+          onOpenFile={onOpenFile}
+          filePathAliases={filePathAliases}
+        />
       )}
 
       {isToolFeedback && hasText && (
-        <div className="flex min-w-0 items-center gap-2 py-0 text-[13px] leading-5">
+        <div className="text-muted-foreground flex min-w-0 items-center gap-2 py-1 text-[13px] leading-5">
           <IconTool
             aria-hidden="true"
             className="text-muted-foreground size-3.5 shrink-0"
           />
-          <HoverPreview
-            content={toolFeedbackContent}
-            className="text-muted-foreground min-w-0 flex-1 truncate whitespace-nowrap"
-          >
+          <span className="min-w-0 flex-1 truncate whitespace-nowrap">
             <FilePathText
-              text={toolFeedbackSummary}
+              text={content.trim().replace(/^🔧\s*/, "")}
               onOpenFile={onOpenFile}
               filePathAliases={filePathAliases}
             />
-          </HoverPreview>
+          </span>
         </div>
       )}
 

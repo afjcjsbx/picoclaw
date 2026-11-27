@@ -148,10 +148,10 @@ function AssistantActivityGroup({
     <Collapsible
       open={isActive || open}
       onOpenChange={setOpen}
-      className="group/activity w-full"
+      className="group/activity bg-card/30 w-full overflow-hidden rounded-xl border"
     >
       {hasDetails ? (
-        <CollapsibleTrigger className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex w-full min-w-0 items-center gap-1 rounded-sm text-left focus-visible:ring-2 focus-visible:outline-none">
+        <CollapsibleTrigger className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[13px] focus-visible:ring-2 focus-visible:outline-none">
           {status ?? (
             <span className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-[12px] leading-4">
               <IconActivity aria-hidden="true" className="size-3.5 shrink-0" />
@@ -161,11 +161,13 @@ function AssistantActivityGroup({
           <IconChevronDown className="size-3.5 shrink-0 transition-transform group-data-[state=open]/activity:rotate-180" />
         </CollapsibleTrigger>
       ) : (
-        status
+        <div className="flex min-w-0 flex-1 items-center px-3 py-2.5 text-[13px] leading-5">
+          {status}
+        </div>
       )}
       {hasDetails && (
         <CollapsibleContent>
-          <div className="mt-0.5 space-y-0.75">{children}</div>
+          <div className="space-y-0.75 px-2 pb-2">{children}</div>
         </CollapsibleContent>
       )}
     </Collapsible>
@@ -1241,6 +1243,17 @@ export function ChatPage() {
 
       const isStatusGroup = index === statusActivityIndex
       const firstMessageId = item.items[0]?.message.id ?? turnKey
+      const reasoningCount = item.items.filter(
+        ({ message }) => message.kind === "thought",
+      ).length
+      const toolCount = item.items.reduce(
+        (total, { message }) =>
+          total +
+          (message.kind === "tool_calls"
+            ? (message.toolCalls?.length ?? 0)
+            : 0),
+        0,
+      )
       return (
         <AssistantActivityGroup
           key={
@@ -1254,6 +1267,8 @@ export function ChatPage() {
                 key={sessionId}
                 isTyping={isTyping}
                 fallbackLabel={item.label}
+                reasoningCount={reasoningCount}
+                toolCount={toolCount}
               />
             ) : undefined
           }

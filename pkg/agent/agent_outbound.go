@@ -407,6 +407,37 @@ func (al *AgentLoop) publishPicoToolCallInterim(
 	}
 }
 
+func (al *AgentLoop) publishPicoToolResult(
+	ctx context.Context,
+	ts *turnState,
+	toolCallID, output string,
+) {
+	if al == nil || al.bus == nil || ts == nil || ts.channel != "pico" ||
+		!ts.opts.AllowInterimPicoPublish || strings.TrimSpace(toolCallID) == "" {
+		return
+	}
+
+	msg := outboundMessageForTurnWithOptions(ts, output, outboundTurnMessageOptions{
+		kind: messageKindToolResult,
+		raw: map[string]string{
+			metadataKeyToolCallID: toolCallID,
+		},
+	})
+	pubCtx, pubCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer pubCancel()
+	if err := al.bus.PublishOutbound(pubCtx, msg); err != nil &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, bus.ErrBusClosed) {
+		logger.WarnCF("agent", "Failed to publish pico tool result", map[string]any{
+			"channel":      ts.channel,
+			"chat_id":      ts.chatID,
+			"tool_call_id": toolCallID,
+			"error":        err.Error(),
+		})
+	}
+}
+
 func (al *AgentLoop) handleReasoning(
 	ctx context.Context,
 	reasoningContent, channelName, channelID string,

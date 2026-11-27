@@ -1113,6 +1113,51 @@ func TestConfiguredStreamingToolCallsUseCompleteStreamResponse(t *testing.T) {
 	}
 }
 
+func TestPicoToolResultsPublishCallIDAndOutput(t *testing.T) {
+	cfg := newConfiguredStreamingTestConfig(t, false, false, nil)
+	msgBus := bus.NewMessageBus()
+	scripted := &feedbackScriptProvider{responses: []*providers.LLMResponse{
+		{
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call-1",
+				Type:      "function",
+				Name:      "tool_limit_test_tool",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		},
+		{Content: "done"},
+	}}
+	al := NewAgentLoop(cfg, msgBus, scripted)
+	al.GetRegistry().GetDefaultAgent().Tools.Register(&toolLimitTestTool{})
+
+	got := runConfiguredStreamingTurn(t, al, "pico")
+	if got != "done" {
+		t.Fatalf("response = %q, want done", got)
+	}
+
+	var sawToolResult bool
+	for {
+		select {
+		case outbound := <-msgBus.OutboundChan():
+			if outbound.Context.Raw[metadataKeyMessageKind] != messageKindToolResult {
+				continue
+			}
+			sawToolResult = true
+			if got := outbound.Context.Raw[metadataKeyToolCallID]; got != "call-1" {
+				t.Fatalf("tool_call_id = %q, want call-1", got)
+			}
+			if outbound.Content != "tool limit test result" {
+				t.Fatalf("tool result content = %q, want tool limit test result", outbound.Content)
+			}
+		default:
+			if !sawToolResult {
+				t.Fatal("no pico tool result published")
+			}
+			return
+		}
+	}
+}
+
 func newConfiguredStreamingTestConfig(
 	t *testing.T,
 	channelStreaming bool,

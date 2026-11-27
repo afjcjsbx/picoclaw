@@ -60,6 +60,10 @@ export function parseToolCallsValue(raw: unknown): ChatToolCall[] | undefined {
     const nextToolCall: ChatToolCall = {
       ...(typeof toolCall.id === "string" ? { id: toolCall.id } : {}),
       ...(typeof toolCall.type === "string" ? { type: toolCall.type } : {}),
+      ...(typeof toolCall.input === "string" ? { input: toolCall.input } : {}),
+      ...(typeof toolCall.output === "string"
+        ? { output: toolCall.output }
+        : {}),
     }
 
     if (rawFunction) {
@@ -95,7 +99,9 @@ export function parseToolCallsValue(raw: unknown): ChatToolCall[] | undefined {
       nextToolCall.id ||
       nextToolCall.type ||
       nextToolCall.function ||
-      nextToolCall.extraContent
+      nextToolCall.extraContent ||
+      nextToolCall.input ||
+      nextToolCall.output
     ) {
       toolCalls.push(nextToolCall)
     }
@@ -119,6 +125,8 @@ export function toolCallsSignature(toolCalls?: ChatToolCall[]): string {
         toolCall.function?.name ?? "",
         toolCall.function?.arguments ?? "",
         toolCall.extraContent?.toolFeedbackExplanation ?? "",
+        toolCall.input ?? "",
+        toolCall.output ?? "",
       ].join("\u0001"),
     )
     .join("\u0002")

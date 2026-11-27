@@ -454,6 +454,52 @@ func TestSend_ToolCallsMessageIncludesModelName(t *testing.T) {
 	}
 }
 
+func TestSend_ToolResultMessageIncludesCallIDAndOutput(t *testing.T) {
+	ch := newTestPicoChannel(t)
+
+	if err := ch.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer ch.Stop(context.Background())
+
+	clientConn, received, cleanup := newTestPicoWebSocket(t)
+	defer cleanup()
+	ch.addConnForTest(&picoConn{id: "conn-1", conn: clientConn, sessionID: "sess-1"})
+
+	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "pico:sess-1",
+		Content: "test result",
+		Context: bus.InboundContext{
+			Channel: "pico",
+			ChatID:  "pico:sess-1",
+			Raw: map[string]string{
+				"message_kind":       MessageKindToolResult,
+				PayloadKeyToolCallID: "call_1",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Send(tool_result) error = %v", err)
+	}
+
+	select {
+	case msg := <-received:
+		if msg.Type != TypeMessageCreate {
+			t.Fatalf("tool_result message type = %q, want %q", msg.Type, TypeMessageCreate)
+		}
+		if got := msg.Payload[PayloadKeyKind]; got != MessageKindToolResult {
+			t.Fatalf("kind = %#v, want %q", got, MessageKindToolResult)
+		}
+		if got := msg.Payload[PayloadKeyToolCallID]; got != "call_1" {
+			t.Fatalf("tool_call_id = %#v, want call_1", got)
+		}
+		if got := msg.Payload[PayloadKeyContent]; got != "test result" {
+			t.Fatalf("content = %#v, want test result", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected tool_result message to be delivered")
+	}
+}
+
 func TestSend_IncludesOutboundTokenUsage(t *testing.T) {
 	ch := newTestPicoChannel(t)
 

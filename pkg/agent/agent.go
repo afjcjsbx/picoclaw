@@ -144,10 +144,12 @@ const (
 	providerReloadGracePeriod  = 30 * time.Second
 	metadataKeyMessageKind     = "message_kind"
 	metadataKeyToolCalls       = "tool_calls"
+	metadataKeyToolCallID      = "tool_call_id"
 	metadataKeyOutboundKind    = "outbound_kind"
 	messageKindThought         = "thought"
 	messageKindToolFeedback    = "tool_feedback"
 	messageKindToolCalls       = "tool_calls"
+	messageKindToolResult      = "tool_result"
 	messageKindApproval        = "approval"
 	outboundKindFinal          = "final"
 	metadataKeyApprovalToken   = "approval_token"

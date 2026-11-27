@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next"
 interface TypingIndicatorProps {
   isTyping: boolean
   fallbackLabel?: string
+  reasoningCount?: number
+  toolCount?: number
 }
 
 function formatDuration(milliseconds: number): string {
@@ -22,6 +24,8 @@ function formatDuration(milliseconds: number): string {
 export function TypingIndicator({
   isTyping,
   fallbackLabel,
+  reasoningCount = 0,
+  toolCount = 0,
 }: TypingIndicatorProps) {
   const { t } = useTranslation()
   const [timerActive, setTimerActive] = useState(false)
@@ -69,7 +73,7 @@ export function TypingIndicator({
       ? 0
       : Math.max(0, end - startedAt)
   const duration = formatDuration(durationMs)
-  const label = isTyping
+  const timeLabel = isTyping
     ? t("chat.activityWorkingFor", {
         duration,
         defaultValue: "Working for {{duration}}",
@@ -80,6 +84,23 @@ export function TypingIndicator({
           duration,
           defaultValue: "Worked for {{duration}}",
         })
+  const countLabels = isTyping
+    ? []
+    : [
+        reasoningCount > 0
+          ? t("chat.activityThoughtsCount", {
+              count: reasoningCount,
+              defaultValue: "{{count}} thoughts",
+            })
+          : "",
+        toolCount > 0
+          ? t("chat.activityToolsCount", {
+              count: toolCount,
+              defaultValue: "{{count}} tools",
+            })
+          : "",
+      ].filter(Boolean)
+  const label = [timeLabel, ...countLabels].join(" · ")
 
   return (
     <span
