@@ -111,7 +111,7 @@ export function TypingIndicator({
       <IconActivity
         aria-hidden="true"
         stroke={1.5}
-        className={`size-3.5 shrink-0 ${isTyping ? "animate-pulse text-violet-400" : "text-muted-foreground/65"}`}
+        className={`size-3.5 shrink-0 ${isTyping ? "dark:text-brand animate-pulse text-violet-400" : "text-muted-foreground/65"}`}
       />
       <span className="min-w-0 truncate">{label}</span>
     </span>

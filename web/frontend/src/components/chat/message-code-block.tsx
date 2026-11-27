@@ -112,11 +112,11 @@ export function MessageCodeBlock({
     <div
       data-picoclaw-code-block=""
       className={cn(
-        "not-prose my-4 overflow-hidden rounded-lg border border-[#d0d7de] bg-[#f6f8fa] text-[#24292f] shadow-xs dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#c9d1d9]",
+        "not-prose my-4 overflow-hidden rounded-lg border border-[#d0d7de] bg-[#f6f8fa] text-[#24292f] shadow-xs dark:border-border dark:bg-card dark:text-foreground",
         className,
       )}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-[#d0d7de] bg-black/[0.03] px-3 py-2 dark:border-[#30363d] dark:bg-white/[0.03]">
+      <div className="flex items-center justify-between gap-2 border-b border-[#d0d7de] bg-black/[0.03] px-3 py-2 dark:border-border dark:bg-white/[0.03]">
         <span
           className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400"
           style={{ fontFamily: CODE_LABEL_FONT_FAMILY }}
@@ -128,7 +128,7 @@ export function MessageCodeBlock({
             type="button"
             variant="ghost"
             size="xs"
-            className="h-7 text-zinc-600 hover:bg-zinc-300/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            className="h-7 text-zinc-600 hover:bg-zinc-300/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-accent dark:hover:text-foreground"
             onClick={() => void copy(code)}
             aria-label={copyLabel}
             title={copyLabel}
@@ -144,7 +144,7 @@ export function MessageCodeBlock({
             type="button"
             variant="ghost"
             size="xs"
-            className="h-7 px-2 text-[11px] text-zinc-600 hover:bg-zinc-300/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            className="h-7 px-2 text-[11px] text-zinc-600 hover:bg-zinc-300/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-accent dark:hover:text-foreground"
             onClick={() => setWrapLongLines((current) => !current)}
             aria-pressed={wrapLongLines}
             aria-label={wrapLabel}
@@ -156,7 +156,7 @@ export function MessageCodeBlock({
             type="button"
             variant="ghost"
             size="xs"
-            className="h-7 text-zinc-600 hover:bg-zinc-300/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            className="h-7 text-zinc-600 hover:bg-zinc-300/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-accent dark:hover:text-foreground"
             onClick={() => setIsExpanded((expanded) => !expanded)}
             aria-expanded={isExpanded}
             aria-label={expandLabel}
@@ -195,7 +195,7 @@ export function MessageCodeBlock({
                   } as CSSProperties
                 }
               >
-                <span className="sticky left-0 z-1 select-none bg-[#f6f8fa] text-right text-zinc-500/80 dark:bg-[#0d1117] dark:text-zinc-500">
+                <span className="sticky left-0 z-1 select-none bg-[#f6f8fa] text-right text-zinc-500/80 dark:bg-card dark:text-zinc-500">
                   {index + 1}
                 </span>
                 {!children && highlightedLines ? (
