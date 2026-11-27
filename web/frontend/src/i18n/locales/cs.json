@@ -124,6 +124,7 @@
     "removeSplitPane": "Odebrat konverzaci z rozděleného zobrazení",
     "resizeSplitPane": "Změnit velikost panelů konverzací",
     "scrollNavigator": "Procházet konverzaci",
+    "scrollToBottom": "Přejít na konec",
     "jumpToUserMessage": "Přejít na otázku {{index}}: {{preview}}",
     "jumpToAssistantMessage": "Přejít na odpověď {{index}}: {{preview}}",
     "paneLayout": "Rozložení panelů",
