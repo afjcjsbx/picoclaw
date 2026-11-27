@@ -8,6 +8,7 @@ import { normalizeUnixTimestamp } from "@/features/chat/state"
 import { parseTokenUsage } from "@/features/chat/usage"
 import {
   type ChatAttachment,
+  type ChatMessage,
   type ContextUsage,
   type SplitSessionState,
   getChatState,
@@ -103,6 +104,49 @@ function parseModelName(payload: Record<string, unknown>): string | undefined {
   return modelName || undefined
 }
 
+interface ToolResultPayload {
+  toolCallId: string
+  output: string
+}
+
+function parseToolResultPayload(
+  payload: Record<string, unknown>,
+): ToolResultPayload | undefined {
+  if (payload.kind !== "tool_result") {
+    return undefined
+  }
+  const toolCallId =
+    typeof payload.tool_call_id === "string" ? payload.tool_call_id.trim() : ""
+  if (!toolCallId) {
+    return undefined
+  }
+  return {
+    toolCallId,
+    output: typeof payload.content === "string" ? payload.content : "",
+  }
+}
+
+function mergeToolResult(
+  messages: ChatMessage[],
+  { toolCallId, output }: ToolResultPayload,
+): ChatMessage[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.kind !== "tool_calls" || !message.toolCalls) continue
+    const callIndex = message.toolCalls.findIndex(
+      (toolCall) => toolCall.id === toolCallId,
+    )
+    if (callIndex < 0) continue
+
+    const toolCalls = [...message.toolCalls]
+    toolCalls[callIndex] = { ...toolCalls[callIndex], output }
+    const next = [...messages]
+    next[index] = { ...message, toolCalls }
+    return next
+  }
+  return messages
+}
+
 export function handlePicoActivityMessage(message: PicoMessage) {
   if (message.type !== "session.activity") {
     return
@@ -170,6 +214,13 @@ export function handlePicoMessage(
         setSessionRunning(expectedSessionId, false)
       }
       const messageId = (payload.message_id as string) || `pico-${Date.now()}`
+      const toolResult = parseToolResultPayload(payload)
+      if (toolResult) {
+        updateSession((prev) => ({
+          messages: mergeToolResult(prev.messages, toolResult),
+        }))
+        break
+      }
       const { content, kind, toolCalls, approval } =
         parseAssistantMessageCreateState(payload)
       const attachments = parseAttachments(payload)

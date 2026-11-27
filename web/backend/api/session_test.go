@@ -51,6 +51,63 @@ func assertVisibleToolCallMessage(
 	return msg.ToolCalls[0]
 }
 
+func TestSessionTranscriptMessagesIncludesToolInputsAndOutputs(t *testing.T) {
+	argsJSON := `{"command":"pnpm test","extra":"abcdefghijklmnopqrstuvwxyz"}`
+	transcript := sessionTranscriptMessages([]providers.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:       "call_exec",
+					Type:     "function",
+					Function: &providers.FunctionCall{Name: "exec", Arguments: argsJSON},
+				},
+				{
+					ID:   "call_read",
+					Type: "function",
+					Function: &providers.FunctionCall{
+						Name:      "read_file",
+						Arguments: `{"path":"README.md"}`,
+					},
+				},
+			},
+		},
+		{Role: "tool", ToolCallID: "call_read", Content: "file result"},
+		{Role: "tool", ToolCallID: "call_exec", Content: "test result"},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:       "call_exec",
+					Type:     "function",
+					Function: &providers.FunctionCall{Name: "exec", Arguments: `{"command":"pnpm build"}`},
+				},
+			},
+		},
+		{Role: "tool", ToolCallID: "call_exec", Content: "build result"},
+	}, 20, false)
+
+	if len(transcript) != 2 || len(transcript[0].ToolCalls) != 2 {
+		t.Fatalf(
+			"transcript = %#v, want two messages with the first carrying two tool calls",
+			transcript,
+		)
+	}
+	execCall := transcript[0].ToolCalls[0]
+	if execCall.Output != "test result" {
+		t.Fatalf("exec output = %q, want %q", execCall.Output, "test result")
+	}
+	if execCall.Input == "" || !strings.Contains(execCall.Input, "abcdefghijklmnopqrstuvwxyz") {
+		t.Fatalf("exec input = %q, want complete arguments", execCall.Input)
+	}
+	if got := transcript[0].ToolCalls[1].Output; got != "file result" {
+		t.Fatalf("read output = %q, want %q", got, "file result")
+	}
+	if got := transcript[1].ToolCalls[0].Output; got != "build result" {
+		t.Fatalf("reused call id output = %q, want %q", got, "build result")
+	}
+}
+
 func TestSessionTranscriptMessagesPreservesUsage(t *testing.T) {
 	transcript := sessionTranscriptMessages([]providers.Message{{
 		Role:    "assistant",

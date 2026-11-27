@@ -131,6 +131,9 @@ func (b *toolBatch) skipRemainingForLoop(start int) {
 // appendToolMessage adds msg to the turn and, unless the turn is history-less,
 // to the session store. ingest also hands it to the context manager.
 func (b *toolBatch) appendToolMessage(msg providers.Message, ingest bool) {
+	if msg.Role == "tool" {
+		b.al.publishPicoToolResult(b.turnCtx, b.ts, msg.ToolCallID, msg.Content)
+	}
 	b.toolMessages++
 	if b.toolMessages == len(b.calls) {
 		msg.Content += b.budgetNotice() + b.runBudgetNotice()
@@ -284,7 +287,7 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 	)
 	b.feedback.publish(b.turnCtx, i, tc, pc.name, pc.args, b.messages)
 
-	pc.asyncCallback = b.asyncCallback(pc.name)
+	pc.asyncCallback = b.asyncCallback(pc.name, pc.tc.ID)
 	pc.loopArgs = cloneStringAnyMap(pc.args)
 	pc.execCtx = tools.WithToolInboundContext(
 		b.turnCtx,
@@ -345,7 +348,7 @@ func (b *toolBatch) announceHookRespond(pc *preparedCall) {
 	b.feedback.publish(b.turnCtx, pc.index, pc.tc, pc.name, pc.args, b.messages)
 }
 
-func (b *toolBatch) asyncCallback(toolName string) tools.AsyncCallback {
+func (b *toolBatch) asyncCallback(toolName, toolCallID string) tools.AsyncCallback {
 	al, ts := b.al, b.ts
 	iteration := b.iteration
 	return func(_ context.Context, result *tools.ToolResult) {
@@ -361,6 +364,7 @@ func (b *toolBatch) asyncCallback(toolName string) tools.AsyncCallback {
 		}
 
 		content = al.cfg.FilterSensitiveData(content)
+		al.publishPicoToolResult(context.Background(), ts, toolCallID, content)
 
 		logger.InfoCF("agent", "Async tool completed, publishing result",
 			map[string]any{

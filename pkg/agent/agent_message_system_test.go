@@ -64,7 +64,7 @@ func TestAsyncCallbackPublishesOriginSessionKey(t *testing.T) {
 			sessionKey: originKey,
 		},
 	}
-	batch.asyncCallback("exec")(context.Background(), &tools.ToolResult{ForLLM: "background done"})
+	batch.asyncCallback("exec", "call-1")(context.Background(), &tools.ToolResult{ForLLM: "background done"})
 
 	select {
 	case got := <-msgBus.InboundChan():

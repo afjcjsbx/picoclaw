@@ -52,6 +52,8 @@ export interface SessionDetail {
       extra_content?: {
         tool_feedback_explanation?: string
       }
+      input?: string
+      output?: string
     }[]
   }[]
   summary: string

@@ -107,6 +107,13 @@ func outboundMessageIsToolCalls(msg bus.OutboundMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["message_kind"]), MessageKindToolCalls)
 }
 
+func outboundMessageIsToolResult(msg bus.OutboundMessage) bool {
+	if len(msg.Context.Raw) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["message_kind"]), MessageKindToolResult)
+}
+
 func outboundMessageIsApproval(msg bus.OutboundMessage) bool {
 	if len(msg.Context.Raw) == 0 {
 		return false
@@ -389,6 +396,7 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 	isThought := outboundMessageIsThought(msg)
 	isToolFeedback := outboundMessageIsToolFeedback(msg)
 	isToolCalls := outboundMessageIsToolCalls(msg)
+	isToolResult := outboundMessageIsToolResult(msg)
 	isApproval := outboundMessageIsApproval(msg)
 	if isToolFeedback {
 		if msgID, handled, err := c.progress.Update(ctx, msg.ChatID, msg.Content); handled {
@@ -440,6 +448,12 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 		payload[PayloadKeyKind] = MessageKindToolCalls
 		if toolCalls, ok := picoToolCallsPayload(msg); ok {
 			payload[PayloadKeyToolCalls] = toolCalls
+		}
+
+	case isToolResult:
+		payload[PayloadKeyKind] = MessageKindToolResult
+		if toolCallID := strings.TrimSpace(msg.Context.Raw[PayloadKeyToolCallID]); toolCallID != "" {
+			payload[PayloadKeyToolCallID] = toolCallID
 		}
 	}
 	if outboundMessageIsFinal(msg) {

@@ -84,6 +84,13 @@
     },
     "reasoningLabel": "Uvažování",
     "toolCallsLabel": "Volání nástrojů",
+    "toolInputLabel": "Vstup",
+    "toolOutputLabel": "Výstup",
+    "toolOutputEmpty": "Žádný výstup",
+    "activityThoughtsCount_one": "{{count}} myšlenka",
+    "activityThoughtsCount_other": "{{count}} myšlenek",
+    "activityToolsCount_one": "{{count}} nástroj",
+    "activityToolsCount_other": "{{count}} nástrojů",
     "approval": {
       "title": "Vyžadováno schválení příkazu",
       "description": "Agent chce spustit příkaz, který klasifikátor rizika nedokázal rozpoznat.",

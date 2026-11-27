@@ -38,6 +38,26 @@ describe("parseToolCallsValue", () => {
     ])
   })
 
+  it("keeps full tool input and output", () => {
+    expect(
+      parseToolCallsValue([
+        {
+          id: "call-1",
+          function: { name: "exec", arguments: '{"command":"ls"}' },
+          input: '{\n  "command": "ls"\n}',
+          output: "file.txt",
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "call-1",
+        function: { name: "exec", arguments: '{"command":"ls"}' },
+        input: '{\n  "command": "ls"\n}',
+        output: "file.txt",
+      },
+    ])
+  })
+
   it("keeps a function that only carries arguments", () => {
     expect(parseToolCallsValue([{ function: { arguments: "{}" } }])).toEqual([
       { function: { arguments: "{}" } },
@@ -128,6 +148,16 @@ describe("toolCallsSignature", () => {
           function: { name: "exec" },
           extraContent: { toolFeedbackExplanation: "why" },
         },
+      ]),
+    ).not.toBe(toolCallsSignature(base))
+    expect(
+      toolCallsSignature([
+        { id: "call-1", function: { name: "exec" }, input: "full input" },
+      ]),
+    ).not.toBe(toolCallsSignature(base))
+    expect(
+      toolCallsSignature([
+        { id: "call-1", function: { name: "exec" }, output: "full output" },
       ]),
     ).not.toBe(toolCallsSignature(base))
   })

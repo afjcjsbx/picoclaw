@@ -208,6 +208,13 @@ func outboundMessageIsToolCalls(msg bus.OutboundMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["message_kind"]), "tool_calls")
 }
 
+func outboundMessageIsToolResult(msg bus.OutboundMessage) bool {
+	if len(msg.Context.Raw) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw["message_kind"]), "tool_result")
+}
+
 func outboundMessageHasAuxiliaryKind(msg bus.OutboundMessage) bool {
 	if len(msg.Context.Raw) == 0 {
 		return false
@@ -232,6 +239,7 @@ func outboundMessageBypassesPlaceholderEdit(msg bus.OutboundMessage) bool {
 	kind := strings.TrimSpace(msg.Context.Raw["message_kind"])
 	return strings.EqualFold(kind, "thought") ||
 		strings.EqualFold(kind, "tool_calls") ||
+		strings.EqualFold(kind, "tool_result") ||
 		strings.EqualFold(kind, "approval")
 }
 
@@ -444,9 +452,9 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	// finalization bypasses the worker queue, so older queued feedback/thoughts
 	// can arrive before the normal final outbound message that cleans up the
 	// marker and placeholder.
-	// Note: tool_calls messages must NOT be dropped as they represent new tool
-	// invocations for the current turn that must be delivered to the UI.
-	if isAuxiliaryMessage && !isToolCalls {
+	// Tool calls and results must NOT be dropped as they represent new tool
+	// activity for the current turn that must be delivered to the UI.
+	if isAuxiliaryMessage && !isToolCalls && !outboundMessageIsToolResult(msg) {
 		if _, loaded := m.streamActive.Load(streamKey); loaded {
 			return nil, true
 		}

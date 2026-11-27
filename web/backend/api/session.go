@@ -649,6 +649,12 @@ func sessionTranscriptMessages(
 	includeThoughts bool,
 ) []sessionChatMessage {
 	transcript := make([]sessionChatMessage, 0, len(messages))
+	toolOutputs := make(map[string][]string)
+	for _, msg := range messages {
+		if msg.Role == "tool" && strings.TrimSpace(msg.ToolCallID) != "" {
+			toolOutputs[msg.ToolCallID] = append(toolOutputs[msg.ToolCallID], msg.Content)
+		}
+	}
 
 	for _, msg := range messages {
 		attachments := sessionAttachments(msg)
@@ -686,6 +692,13 @@ func sessionTranscriptMessages(
 				toolFeedbackMaxArgsLength,
 				msg.CreatedAt,
 			)
+			for i := range toolCallsMsg.ToolCalls {
+				callID := toolCallsMsg.ToolCalls[i].ID
+				if outputs := toolOutputs[callID]; len(outputs) > 0 {
+					toolCallsMsg.ToolCalls[i].Output = outputs[0]
+					toolOutputs[callID] = outputs[1:]
+				}
+			}
 			visibleToolMessages := visibleAssistantToolMessages(msg.ToolCalls, msg.ModelName, msg.CreatedAt)
 
 			// Pico web chat can persist both visible `message` tool output and a

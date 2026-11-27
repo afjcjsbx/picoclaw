@@ -13,6 +13,8 @@ type VisibleToolCall struct {
 	Type         string                       `json:"type,omitempty"`
 	Function     *VisibleToolCallFunction     `json:"function,omitempty"`
 	ExtraContent *VisibleToolCallExtraContent `json:"extra_content,omitempty"`
+	Input        string                       `json:"input,omitempty"`
+	Output       string                       `json:"output,omitempty"`
 }
 
 type VisibleToolCallFunction struct {
@@ -45,8 +47,9 @@ func BuildVisibleToolCalls(
 		}
 
 		visibleCall := VisibleToolCall{
-			ID:   strings.TrimSpace(tc.ID),
-			Type: strings.TrimSpace(tc.Type),
+			ID:    strings.TrimSpace(tc.ID),
+			Type:  strings.TrimSpace(tc.Type),
+			Input: VisibleToolCallArgumentsPreview(tc, 0),
 		}
 		if visibleCall.Type == "" {
 			visibleCall.Type = "function"

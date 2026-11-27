@@ -165,6 +165,41 @@ describe("handlePicoMessage message.create", () => {
     })
   })
 
+  it("merges live tool output into the matching call", () => {
+    handlePicoMessage(
+      {
+        type: "message.create",
+        session_id: SESSION,
+        payload: {
+          message_id: "tools-1",
+          tool_calls: [
+            { id: "call-1", function: { name: "exec", arguments: "{}" } },
+            { id: "call-2", function: { name: "read_file", arguments: "{}" } },
+          ],
+        },
+      },
+      SESSION,
+    )
+
+    handlePicoMessage(
+      {
+        type: "message.create",
+        session_id: SESSION,
+        payload: {
+          message_id: "result-1",
+          kind: "tool_result",
+          tool_call_id: "call-2",
+          content: "file result",
+        },
+      },
+      SESSION,
+    )
+
+    expect(getChatState().messages).toHaveLength(1)
+    expect(getChatState().messages[0].toolCalls?.[0].output).toBeUndefined()
+    expect(getChatState().messages[0].toolCalls?.[1].output).toBe("file result")
+  })
+
   it("keeps typing active for placeholders", () => {
     updateChatStore({ isTyping: true })
 
