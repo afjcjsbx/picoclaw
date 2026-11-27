@@ -316,7 +316,11 @@ func TestOfficialMem0PluginRemoteMCPAndNativeHooks(t *testing.T) {
 			mu.Lock()
 			adds = append(adds, in)
 			mu.Unlock()
-			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: `{"event_id":"saved"}`}}}, nil, nil
+			return &sdk.CallToolResult{
+				Content: []sdk.Content{&sdk.TextContent{
+					Text: `{"event_id":"saved","echo":"test-mem0-token"}`,
+				}},
+			}, nil, nil
 		},
 	)
 	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil)
@@ -538,7 +542,7 @@ drainFeedback:
 		},
 		Payload: TurnEndPayload{
 			Status:       TurnEndStatusCompleted,
-			UserMessage:  "remember this",
+			UserMessage:  "remember this test-mem0-token",
 			FinalContent: "saved in pico",
 		},
 	}); err != nil {
@@ -576,6 +580,10 @@ drainPicoActivity:
 	if toolResult.Context.Raw[metadataKeyToolCallID] != visibleCalls[0].ID ||
 		!strings.Contains(toolResult.Content, `"event_id":"saved"`) {
 		t.Fatalf("unexpected pico MCP tool result: %+v", toolResult)
+	}
+	if !strings.Contains(visibleCalls[0].Input, "[REDACTED]") ||
+		!strings.Contains(toolResult.Content, "[REDACTED]") {
+		t.Fatal("pico MCP activity did not redact the MCP credential")
 	}
 	if strings.Contains(toolCall.Context.Raw[metadataKeyToolCalls], "test-mem0-token") ||
 		strings.Contains(toolResult.Content, "test-mem0-token") {
