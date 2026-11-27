@@ -143,6 +143,23 @@
     "deleteSessionConfirm": "\"{{title}}\" a její historie zpráv budou trvale smazány. Tuto akci nelze vrátit.",
     "deleteSessionFailed": "Relaci se nepodařilo smazat",
     "messagesCount": "{{count}} zpráv",
+    "turnStats": {
+      "open": "Statistiky tahu",
+      "title": "Statistiky tahu",
+      "model": "Model",
+      "defaultModel": "(výchozí)",
+      "response": "Odpověď",
+      "responseRate": "~{{rate}} tok/s",
+      "wholeTurn": "Celý tah",
+      "wholeTurnRate": "~{{rate}} tok/s",
+      "elapsed": "Uplynulý čas",
+      "modelTime": "Čas modelu",
+      "toolTime": "Čas nástrojů",
+      "averageTtft": "Průměrné TTFT",
+      "steps": "Kroky",
+      "tokens": "Tokeny",
+      "cache": "Mezipaměť"
+    },
     "usage": {
       "summary": "{{input}} vstup · {{output}} výstup",
       "throughputValue": "{{rate}} tok/s",

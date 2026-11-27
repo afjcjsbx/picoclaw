@@ -30,6 +30,9 @@ export interface SessionDetail {
       requests?: number
       context_tokens?: number
       duration_ms?: number
+      elapsed_ms?: number
+      tool_duration_ms?: number
+      average_ttft_ms?: number
       cost_usd?: number
     }
     media?: string[]

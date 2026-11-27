@@ -143,6 +143,23 @@
     "deleteSessionConfirm": "\"{{title}}\" and its message history will be permanently deleted. This cannot be undone.",
     "deleteSessionFailed": "Could not delete the session",
     "messagesCount": "{{count}} messages",
+    "turnStats": {
+      "open": "Turn stats",
+      "title": "Turn stats",
+      "model": "Model",
+      "defaultModel": "(default)",
+      "response": "Response",
+      "responseRate": "~{{rate}} tok/s",
+      "wholeTurn": "Whole turn",
+      "wholeTurnRate": "~{{rate}} tok/s",
+      "elapsed": "Elapsed",
+      "modelTime": "Model time",
+      "toolTime": "Tool time",
+      "averageTtft": "Average TTFT",
+      "steps": "Steps",
+      "tokens": "Tokens",
+      "cache": "Cache"
+    },
     "usage": {
       "summary": "{{input}} in · {{output}} out",
       "throughputValue": "{{rate}} tok/s",

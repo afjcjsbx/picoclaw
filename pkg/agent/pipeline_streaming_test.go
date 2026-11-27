@@ -33,9 +33,10 @@ type configuredStreamingCall struct {
 }
 
 type configuredStreamingEventCall struct {
-	chunks   []providers.StreamChunk
-	response *providers.LLMResponse
-	err      error
+	chunks      []providers.StreamChunk
+	chunkDelays []time.Duration
+	response    *providers.LLMResponse
+	err         error
 }
 
 func (p *configuredStreamingProvider) Chat(
@@ -101,7 +102,10 @@ func (p *configuredStreamingProvider) ChatStreamEvents(
 			plan.chunks = append(plan.chunks, providers.StreamChunk{Content: chunk})
 		}
 	}
-	for _, chunk := range plan.chunks {
+	for i, chunk := range plan.chunks {
+		if i < len(plan.chunkDelays) && plan.chunkDelays[i] > 0 {
+			time.Sleep(plan.chunkDelays[i])
+		}
 		onChunk(chunk)
 	}
 	if plan.err != nil {
@@ -413,6 +417,64 @@ func TestConfiguredStreamingPreChunkFailureFallsBackToChat(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected fallback outbound after pre-chunk stream failure")
+	}
+}
+
+func TestConfiguredStreamingRecordsTTFTFromFirstNonEmptyToken(t *testing.T) {
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	msgBus := bus.NewMessageBus()
+	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: &recordingStreamer{}})
+	provider := &configuredStreamingProvider{
+		eventPlan: []configuredStreamingEventCall{{
+			chunks: []providers.StreamChunk{
+				{},
+				{ReasoningContent: "   "},
+				{ReasoningContent: "thinking"},
+				{Content: "answer"},
+			},
+			chunkDelays: []time.Duration{0, 0, 50 * time.Millisecond, 0},
+			response: &providers.LLMResponse{
+				Content:          "answer",
+				ReasoningContent: "thinking",
+				Usage:            &providers.UsageInfo{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+			},
+		}},
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	got, usage := runConfiguredStreamingTurnWithHistory(t, al, "pico")
+	if got != "answer" {
+		t.Fatalf("response = %q, want answer", got)
+	}
+	if usage == nil || usage.AverageTTFTMS < 40 {
+		t.Fatalf("usage = %+v, want TTFT measured from the first non-empty token", usage)
+	}
+}
+
+func TestConfiguredStreamingOmitsTTFTWhenPublisherFailureFallsBackToChat(t *testing.T) {
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	msgBus := bus.NewMessageBus()
+	msgBus.SetStreamDelegate(configuredStreamingDelegate{
+		streamer: &failingUpdateStreamer{err: errors.New("publish failed")},
+	})
+	provider := &configuredStreamingProvider{
+		eventPlan: []configuredStreamingEventCall{{
+			chunks:   []providers.StreamChunk{{Content: "visible"}},
+			response: &providers.LLMResponse{Content: "visible"},
+		}},
+		chatResponse: &providers.LLMResponse{
+			Content: "chat fallback",
+			Usage:   &providers.UsageInfo{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		},
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	got, usage := runConfiguredStreamingTurnWithHistory(t, al, "pico")
+	if got != "chat fallback" {
+		t.Fatalf("response = %q, want chat fallback", got)
+	}
+	if usage == nil || usage.AverageTTFTMS != 0 {
+		t.Fatalf("usage = %+v, want no TTFT sample from failed streaming", usage)
 	}
 }
 
@@ -1166,4 +1228,29 @@ func runConfiguredStreamingTurn(t *testing.T, al *AgentLoop, channel string) str
 		t.Fatalf("runAgentLoop() error = %v", err)
 	}
 	return got
+}
+
+func runConfiguredStreamingTurnWithHistory(
+	t *testing.T,
+	al *AgentLoop,
+	channel string,
+) (string, *providers.UsageInfo) {
+	t.Helper()
+	opts := configuredStreamingProcessOptions(channel)
+	opts.NoHistory = false
+	got, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), opts)
+	if err != nil {
+		t.Fatalf("runAgentLoop() error = %v", err)
+	}
+	history, err := al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(context.Background(), opts.SessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory() error = %v", err)
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "assistant" {
+			return got, history[i].Usage
+		}
+	}
+	t.Fatal("persisted history has no assistant message")
+	return "", nil
 }

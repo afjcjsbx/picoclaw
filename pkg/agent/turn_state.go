@@ -198,6 +198,16 @@ func newTurnExecution(
 	}
 }
 
+// turnTiming holds wall-clock metrics that belong to the whole turn rather
+// than any individual provider response.
+type turnTiming struct {
+	toolDuration time.Duration
+	ttftTotal    time.Duration
+	ttftSamples  int
+	elapsed      time.Duration
+	sealed       bool
+}
+
 // =============================================================================
 // turnState - the full state for a turn, constructed once per turn
 // =============================================================================
@@ -273,6 +283,7 @@ type turnState struct {
 	tokenBudget      *atomic.Int64        // Shared token budget counter
 	lastFinishReason string               // Last LLM finish_reason
 	turnUsage        *providers.UsageInfo // Aggregated usage across all LLM calls in the turn
+	timing           turnTiming
 
 	// Back-reference to the owning AgentLoop (set on every turn, used for hard abort cascade)
 	al *AgentLoop
@@ -1109,6 +1120,42 @@ func (ts *turnState) AddUsage(model string, call *providers.UsageInfo) {
 	ts.turnUsage.ByModel = addModelCall(ts.turnUsage.ByModel, model, call)
 }
 
+func (ts *turnState) recordToolDuration(duration time.Duration) {
+	if ts == nil || duration <= 0 {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.timing.toolDuration += duration
+}
+
+func (ts *turnState) recordTTFT(duration time.Duration) {
+	if ts == nil || duration <= 0 {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.timing.ttftTotal += duration
+	ts.timing.ttftSamples++
+}
+
+// sealTurnUsage freezes elapsed time before usage is persisted or delivered.
+// Session saves and post-turn compaction must not inflate the displayed turn.
+func (ts *turnState) sealTurnUsage() {
+	if ts == nil {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.timing.sealed {
+		return
+	}
+	if !ts.startedAt.IsZero() {
+		ts.timing.elapsed = max(0, time.Since(ts.startedAt))
+	}
+	ts.timing.sealed = true
+}
+
 // addCallUsage sums one provider call into an aggregate. Requests counts LLM
 // calls, so every call adds one.
 func addCallUsage(dst, call *providers.UsageInfo) {
@@ -1154,6 +1201,13 @@ func (ts *turnState) GetTurnUsage() *providers.UsageInfo {
 	}
 	usage := *ts.turnUsage
 	usage.ByModel = nil
+	usage.ToolDurationMS = ts.timing.toolDuration.Milliseconds()
+	if ts.timing.ttftSamples > 0 {
+		usage.AverageTTFTMS = (ts.timing.ttftTotal / time.Duration(ts.timing.ttftSamples)).Milliseconds()
+	}
+	if ts.timing.sealed {
+		usage.ElapsedMS = ts.timing.elapsed.Milliseconds()
+	}
 	if len(ts.turnUsage.ByModel) > 1 {
 		usage.ByModel = append([]providers.ModelUsage(nil), ts.turnUsage.ByModel...)
 	}

@@ -374,6 +374,7 @@ type toolCallProvider struct {
 	calls     int
 	toolCalls []providers.ToolCall
 	finalResp string
+	usage     *providers.UsageInfo
 }
 
 func (m *toolCallProvider) Chat(
@@ -388,16 +389,26 @@ func (m *toolCallProvider) Chat(
 	m.calls++
 
 	if m.calls == 1 && len(m.toolCalls) > 0 {
-		return &providers.LLMResponse{
+		response := &providers.LLMResponse{
 			Content:   "",
 			ToolCalls: m.toolCalls,
-		}, nil
+		}
+		if m.usage != nil {
+			usage := *m.usage
+			response.Usage = &usage
+		}
+		return response, nil
 	}
 
-	return &providers.LLMResponse{
+	response := &providers.LLMResponse{
 		Content:   m.finalResp,
 		ToolCalls: []providers.ToolCall{},
-	}, nil
+	}
+	if m.usage != nil {
+		usage := *m.usage
+		response.Usage = &usage
+	}
+	return response, nil
 }
 
 func (m *toolCallProvider) GetDefaultModel() string {

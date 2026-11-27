@@ -583,6 +583,30 @@ func TestPublishResponseIfNeeded_IncludesMatchingAssistantUsage(t *testing.T) {
 	}
 }
 
+func TestTokenUsageFromProvidersPreservesTurnTiming(t *testing.T) {
+	got := tokenUsageFromProviders(&providers.UsageInfo{
+		PromptTokens:     100,
+		CompletionTokens: 50,
+		TotalTokens:      150,
+		DurationMS:       48_300,
+		ElapsedMS:        85_000,
+		ToolDurationMS:   36_000,
+		AverageTTFTMS:    2000,
+	})
+	want := bus.TokenUsage{
+		InputTokens:    100,
+		OutputTokens:   50,
+		TotalTokens:    150,
+		DurationMS:     48_300,
+		ElapsedMS:      85_000,
+		ToolDurationMS: 36_000,
+		AverageTTFTMS:  2000,
+	}
+	if got == nil || *got != want {
+		t.Fatalf("tokenUsageFromProviders() = %+v, want %+v", got, want)
+	}
+}
+
 func TestPublishResponseIfNeeded_OmitsUsageForDifferentResponse(t *testing.T) {
 	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()

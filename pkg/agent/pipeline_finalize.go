@@ -22,6 +22,7 @@ func (p *Pipeline) Finalize(
 	finalContent string,
 ) (turnResult, error) {
 	al := p.al
+	ts.sealTurnUsage()
 
 	// When allResponsesHandled=true, ExecuteTools already finalized
 	// (added handledToolResponseSummary, saved session, set phase to Completed).

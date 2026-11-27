@@ -183,6 +183,20 @@ func (h *parHarness) toolMessages() []toolMsg {
 	return out
 }
 
+func (h *parHarness) finalUsage() *providers.UsageInfo {
+	h.t.Helper()
+	history, err := h.al.registry.GetDefaultAgent().Sessions.GetHistory(context.Background(), "par-session")
+	if err != nil {
+		h.t.Fatalf("GetHistory: %v", err)
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "assistant" {
+			return history[i].Usage
+		}
+	}
+	return nil
+}
+
 func assertToolMessages(t *testing.T, got []toolMsg, want ...toolMsg) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -214,6 +228,43 @@ func TestExecuteTools_ParallelSegmentOverlapsAndKeepsCallOrder(t *testing.T) {
 		t.Errorf("test setup: par_b should finish before par_a, events %v", rec.events)
 	}
 	assertToolMessages(t, h.toolMessages(), toolMsg{"c1", "done:a"}, toolMsg{"c2", "done:b"})
+}
+
+func TestExecuteTools_ParallelToolDurationCountsWallTimeOnce(t *testing.T) {
+	h := newParHarness(t, 4, []providers.ToolCall{
+		parCall("c1", "par_a", map[string]any{"ms": 200.0, "label": "a"}),
+		parCall("c2", "par_b", map[string]any{"ms": 200.0, "label": "b"}),
+	})
+	h.provider.usage = &providers.UsageInfo{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
+	h.al.RegisterTool(&parTool{name: "par_a", rec: newParRecorder()})
+	h.al.RegisterTool(&parTool{name: "par_b", rec: newParRecorder()})
+
+	h.process()
+
+	got := h.finalUsage()
+	if got == nil {
+		t.Fatal("final usage = nil, want persisted turn usage")
+	}
+	if got.ToolDurationMS <= 0 || got.ToolDurationMS >= 350 {
+		t.Fatalf("ToolDurationMS = %d, want parallel wall time once, not summed call time", got.ToolDurationMS)
+	}
+}
+
+func TestExecuteTools_SequentialToolDurationAccumulatesCalls(t *testing.T) {
+	h := newParHarness(t, 1, []providers.ToolCall{
+		parCall("c1", "par_a", map[string]any{"ms": 50.0, "label": "a"}),
+		parCall("c2", "par_b", map[string]any{"ms": 50.0, "label": "b"}),
+	})
+	h.provider.usage = &providers.UsageInfo{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
+	h.al.RegisterTool(&parTool{name: "par_a", rec: newParRecorder()})
+	h.al.RegisterTool(&parTool{name: "par_b", rec: newParRecorder()})
+
+	h.process()
+
+	got := h.finalUsage()
+	if got == nil || got.ToolDurationMS < 90 {
+		t.Fatalf("final usage = %+v, want accumulated sequential tool duration", got)
+	}
 }
 
 func TestExecuteTools_DisabledRunsSequentially(t *testing.T) {

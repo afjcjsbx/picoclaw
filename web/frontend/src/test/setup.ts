@@ -43,3 +43,13 @@ if (typeof globalThis.localStorage?.clear !== "function") {
     value: createMemoryStorage(),
   })
 }
+
+// Radix popovers and tooltips measure their trigger/content with this browser
+// API, which jsdom does not implement.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class ResizeObserverMock {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}

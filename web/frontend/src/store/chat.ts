@@ -68,6 +68,12 @@ export interface TokenUsage {
   context_tokens?: number
   /** Provider time of the turn's LLM calls, excluding tool execution. */
   duration_ms?: number
+  /** Wall-clock time from the start of the turn to its final response. */
+  elapsed_ms?: number
+  /** Wall-clock time spent executing tools during the turn. */
+  tool_duration_ms?: number
+  /** Average time to first token across successful streaming model calls. */
+  average_ttft_ms?: number
   /** Absolute turn cost in USD when the backend reports it. */
   cost_usd?: number
 }

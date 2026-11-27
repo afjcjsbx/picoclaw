@@ -431,6 +431,7 @@ func (b *toolBatch) runOne(i int) toolStep {
 	}
 	if pc.kind == preparedRun {
 		b.run(pc)
+		b.ts.recordToolDuration(pc.duration)
 	}
 	return b.conclude([]*preparedCall{pc})
 }
@@ -456,6 +457,7 @@ func (b *toolBatch) runParallel(indexes []int, maxParallel int) toolStep {
 		for _, pc := range pcs {
 			if pc.kind == preparedRun {
 				b.run(pc)
+				b.ts.recordToolDuration(pc.duration)
 			}
 			if step := b.conclude([]*preparedCall{pc}); step != toolStepContinue {
 				return step
@@ -464,7 +466,9 @@ func (b *toolBatch) runParallel(indexes []int, maxParallel int) toolStep {
 		return toolStepContinue
 	}
 
+	start := time.Now()
 	tools.RunConcurrent(len(pcs), maxParallel, func(n int) { b.run(pcs[n]) })
+	b.ts.recordToolDuration(time.Since(start))
 	return b.conclude(pcs)
 }
 

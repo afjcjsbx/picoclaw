@@ -89,6 +89,9 @@ export function parseTokenUsage(
   const requests = toTokenCount(usage.requests)
   const contextTokens = toTokenCount(usage.context_tokens)
   const durationMs = toTokenCount(usage.duration_ms)
+  const elapsedMs = toTokenCount(usage.elapsed_ms)
+  const toolDurationMs = toTokenCount(usage.tool_duration_ms)
+  const averageTtftMs = toTokenCount(usage.average_ttft_ms)
 
   return {
     ...(input !== undefined ? { input_tokens: input } : {}),
@@ -99,6 +102,9 @@ export function parseTokenUsage(
     ...(requests ? { requests } : {}),
     ...(contextTokens ? { context_tokens: contextTokens } : {}),
     ...(durationMs ? { duration_ms: durationMs } : {}),
+    ...(elapsedMs ? { elapsed_ms: elapsedMs } : {}),
+    ...(toolDurationMs ? { tool_duration_ms: toolDurationMs } : {}),
+    ...(averageTtftMs ? { average_ttft_ms: averageTtftMs } : {}),
     ...(cost !== undefined ? { cost_usd: cost } : {}),
   }
 }
@@ -159,17 +165,60 @@ export function formatTokenCount(value: number): string {
 }
 
 /**
- * Output tokens per second for a turn. The backend records only the time spent
- * in provider calls, so the rate stays comparable across turns that executed
- * different tools.
+ * Output tokens per second for a turn. Defaults to provider time so the rate
+ * stays comparable across turns that executed different tools; callers can
+ * pass wall-clock turn time to calculate whole-turn throughput.
  */
-export function tokensPerSecond(usage: TokenUsage): number | undefined {
+export function tokensPerSecond(
+  usage: TokenUsage,
+  durationMs = usage.duration_ms ?? 0,
+): number | undefined {
   const output = usage.output_tokens ?? 0
-  const durationMs = usage.duration_ms ?? 0
   if (output <= 0 || durationMs <= 0) {
     return undefined
   }
   return output / (durationMs / 1000)
+}
+
+export function cacheHitRate(usage: TokenUsage): number | undefined {
+  const input = usage.input_tokens ?? 0
+  const cacheRead = usage.cache_read_tokens
+  if (input <= 0 || cacheRead === undefined) {
+    return undefined
+  }
+  return (cacheRead / input) * 100
+}
+
+export function formatDuration(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+    return "0.0s"
+  }
+  if (milliseconds < 60_000) {
+    return `${(milliseconds / 1000).toFixed(1)}s`
+  }
+
+  const totalSeconds = Math.round(milliseconds / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${seconds}s`
+}
+
+export function formatCompactTokenCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0"
+  }
+
+  const units: ReadonlyArray<readonly [number, string]> = [
+    [1_000_000_000, "B"],
+    [1_000_000, "M"],
+    [1_000, "K"],
+  ]
+  for (const [threshold, suffix] of units) {
+    if (value >= threshold) {
+      return `${(value / threshold).toFixed(1)}${suffix}`
+    }
+  }
+  return formatTokenCount(value)
 }
 
 export function formatTokensPerSecond(value: number): string {

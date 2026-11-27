@@ -1987,6 +1987,15 @@ func setTokenUsagePayload(payload map[string]any, usage *bus.TokenUsage) {
 	if usage.DurationMS > 0 {
 		block["duration_ms"] = usage.DurationMS
 	}
+	if usage.ElapsedMS > 0 {
+		block["elapsed_ms"] = usage.ElapsedMS
+	}
+	if usage.ToolDurationMS > 0 {
+		block["tool_duration_ms"] = usage.ToolDurationMS
+	}
+	if usage.AverageTTFTMS > 0 {
+		block["average_ttft_ms"] = usage.AverageTTFTMS
+	}
 	payload[PayloadKeyUsage] = block
 }
 

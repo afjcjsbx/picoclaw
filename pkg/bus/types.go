@@ -93,6 +93,13 @@ type TokenUsage struct {
 	// DurationMS is the total provider time of those calls, excluding tool
 	// execution, so clients can derive output tokens per second.
 	DurationMS int64 `json:"duration_ms,omitempty"`
+	// ElapsedMS is wall-clock time from turn start to final model/tool work.
+	ElapsedMS int64 `json:"elapsed_ms,omitempty"`
+	// ToolDurationMS is wall-clock time spent executing tools, counting each
+	// parallel batch once rather than summing overlapping calls.
+	ToolDurationMS int64 `json:"tool_duration_ms,omitempty"`
+	// AverageTTFTMS is the average first-token latency of successful streams.
+	AverageTTFTMS int64 `json:"average_ttft_ms,omitempty"`
 }
 
 type OutboundMessage struct {
