@@ -160,7 +160,7 @@ function SessionStatusIndicator({
       {isRunning ? (
         <IconLoader2
           aria-hidden="true"
-          className="size-3.5 animate-spin text-violet-500"
+          className="dark:text-brand size-3.5 animate-spin text-violet-500"
         />
       ) : (
         <span

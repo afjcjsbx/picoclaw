@@ -116,7 +116,7 @@ export function ApprovalMessage({
               size="sm"
               onClick={() => respond("approve")}
               disabled={disabled}
-              className="gap-1.5 bg-violet-500 text-white hover:bg-violet-600"
+              className="bg-brand text-brand-foreground hover:bg-brand-hover gap-1.5"
             >
               <IconCheck className="size-3.5" aria-hidden="true" />
               {t("chat.approval.approve")}

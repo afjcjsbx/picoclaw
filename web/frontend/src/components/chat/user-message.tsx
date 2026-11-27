@@ -124,7 +124,7 @@ export const UserMessage = memo(function UserMessage({
                   key={`${attachment.url}-${index}`}
                   href={attachment.url}
                   download={attachment.filename}
-                  className={`${className} hover:border-violet-500/40`}
+                  className={`${className} dark:hover:border-brand/40 hover:border-violet-500/40`}
                 >
                   {card}
                 </a>

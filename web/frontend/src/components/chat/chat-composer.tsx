@@ -439,8 +439,9 @@ export function ChatComposer({
         <div
           ref={surfaceRef}
           className={cn(
-            "bg-muted/60 relative flex w-full flex-col rounded-3xl border border-transparent p-3 shadow-none transition-colors",
-            isDragActive && "border-violet-400/70 bg-violet-500/10",
+            "bg-muted/60 dark:bg-muted relative flex w-full flex-col rounded-3xl border border-border p-3 shadow-none transition-colors",
+            isDragActive &&
+              "dark:border-brand/70 dark:bg-brand/10 border-violet-400/70 bg-violet-500/10",
           )}
           onDragEnter={onDragEnter}
           onDragLeave={onDragLeave}
@@ -448,7 +449,7 @@ export function ChatComposer({
           onDrop={onDrop}
         >
           {isDragActive && (
-            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-violet-400/70 bg-violet-500/10">
+            <div className="dark:border-brand/70 dark:bg-brand/10 pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-violet-400/70 bg-violet-500/10">
               <div className="bg-background/95 text-foreground rounded-full px-4 py-2 text-sm font-medium shadow-sm">
                 {t("chat.dropFilesActive")}
               </div>
@@ -491,7 +492,7 @@ export function ChatComposer({
                   <button
                     type="button"
                     onClick={() => onRemoveAttachment(index)}
-                    className="bg-background/85 text-foreground absolute top-1 right-1 inline-flex h-6 w-6 items-center justify-center rounded-full border shadow-sm transition hover:bg-white"
+                    className="bg-background/85 text-foreground dark:hover:bg-accent absolute top-1 right-1 inline-flex h-6 w-6 items-center justify-center rounded-full border shadow-sm transition hover:bg-white"
                     aria-label={t("chat.removeAttachment")}
                     title={t("chat.removeAttachment")}
                   >
@@ -527,7 +528,7 @@ export function ChatComposer({
             disabled={!canInput}
             title={disabledMessage || undefined}
             className={cn(
-              "placeholder:text-muted-foreground/65 max-h-[160px] min-h-[40px] resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] shadow-none transition-colors focus-visible:ring-0 focus-visible:outline-none dark:bg-transparent",
+              "placeholder:text-muted-foreground/65 dark:placeholder:text-muted-foreground/80 max-h-[160px] min-h-[40px] resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] shadow-none transition-colors focus-visible:ring-0 focus-visible:outline-none dark:bg-transparent",
               !canInput && "cursor-not-allowed",
             )}
             minRows={1}
@@ -634,7 +635,7 @@ export function ChatComposer({
                   <Button
                     type="button"
                     size="icon"
-                    className="size-8 rounded-full bg-violet-500 text-white transition-transform hover:bg-violet-600 active:scale-95"
+                    className="bg-send text-send-foreground hover:bg-send-hover size-8 rounded-full transition-transform active:scale-95"
                     onClick={onSend}
                     disabled={!canSend || isRecording}
                     aria-label={t("chat.sendMessage")}

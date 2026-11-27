@@ -73,6 +73,25 @@ describe("AssistantMessage actions", () => {
     ).toBeTruthy()
   })
 
+  it("keeps usage details in turn stats without an inline summary", () => {
+    render(
+      <AssistantMessage
+        content="Done"
+        usage={{
+          input_tokens: 100,
+          output_tokens: 50,
+          total_tokens: 150,
+          duration_ms: 1000,
+        }}
+      />,
+    )
+
+    expect(
+      screen.getByRole("button", { name: "chat.turnStats.open" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("chat.usage.summary")).not.toBeInTheDocument()
+  })
+
   it("does not render turn stats without usage data", () => {
     render(<AssistantMessage content="Done" onFork={() => {}} />)
 

@@ -106,7 +106,7 @@ export function PendingFollowUpOverlay({
               size="sm"
               onClick={() => onSteer(followUp.id)}
               disabled={!canSteer}
-              className="h-6 shrink-0 gap-1 rounded-full px-2 text-[11px] font-medium text-violet-600 hover:bg-violet-500/10 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
+              className="dark:hover:bg-brand/10 h-6 shrink-0 gap-1 rounded-full px-2 text-[11px] font-medium text-violet-600 hover:bg-violet-500/10 hover:text-violet-700 dark:text-[#8fb39a] dark:hover:text-[#a6c5af]"
               aria-label={t("chat.steerNow")}
               title={t("chat.steerNow")}
             >
