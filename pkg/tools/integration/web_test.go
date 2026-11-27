@@ -712,29 +712,51 @@ func TestWebTool_WebFetch_HTMLExtraction(t *testing.T) {
 	}
 }
 
-// TestWebTool_WebFetch_MarkdownFallback verifies that an empty Markdown
-// extraction falls back to plaintext without changing successful conversions.
-func TestWebTool_WebFetch_MarkdownFallback(t *testing.T) {
+// TestWebTool_WebFetch_LocalExtraction verifies that HTML goes through the
+// built-in lightweight parser, keeps article content, drops semantic page
+// boilerplate, and falls back to plaintext when Markdown is empty.
+func TestWebTool_WebFetch_LocalExtraction(t *testing.T) {
 	withPrivateWebFetchHostsAllowed(t)
+
+	articleBody := strings.Repeat("The article body explains the offer in ordinary prose. ", 12)
+	articlePage := `<html><body><nav><p>Navigation noise</p></nav>` +
+		`<div class="advert">Buy now noise</div><article>` +
+		`<h2>Readable article title</h2><p>` + articleBody + `</p>` +
+		`<p>Second paragraph with more useful details for the reader.</p>` +
+		`</article></body></html>`
+	navOnlyPage := `<html><body><nav><p>` +
+		strings.Repeat("Navigation fallback text with enough ordinary prose for extraction. ", 10) +
+		`</p></nav></body></html>`
 
 	tests := []struct {
 		name          string
 		body          string
+		format        string
 		wantExtractor string
 		wantText      string
+		wantAbsent    string
 	}{
 		{
-			name: "empty markdown falls back to plaintext",
-			body: `<html><body><main class="pageHolder skip_popup">` +
-				`<h2>Recovered title</h2><p>Recovered body</p></main></body></html>`,
-			wantExtractor: "text",
-			wantText:      "Recovered body",
+			name:          "markdown keeps article content",
+			body:          articlePage,
+			format:        "markdown",
+			wantExtractor: "markdown",
+			wantText:      "Readable article title",
+			wantAbsent:    "Navigation noise",
 		},
 		{
-			name:          "non-empty markdown does not fall back",
-			body:          `<html><body><main><h2>Markdown title</h2><p>Markdown body</p></main></body></html>`,
-			wantExtractor: "markdown",
-			wantText:      "## Markdown title",
+			name:          "plaintext mode returns full-page text",
+			body:          articlePage,
+			format:        "plaintext",
+			wantExtractor: "text",
+			wantText:      "The article body explains the offer",
+		},
+		{
+			name:          "empty markdown falls back to full-page plaintext",
+			body:          navOnlyPage,
+			format:        "markdown",
+			wantExtractor: "text",
+			wantText:      "Navigation fallback text",
 		},
 	}
 
@@ -747,7 +769,7 @@ func TestWebTool_WebFetch_MarkdownFallback(t *testing.T) {
 			}))
 			defer server.Close()
 
-			tool, err := NewWebFetchTool(50000, "markdown", testFetchLimit)
+			tool, err := NewWebFetchTool(50000, tt.format, testFetchLimit)
 			if err != nil {
 				t.Fatalf("failed to create web fetch tool: %v", err)
 			}
@@ -774,7 +796,76 @@ func TestWebTool_WebFetch_MarkdownFallback(t *testing.T) {
 			if !strings.Contains(envelope.Text, tt.wantText) {
 				t.Errorf("text = %q, want it to contain %q", envelope.Text, tt.wantText)
 			}
+			if tt.wantAbsent != "" && strings.Contains(envelope.Text, tt.wantAbsent) {
+				t.Errorf("text = %q, want it not to contain %q", envelope.Text, tt.wantAbsent)
+			}
 		})
+	}
+}
+
+func TestWebTool_WebFetch_NoReadableContent(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><body><script>window.app = {};</script><style>body{}</style></body></html>`))
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchTool(50000, "markdown", testFetchLimit)
+	if err != nil {
+		t.Fatalf("failed to create web fetch tool: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"url": server.URL})
+	if !result.IsError {
+		t.Fatalf("expected an error for a page without readable content, got %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, noReadableContentMessage) {
+		t.Errorf("error = %q, want it to contain %q", result.ForLLM, noReadableContentMessage)
+	}
+}
+
+func TestWebTool_WebFetch_XHTMLContentType(t *testing.T) {
+	withPrivateWebFetchHostsAllowed(t)
+
+	articleBody := strings.Repeat("XHTML article content with enough ordinary prose for extraction. ", 12)
+	body := `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<html xmlns="http://www.w3.org/1999/xhtml"><body><article>` +
+		`<h2>XHTML article title</h2><p>` + articleBody + `</p>` +
+		`</article></body></html>`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xhtml+xml; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchTool(50000, "markdown", testFetchLimit)
+	if err != nil {
+		t.Fatalf("failed to create web fetch tool: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"url": server.URL})
+	if result.IsError {
+		t.Fatalf("expected success, got %q", result.ForLLM)
+	}
+
+	var envelope struct {
+		Extractor string `json:"extractor"`
+		Text      string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(result.ForLLM), &envelope); err != nil {
+		t.Fatalf("failed to decode result: %v", err)
+	}
+	if envelope.Extractor != "markdown" {
+		t.Errorf("extractor = %q, want markdown", envelope.Extractor)
+	}
+	if !strings.Contains(envelope.Text, "XHTML article title") ||
+		!strings.Contains(envelope.Text, "XHTML article content") {
+		t.Errorf("text = %q, want it to contain the XHTML article", envelope.Text)
 	}
 }
 
@@ -3155,6 +3246,31 @@ func TestWebTool_WebFetch_PerCallMaxCharsFloor(t *testing.T) {
 	// A configured budget below the floor still wins: maxChars may only lower it.
 	if text = fetch(t, 1000, 100); len(text) > 1100 {
 		t.Fatalf("expected the configured 1000-char cap, got %d", len(text))
+	}
+}
+
+func TestIsHTMLContentType(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mediaType string
+		body      string
+		want      bool
+	}{
+		{"text html", "text/html", "", true},
+		{"xhtml", "application/xhtml+xml", "", true},
+		{"xml", "application/xml", "", true},
+		{"text xml", "text/xml", "", true},
+		{"uppercase", "TEXT/HTML", "", true},
+		{"json", "application/json", "<html>", false},
+		{"plain text", "text/plain", "<html>", false},
+		{"missing type html body", "", "<!doctype html><html>", true},
+		{"missing type plain body", "", "hello", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isHTMLContentType(tc.mediaType, tc.body); got != tc.want {
+				t.Errorf("isHTMLContentType(%q, %q) = %v, want %v", tc.mediaType, tc.body, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -34,6 +34,10 @@ General settings for fetching and processing webpage content.
 | `tools.web.format`  | string | "plaintext"   | Output format of the fetched content. Options: `plaintext` or `markdown` (recommended).       |
 | `tools.web.proxy`   | string | ""            | Optional proxy URL for web tools (`http`, `https`, `socks5`, `socks5h`). For authenticated proxies, prefer the `HTTP_PROXY`/`HTTPS_PROXY` environment variables instead of embedding credentials in config |
 
+### Readable content extraction
+
+For HTML, XHTML, and XML pages, `web_fetch` uses its built-in lightweight parser. In Markdown mode it removes scripts, styles, semantic navigation/banner/footer roles, hidden nodes, and obvious layout/noise classes before conversion. No external extraction library or subprocess is used. When the Markdown result is empty, `web_fetch` falls back to full-page plaintext extraction. If that also returns nothing, the call fails with an explicit message suggesting a configured browser, because the page is probably rendered by JavaScript or hidden behind a consent/challenge wall. The `extractor` field reports which path was used: `markdown` for the local Markdown parser, or `text` for the plaintext fallback.
+
 ### Pages that need a real browser
 
 `web_fetch` is an HTTP client, not a browser: it does not execute JavaScript, keep cookies or a login session, or interact with the page. When a site returns only a JavaScript shell, a 403/429, a cookie or consent wall, or content that appears after client-side rendering, use [browser automation](browser-automation.md) instead. Playwright MCP drives a real Chromium browser with the same agent, while `web_fetch` remains the cheaper default for static pages and structured endpoints.
