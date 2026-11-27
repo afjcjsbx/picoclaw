@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -375,7 +374,12 @@ func (al *AgentLoop) publishPicoToolCallInterim(
 		return
 	}
 
-	rawToolCalls, err := json.Marshal(visibleToolCalls)
+	msg, err := buildPicoToolCallsMessage(
+		outboundMessageForTurnWithOptions(ts, "", outboundTurnMessageOptions{
+			modelName: modelName,
+		}),
+		visibleToolCalls,
+	)
 	if err != nil {
 		logger.WarnCF("agent", "Failed to serialize pico tool calls", map[string]any{
 			"channel": ts.channel,
@@ -385,18 +389,8 @@ func (al *AgentLoop) publishPicoToolCallInterim(
 		return
 	}
 
-	msg := outboundMessageForTurnWithOptions(ts, "", outboundTurnMessageOptions{
-		kind:      messageKindToolCalls,
-		modelName: modelName,
-		raw: map[string]string{
-			metadataKeyToolCalls: string(rawToolCalls),
-		},
-	})
-
-	pubCtx, pubCancel := context.WithTimeout(ctx, 3*time.Second)
-	err = al.bus.PublishOutbound(pubCtx, msg)
-	pubCancel()
-	if err != nil && !errors.Is(err, context.DeadlineExceeded) &&
+	if err := publishOutboundToolActivity(ctx, al, msg); err != nil &&
+		!errors.Is(err, context.DeadlineExceeded) &&
 		!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, bus.ErrBusClosed) {
 		logger.WarnCF("agent", "Failed to publish pico tool calls", map[string]any{
@@ -417,15 +411,12 @@ func (al *AgentLoop) publishPicoToolResult(
 		return
 	}
 
-	msg := outboundMessageForTurnWithOptions(ts, output, outboundTurnMessageOptions{
-		kind: messageKindToolResult,
-		raw: map[string]string{
-			metadataKeyToolCallID: toolCallID,
-		},
-	})
-	pubCtx, pubCancel := context.WithTimeout(ctx, 3*time.Second)
-	defer pubCancel()
-	if err := al.bus.PublishOutbound(pubCtx, msg); err != nil &&
+	msg := buildPicoToolResultMessage(
+		outboundMessageForTurn(ts, ""),
+		toolCallID,
+		output,
+	)
+	if err := publishOutboundToolActivity(ctx, al, msg); err != nil &&
 		!errors.Is(err, context.DeadlineExceeded) &&
 		!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, bus.ErrBusClosed) {

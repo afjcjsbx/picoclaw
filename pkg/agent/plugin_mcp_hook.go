@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"slices"
@@ -213,15 +214,14 @@ func (h *pluginMCPHook) toolActivityMessage(
 }
 
 func (h *pluginMCPHook) publishToolActivity(ctx context.Context, msg bus.OutboundMessage) {
-	if h.al == nil || h.al.bus == nil {
-		return
+	if err := publishOutboundToolActivity(ctx, h.al, msg); err != nil &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, bus.ErrBusClosed) {
+		logger.WarnCF("plugins", "Failed to publish plugin tool activity", map[string]any{
+			"plugin": h.pluginID, "hook": h.spec.Name, "error": err.Error(),
+		})
 	}
-	if msg.Context.Raw == nil {
-		msg.Context.Raw = make(map[string]string, 1)
-	}
-	pubCtx, pubCancel := context.WithTimeout(ctx, 3*time.Second)
-	_ = h.al.bus.PublishOutbound(pubCtx, msg)
-	pubCancel()
 }
 
 // Plugin hooks run outside the model tool loop. Mirror the normal Pico
@@ -246,15 +246,13 @@ func (h *pluginMCPHook) publishPicoToolCall(
 		}},
 		h.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
 	)
-	rawToolCalls, err := json.Marshal(visibleToolCalls)
+	msg, err := buildPicoToolCallsMessage(msg, visibleToolCalls)
 	if err != nil {
 		logger.WarnCF("plugins", "Failed to serialize pico MCP hook tool call", map[string]any{
 			"plugin": h.pluginID, "hook": h.spec.Name, "error": err.Error(),
 		})
 		return "", false
 	}
-	msg.Context.Raw[metadataKeyMessageKind] = messageKindToolCalls
-	msg.Context.Raw[metadataKeyToolCalls] = string(rawToolCalls)
 	h.publishToolActivity(ctx, msg)
 	return toolCallID, true
 }
@@ -268,9 +266,7 @@ func (h *pluginMCPHook) publishPicoToolResult(
 	if !ok || !strings.EqualFold(strings.TrimSpace(msg.Channel), "pico") {
 		return
 	}
-	msg.Content = output
-	msg.Context.Raw[metadataKeyMessageKind] = messageKindToolResult
-	msg.Context.Raw[metadataKeyToolCallID] = toolCallID
+	msg = buildPicoToolResultMessage(msg, toolCallID, output)
 	h.publishToolActivity(ctx, msg)
 }
 
