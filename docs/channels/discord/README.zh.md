@@ -20,7 +20,7 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
       "allow_from": ["YOUR_USER_ID"],
       "commands_enabled": true,
       "group_trigger": {
-        "mention_only": true
+        "mention_only": false
       },
       "settings": {
         "token": "YOUR_BOT_TOKEN",
@@ -39,7 +39,7 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
 | settings.token             | string | 是   | Discord 机器人 Token                                                                                       |
 | allow_from                 | array  | 否   | 用户 ID 白名单，空表示允许所有用户                                                                         |
 | commands_enabled           | bool   | 否   | 是否启用此频道的斜杠命令。设为 `false` 会清空 Discord 命令菜单，并由 Agent 拒绝所有斜杠命令，默认为 `true` |
-| group_trigger              | object | 否   | 群组触发设置（示例: { "mention_only": true }）                                                             |
+| group_trigger              | object | 否   | 群组触发设置（示例: { "mention_only": false }）                                                            |
 | settings.allow_dm          | bool   | 否   | 是否接受私信和 DM 中的斜杠命令，默认为 `true`。环境变量：`PICOCLAW_CHANNELS_DISCORD_ALLOW_DM`              |
 | settings.allow_attachments | bool   | 否   | 是否下载并处理入站附件，默认为 `true`。环境变量：`PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS`             |
 | settings.channel_ids       | array  | 否   | PicoClaw 允许回复的 Discord 服务器频道 ID 白名单；留空表示所有服务器频道                                   |
@@ -57,7 +57,7 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
 ```json
 {
   "group_trigger": {
-    "mention_only": true
+    "mention_only": false
   },
   "settings": {
     "channel_ids": ["123456789012345678", "234567890123456789"]
@@ -65,10 +65,10 @@ Discord 是一个专为社区设计的免费语音、视频和文本聊天应用
 }
 ```
 
-在此配置下，PicoClaw 仅在列出的两个频道中回复，并且只有被明确提及时才回复。
+在此配置下，PicoClaw 仅在列出的两个频道中回复，并会自动回复，无需提及。
 
 - 未列出的服务器频道会被忽略，即使提及机器人。
-- 若 `mention_only: false`，列出的频道会自动回复，无需提及。
+- 若 `mention_only: true`，列出的频道仅在被明确提及时回复。
 - 配置的触发前缀在列出的频道中仍然生效。
 - `channel_ids` 不影响私信；是否接受私信由 `settings.allow_dm` 控制。
 - `channel_ids` 为空或省略时允许所有服务器频道；`group_trigger` 仍然生效。

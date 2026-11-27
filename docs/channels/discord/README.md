@@ -31,7 +31,7 @@ Discord is a free voice, video, and text chat application designed for communiti
         "text": ["Thinking... 💭"]
       },
       "group_trigger": {
-        "mention_only": true
+        "mention_only": false
       },
       "reasoning_channel_id": "",
       "settings": {
@@ -53,7 +53,7 @@ Discord is a free voice, video, and text chat application designed for communiti
 | allow_from                 | array  | No       | Allowlist of user IDs; empty means all users are allowed                                                                                               |
 | commands_enabled           | bool   | No       | Whether slash commands are enabled on this channel; set to `false` to clear the Discord command menu and reject all slash commands. Defaults to `true` |
 | placeholder                | object | No       | Placeholder message config shown while the agent is working                                                                                            |
-| group_trigger              | object | No       | Group trigger settings (example: { "mention_only": true })                                                                                             |
+| group_trigger              | object | No       | Group trigger settings (example: { "mention_only": false })                                                                                            |
 | reasoning_channel_id       | string | No       | Optional target channel ID for reasoning/thinking output                                                                                               |
 | settings.proxy             | string | No       | HTTP/SOCKS5 proxy URL for the Discord connection (e.g. `http://127.0.0.1:7890`). Env: `PICOCLAW_CHANNELS_DISCORD_PROXY`                                |
 | settings.allow_dm          | bool   | No       | Whether the bot accepts direct messages and DM slash commands. Defaults to `true`. Env: `PICOCLAW_CHANNELS_DISCORD_ALLOW_DM`                           |
@@ -73,7 +73,7 @@ Use `settings.channel_ids` as an allowlist of Discord server channels where Pico
 ```json
 {
   "group_trigger": {
-    "mention_only": true
+    "mention_only": false
   },
   "settings": {
     "channel_ids": ["123456789012345678", "234567890123456789"]
@@ -81,10 +81,10 @@ Use `settings.channel_ids` as an allowlist of Discord server channels where Pico
 }
 ```
 
-With this configuration, PicoClaw responds only in the two listed channels and only when explicitly mentioned.
+With this configuration, PicoClaw responds only in the two listed channels and responds automatically without a mention.
 
 - Unlisted server channels are ignored, even when the bot is mentioned.
-- With `mention_only: false`, listed channels respond automatically without a mention.
+- Set `mention_only: true` to require explicit mentions in listed channels.
 - Configured trigger prefixes still apply in listed channels.
 - Direct messages are unaffected by `channel_ids`; `settings.allow_dm` controls whether they are accepted.
 - An empty or omitted `channel_ids` list allows all server channels; `group_trigger` still applies.
