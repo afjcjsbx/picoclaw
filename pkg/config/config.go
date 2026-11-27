@@ -930,15 +930,22 @@ type FeishuSettings struct {
 }
 
 type DiscordSettings struct {
-	Token   SecureString `json:"token,omitzero"     yaml:"token,omitempty" env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
-	Proxy   string       `json:"proxy"              yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
-	AllowDM *bool        `json:"allow_dm,omitempty" yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_DM"`
+	Token            SecureString `json:"token,omitzero"              yaml:"token,omitempty" env:"PICOCLAW_CHANNELS_DISCORD_TOKEN"`
+	Proxy            string       `json:"proxy"                       yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_PROXY"`
+	AllowDM          *bool        `json:"allow_dm,omitempty"          yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_DM"`
+	AllowAttachments *bool        `json:"allow_attachments,omitempty" yaml:"-"               env:"PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS"`
 }
 
 // DMAllowed reports whether the Discord channel accepts direct messages.
 // An unset value preserves the historical default of allowing DMs.
 func (c DiscordSettings) DMAllowed() bool {
 	return c.AllowDM == nil || *c.AllowDM
+}
+
+// AttachmentsAllowed reports whether inbound Discord attachments are processed.
+// An unset value preserves the historical default of allowing attachments.
+func (c DiscordSettings) AttachmentsAllowed() bool {
+	return c.AllowAttachments == nil || *c.AllowAttachments
 }
 
 type MaixCamSettings struct {

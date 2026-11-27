@@ -102,6 +102,18 @@ export function DiscordForm({
 
           <div>
             <SwitchCardField
+              label={t("channels.field.allowAttachments")}
+              hint={t("channels.form.desc.allowAttachments")}
+              checked={config.allow_attachments !== false}
+              onCheckedChange={(checked) =>
+                onChange("allow_attachments", checked)
+              }
+              ariaLabel={t("channels.field.allowAttachments")}
+            />
+          </div>
+
+          <div>
+            <SwitchCardField
               label={t("channels.field.mentionOnly")}
               hint={t("channels.form.desc.mentionOnly")}
               checked={asBool(groupTriggerConfig.mention_only)}

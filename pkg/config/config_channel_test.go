@@ -829,6 +829,64 @@ func TestDiscordSettings_DMAllowed(t *testing.T) {
 	})
 }
 
+func TestDiscordSettings_AttachmentsAllowed(t *testing.T) {
+	t.Run("unset preserves default", func(t *testing.T) {
+		settings := DiscordSettings{}
+		assert.True(t, settings.AttachmentsAllowed())
+	})
+
+	t.Run("explicit false blocks attachments", func(t *testing.T) {
+		allow := false
+		settings := DiscordSettings{AllowAttachments: &allow}
+		assert.False(t, settings.AttachmentsAllowed())
+	})
+
+	t.Run("explicit true allows attachments", func(t *testing.T) {
+		allow := true
+		settings := DiscordSettings{AllowAttachments: &allow}
+		assert.True(t, settings.AttachmentsAllowed())
+	})
+}
+
+func TestChannel_DiscordAllowAttachmentsDecode(t *testing.T) {
+	var channel Channel
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"enabled": true,
+		"type": "discord",
+		"settings": {"allow_attachments": false}
+	}`), &channel))
+
+	var settings DiscordSettings
+	require.NoError(t, channel.Decode(&settings))
+	require.NotNil(t, settings.AllowAttachments)
+	assert.False(t, *settings.AllowAttachments)
+	assert.False(t, settings.AttachmentsAllowed())
+
+	out, err := json.Marshal(channel)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `"allow_attachments":false`)
+}
+
+func TestInitChannelList_DiscordAttachmentsEnvCompatibility(t *testing.T) {
+	t.Setenv("PICOCLAW_CHANNELS_DISCORD_ALLOW_ATTACHMENTS", "false")
+
+	channels := ChannelsConfig{
+		"discord": {
+			Type:     ChannelDiscord,
+			Enabled:  true,
+			Settings: RawNode(`{}`),
+		},
+	}
+	require.NoError(t, InitChannelList(channels))
+
+	decoded, err := channels["discord"].GetDecoded()
+	require.NoError(t, err)
+	discordCfg := decoded.(*DiscordSettings)
+	require.NotNil(t, discordCfg.AllowAttachments)
+	assert.False(t, *discordCfg.AllowAttachments)
+	assert.False(t, discordCfg.AttachmentsAllowed())
+}
+
 func TestChannel_DiscordAllowDMDecode(t *testing.T) {
 	var channel Channel
 	require.NoError(t, json.Unmarshal([]byte(`{
