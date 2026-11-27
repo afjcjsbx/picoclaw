@@ -4,7 +4,6 @@ import {
   IconChevronDown,
   IconClockHour4,
   IconCode,
-  IconCoins,
   IconCopy,
   IconDownload,
   IconFileText,
@@ -38,19 +37,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import {
-  estimateUsageCostUsd,
-  formatTokenCount,
-  formatTokensPerSecond,
-  formatUsageCostUsd,
-  tokensPerSecond,
-} from "@/features/chat/usage"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 import { formatMessageTime } from "@/hooks/use-pico-chat"
 import { cn } from "@/lib/utils"
@@ -617,18 +603,6 @@ export const AssistantMessage = memo(function AssistantMessage({
   const hasUsage =
     usage !== undefined &&
     (usage.total_tokens > 0 || usage.cost_usd !== undefined)
-  const usageInput = usage?.input_tokens
-  const usageOutput = usage?.output_tokens
-  const usageRequests = usage?.requests
-  const usageContextTokens = usage?.context_tokens
-  const usageTokensPerSecond = usage ? tokensPerSecond(usage) : undefined
-  const usageCostUsd = usage
-    ? estimateUsageCostUsd(usage, modelName)
-    : undefined
-  const usageCostIsEstimated =
-    usage !== undefined &&
-    usage.cost_usd === undefined &&
-    usageCostUsd !== undefined
 
   return (
     <div
@@ -805,139 +779,6 @@ export const AssistantMessage = memo(function AssistantMessage({
                   />
                 )}
               </>
-            )}
-            {hasUsage && usage && (
-              <TooltipProvider delayDuration={120} skipDelayDuration={0}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      tabIndex={0}
-                      className="text-muted-foreground/70 flex cursor-default items-center gap-1 tabular-nums"
-                    >
-                      <IconCoins
-                        className="size-3.5 shrink-0"
-                        aria-hidden="true"
-                      />
-                      <span>
-                        {t("chat.usage.summary", {
-                          input: formatTokenCount(usageInput ?? 0),
-                          output: formatTokenCount(usageOutput ?? 0),
-                        })}
-                      </span>
-                      {usageTokensPerSecond !== undefined && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span>
-                            {t("chat.usage.throughputValue", {
-                              rate: formatTokensPerSecond(usageTokensPerSecond),
-                            })}
-                          </span>
-                        </>
-                      )}
-                      {usageCostUsd !== undefined && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span>
-                            {t(
-                              usageCostIsEstimated
-                                ? "chat.usage.estimatedCostValue"
-                                : "chat.usage.costValue",
-                              {
-                                cost: formatUsageCostUsd(usageCostUsd),
-                              },
-                            )}
-                          </span>
-                        </>
-                      )}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-[260px]">
-                    <div className="grid grid-cols-[auto_auto] gap-x-5 gap-y-0.5">
-                      {usageInput !== undefined && (
-                        <>
-                          <span className="opacity-70">
-                            {t(
-                              usageRequests !== undefined && usageRequests > 1
-                                ? "chat.usage.inputTurnTotal"
-                                : "chat.usage.input",
-                            )}
-                          </span>
-                          <span className="text-right tabular-nums">
-                            {formatTokenCount(usageInput)}
-                          </span>
-                        </>
-                      )}
-                      {usageOutput !== undefined && (
-                        <>
-                          <span className="opacity-70">
-                            {t("chat.usage.output")}
-                          </span>
-                          <span className="text-right tabular-nums">
-                            {formatTokenCount(usageOutput)}
-                          </span>
-                        </>
-                      )}
-                      {usageTokensPerSecond !== undefined && (
-                        <>
-                          <span className="opacity-70">
-                            {t("chat.usage.throughput")}
-                          </span>
-                          <span className="text-right tabular-nums">
-                            {t("chat.usage.throughputValue", {
-                              rate: formatTokensPerSecond(usageTokensPerSecond),
-                            })}
-                          </span>
-                        </>
-                      )}
-                      {usageRequests !== undefined && (
-                        <>
-                          <span className="opacity-70">
-                            {t("chat.usage.requests")}
-                          </span>
-                          <span className="text-right tabular-nums">
-                            {formatTokenCount(usageRequests)}
-                          </span>
-                        </>
-                      )}
-                      {usageContextTokens !== undefined && (
-                        <>
-                          <span className="opacity-70">
-                            {t("chat.usage.contextTokens")}
-                          </span>
-                          <span className="text-right tabular-nums">
-                            {formatTokenCount(usageContextTokens)}
-                          </span>
-                        </>
-                      )}
-                      <span className="opacity-70">
-                        {t("chat.usage.total")}
-                      </span>
-                      <span className="text-right tabular-nums">
-                        {formatTokenCount(usage.total_tokens)}
-                      </span>
-                      {usageCostUsd !== undefined && (
-                        <>
-                          <span className="opacity-70">
-                            {t(
-                              usageCostIsEstimated
-                                ? "chat.usage.estimatedCost"
-                                : "chat.usage.cost",
-                            )}
-                          </span>
-                          <span className="text-right tabular-nums">
-                            {formatUsageCostUsd(usageCostUsd)}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    {usageCostIsEstimated && (
-                      <p className="mt-1.5 text-[11px] leading-4 opacity-70">
-                        {t("chat.usage.estimated")}
-                      </p>
-                    )}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
             )}
           </div>
         )}
