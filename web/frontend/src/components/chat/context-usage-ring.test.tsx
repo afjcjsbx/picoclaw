@@ -16,28 +16,46 @@ const USAGE = {
   used_percent: 21,
 }
 
-describe("ContextUsageRing", () => {
-  it("shows the current usage percentage", () => {
-    render(<ContextUsageRing usage={USAGE} />)
+const CONVERSATION_USAGE = {
+  inputTokens: 120_400,
+  outputTokens: 19_800,
+  costUsd: 0.04,
+  cacheHitPercent: 100,
+}
 
-    expect(screen.getByRole("button")).toHaveTextContent("21")
+describe("ContextUsageRing", () => {
+  it("shows the context window percentage in the accessible label", () => {
+    render(
+      <ContextUsageRing usage={USAGE} conversationUsage={CONVERSATION_USAGE} />,
+    )
+
+    expect(
+      screen.getByRole("button", { name: /21% chat\.contextUsed/ }),
+    ).toBeInTheDocument()
   })
 
-  it("reveals the context breakdown on hover", async () => {
-    const { container } = render(<ContextUsageRing usage={USAGE} />)
+  it("reveals the conversation breakdown on hover", async () => {
+    const { container } = render(
+      <ContextUsageRing usage={USAGE} conversationUsage={CONVERSATION_USAGE} />,
+    )
 
     fireEvent.mouseEnter(container.firstElementChild as Element)
 
-    expect(await screen.findByText("chat.contextTitle")).toBeInTheDocument()
-    expect(screen.getByText("12.0k")).toBeInTheDocument()
-    expect(screen.getByText("chat.contextCompressAt")).toBeInTheDocument()
-    expect(screen.getByText("chat.contextSummarizeAt")).toBeInTheDocument()
+    expect(await screen.findByText("chat.contextWindow")).toBeInTheDocument()
+    expect(screen.getByText(/42k \/ 200k/)).toBeInTheDocument()
+    expect(screen.getByText("120.4K ↑ · 19.8K ↓")).toBeInTheDocument()
+    expect(screen.getByText("100%")).toBeInTheDocument()
+    expect(screen.getByText("$0.04")).toBeInTheDocument()
   })
 
   it("calls the detail handler when the detail action is clicked", async () => {
     const onDetailClick = vi.fn()
     const { container } = render(
-      <ContextUsageRing usage={USAGE} onDetailClick={onDetailClick} />,
+      <ContextUsageRing
+        usage={USAGE}
+        conversationUsage={CONVERSATION_USAGE}
+        onDetailClick={onDetailClick}
+      />,
     )
 
     fireEvent.mouseEnter(container.firstElementChild as Element)

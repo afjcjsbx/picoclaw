@@ -79,9 +79,15 @@ import {
   mergeSplitConversations,
   removeSplitConversation,
 } from "@/features/chat/split-groups"
+import {
+  type ConversationUsageStats,
+  lastReplyCacheHitRate,
+  summarizeConversationUsage,
+} from "@/features/chat/usage"
 import { useChatModels } from "@/hooks/use-chat-models"
 import { useGateway } from "@/hooks/use-gateway"
 import { usePicoChat } from "@/hooks/use-pico-chat"
+import { useSessionUsage } from "@/hooks/use-session-usage"
 import { useSlashCommands } from "@/hooks/use-slash-commands"
 import type {
   ChatAttachment,
@@ -876,6 +882,21 @@ export function ChatPage() {
     newChat,
   } = usePicoChat()
   const promptHistory = useMemo(() => getPromptHistory(messages), [messages])
+  const { summary: sessionUsage, refresh: refreshSessionUsage } =
+    useSessionUsage(activeSessionId, contextUsage)
+  const conversationUsage = useMemo<ConversationUsageStats>(() => {
+    const fallback = summarizeConversationUsage(messages)
+    const sessionCost = sessionUsage?.cost_usd
+    return {
+      inputTokens: sessionUsage?.input_tokens ?? fallback.inputTokens,
+      outputTokens: sessionUsage?.output_tokens ?? fallback.outputTokens,
+      costUsd:
+        sessionCost !== undefined && sessionCost > 0
+          ? sessionCost
+          : fallback.costUsd,
+      cacheHitPercent: lastReplyCacheHitRate(messages),
+    }
+  }, [messages, sessionUsage])
 
   // isTyping only tracks the "waiting for the model" phase, while the activity
   // stream keeps reporting the session as running until the turn is complete.
@@ -1748,11 +1769,13 @@ export function ChatPage() {
                 setInput("")
               }
             }}
+            onContextOpen={refreshSessionUsage}
             inputDisabledReason={inputDisabledReason}
             canSend={canSubmit}
             isTyping={isAgentRunning}
             isDragActive={isDragActive}
             contextUsage={contextUsage}
+            conversationUsage={conversationUsage}
             slashCommands={slashCommands}
             promptHistory={promptHistory}
             focusSignal={composerFocusSignal}

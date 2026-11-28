@@ -1,4 +1,4 @@
-import type { TokenUsage } from "@/store/chat"
+import type { ChatMessage, TokenUsage } from "@/store/chat"
 
 export interface ModelPricing {
   inputPerMillionUsd: number
@@ -189,6 +189,56 @@ export function cacheHitRate(usage: TokenUsage): number | undefined {
   return (cacheRead / input) * 100
 }
 
+export interface ConversationUsageStats {
+  inputTokens: number
+  outputTokens: number
+  costUsd?: number
+  cacheHitPercent?: number
+}
+
+/**
+ * Sums the usage stored on the loaded messages. Used as the immediate fallback
+ * while the authoritative session summary is loading or unavailable.
+ */
+export function summarizeConversationUsage(
+  messages: ChatMessage[],
+): ConversationUsageStats {
+  let inputTokens = 0
+  let outputTokens = 0
+  let costUsd: number | undefined
+
+  for (const message of messages) {
+    const usage = message.usage
+    if (!usage) continue
+
+    inputTokens += usage.input_tokens ?? 0
+    outputTokens += usage.output_tokens ?? 0
+    const cost = estimateUsageCostUsd(usage, message.modelName)
+    if (cost !== undefined) {
+      costUsd = (costUsd ?? 0) + cost
+    }
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    ...(costUsd !== undefined ? { costUsd } : {}),
+  }
+}
+
+/** Cache read share of the most recent reply that reported usage. */
+export function lastReplyCacheHitRate(
+  messages: ChatMessage[],
+): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role !== "assistant" || !message.usage) continue
+    const rate = cacheHitRate(message.usage)
+    if (rate !== undefined) return rate
+  }
+  return undefined
+}
+
 export function formatDuration(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return "0.0s"
@@ -219,6 +269,42 @@ export function formatCompactTokenCount(value: number): string {
     }
   }
   return formatTokenCount(value)
+}
+
+/** Compact context-window size, e.g. 118k or 1m. */
+export function formatContextTokenCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0"
+  }
+  if (value >= 1_000_000) {
+    const millions = value / 1_000_000
+    const text = millions >= 10 ? millions.toFixed(0) : millions.toFixed(1)
+    return `${text.replace(/\.0$/, "")}m`
+  }
+  if (value >= 1_000) {
+    return `${Math.round(value / 1_000)}k`
+  }
+  return String(Math.round(value))
+}
+
+/** Cost with the trailing zeros of the sub-dollar precision removed. */
+export function formatConversationCostUsd(cost: number | undefined): string {
+  if (cost === undefined || !Number.isFinite(cost)) {
+    return "—"
+  }
+  if (cost <= 0) {
+    return "$0.00"
+  }
+  if (cost < 0.0001) {
+    return "<$0.0001"
+  }
+  if (cost < 0.01) {
+    return `$${cost.toFixed(4)}`
+  }
+  if (cost < 1) {
+    return `$${cost.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}`
+  }
+  return `$${cost.toFixed(2)}`
 }
 
 export function formatTokensPerSecond(value: number): string {

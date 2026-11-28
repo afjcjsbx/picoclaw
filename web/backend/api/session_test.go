@@ -414,6 +414,141 @@ func TestHandleGetSession_JSONLStorage(t *testing.T) {
 	}
 }
 
+func TestHandleGetSessionUsage_JSONLStorage(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	store, err := memory.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+
+	sessionKey := legacyPicoSessionPrefix + "usage-jsonl"
+	for _, msg := range []providers.Message{
+		{Role: "user", Content: "question"},
+		{
+			Role:      "assistant",
+			Content:   "first answer",
+			ModelName: "test-model",
+			Usage: &providers.UsageInfo{
+				PromptTokens:     120_000,
+				CompletionTokens: 19_800,
+				TotalTokens:      139_800,
+				CacheReadTokens:  118_000,
+				CostUSD:          0.04,
+				Requests:         2,
+			},
+		},
+		{
+			Role:      "assistant",
+			Content:   "second answer",
+			ModelName: "test-model",
+			Usage: &providers.UsageInfo{
+				PromptTokens:     400,
+				CompletionTokens: 200,
+				TotalTokens:      600,
+				CacheReadTokens:  300,
+				CostUSD:          0.01,
+				Requests:         1,
+			},
+		},
+	} {
+		if err := store.AddFullMessage(nil, sessionKey, msg); err != nil {
+			t.Fatalf("AddFullMessage() error = %v", err)
+		}
+	}
+	// Truncating the transcript must not reduce reported spend.
+	if err := store.TruncateHistory(nil, sessionKey, 1); err != nil {
+		t.Fatalf("TruncateHistory() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/usage-jsonl/usage", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp sessionUsage
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if resp.InputTokens != 120_400 || resp.OutputTokens != 20_000 || resp.TotalTokens != 140_400 {
+		t.Fatalf("token totals = %+v, want input=120400 output=20000 total=140400", resp)
+	}
+	if resp.CacheReadTokens != 118_300 {
+		t.Fatalf("CacheReadTokens = %d, want 118300", resp.CacheReadTokens)
+	}
+	if resp.CostUSD != 0.05 {
+		t.Fatalf("CostUSD = %v, want 0.05", resp.CostUSD)
+	}
+	if resp.Requests != 3 || resp.Turns != 2 {
+		t.Fatalf("Requests/Turns = %d/%d, want 3/2", resp.Requests, resp.Turns)
+	}
+}
+
+func TestHandleGetSessionUsage_LegacyJSON(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	now := time.Now()
+	legacy := sessionFile{
+		Key: legacyPicoSessionPrefix + "legacy-usage",
+		Messages: []providers.Message{
+			{Role: "user", Content: "legacy user"},
+			{
+				Role:    "assistant",
+				Content: "legacy assistant",
+				Usage: &providers.UsageInfo{
+					PromptTokens:     1_000,
+					CompletionTokens: 500,
+					TotalTokens:      1_500,
+					CostUSD:          0.02,
+				},
+			},
+		},
+		Created: now,
+		Updated: now,
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "legacy-usage.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/legacy-usage/usage", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp sessionUsage
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if resp.InputTokens != 1_000 || resp.OutputTokens != 500 || resp.TotalTokens != 1_500 {
+		t.Fatalf("summary = %+v, want legacy message usage", resp)
+	}
+	if resp.CostUSD != 0.02 {
+		t.Fatalf("CostUSD = %v, want 0.02", resp.CostUSD)
+	}
+}
+
 func TestHandleGetSession_HidesHandledToolAttachmentsBackedByMediaRefs(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

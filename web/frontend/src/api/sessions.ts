@@ -63,6 +63,17 @@ export interface SessionDetail {
   fork_index?: number
 }
 
+export interface SessionUsageSummary {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cache_read_tokens?: number
+  cache_creation_tokens?: number
+  cost_usd?: number
+  requests?: number
+  turns?: number
+}
+
 export interface SessionSearchResult {
   session_id: string
   title: string
@@ -128,6 +139,23 @@ export async function getSessionHistory(
   )
   if (!res.ok) {
     throw new Error(`Failed to fetch session ${id}: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function getSessionUsage(
+  id: string,
+  signal?: AbortSignal,
+): Promise<SessionUsageSummary | undefined> {
+  const res = await launcherFetch(
+    `/api/sessions/${encodeURIComponent(id)}/usage`,
+    { signal },
+  )
+  if (res.status === 404) {
+    return undefined
+  }
+  if (!res.ok) {
+    throw new Error(`Failed to fetch session usage ${id}: ${res.status}`)
   }
   return res.json()
 }

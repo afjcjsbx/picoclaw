@@ -262,6 +262,12 @@
       }
     },
     "contextTitle": "Kontext",
+    "contextWindow": "Kontextové okno",
+    "contextUsed": "využito",
+    "contextTokensWord": "tokenů",
+    "contextTokens": "Tokeny",
+    "contextCacheLastReply": "Mezipaměť (poslední odpověď)",
+    "contextCost": "Náklady",
     "contextDetail": "Zobrazit detail",
     "contextCompressAt": "Komprimovat při",
     "contextSummarizeAt": "Shrnout při",

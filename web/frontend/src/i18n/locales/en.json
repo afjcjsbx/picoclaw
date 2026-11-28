@@ -262,6 +262,12 @@
       }
     },
     "contextTitle": "Context",
+    "contextWindow": "Context window",
+    "contextUsed": "used",
+    "contextTokensWord": "tokens",
+    "contextTokens": "Tokens",
+    "contextCacheLastReply": "Cache (last reply)",
+    "contextCost": "Cost",
     "contextDetail": "View Details",
     "contextCompressAt": "Compress at",
     "contextSummarizeAt": "Summarize at",

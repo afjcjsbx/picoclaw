@@ -2,20 +2,25 @@ import { IconArrowRight } from "@tabler/icons-react"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import type { ConversationUsageStats } from "@/features/chat/usage"
+import {
+  formatCompactTokenCount,
+  formatContextTokenCount,
+  formatConversationCostUsd,
+} from "@/features/chat/usage"
 import type { ContextUsage } from "@/store/chat"
 
 interface ContextUsageRingProps {
   usage: ContextUsage
+  conversationUsage?: ConversationUsageStats
+  onOpen?: () => void
   onDetailClick?: () => void
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
-  return String(n)
 }
 
 export function ContextUsageRing({
   usage,
+  conversationUsage,
+  onOpen,
   onDetailClick,
 }: ContextUsageRingProps) {
   const { t } = useTranslation()
@@ -51,11 +56,15 @@ export function ContextUsageRing({
     }
   }, [])
 
-  const percent = Math.min(usage.used_percent, 100)
+  const percent = Math.min(
+    100,
+    usage.total_tokens > 0
+      ? Math.round((usage.used_tokens / usage.total_tokens) * 100)
+      : usage.used_percent,
+  )
   const radius = 8
   const circumference = 2 * Math.PI * radius
   const offset = circumference - (percent / 100) * circumference
-  const barPercent = Math.min(percent, 100)
 
   const handleDetail = () => {
     if (cooldown || !onDetailClick) return
@@ -68,6 +77,7 @@ export function ContextUsageRing({
   // Desktop: hover to open, mouse leave to close (with small delay)
   const handleMouseEnter = () => {
     if (hoverIntent.current) clearTimeout(hoverIntent.current)
+    onOpen?.()
     setIntent(true)
   }
 
@@ -78,8 +88,18 @@ export function ContextUsageRing({
   // Mobile: tap to toggle (preventDefault suppresses synthetic mouseenter)
   const handleTouchStart = (e: React.TouchEvent) => {
     e.preventDefault()
+    if (!intent) onOpen?.()
     setIntent((v) => !v)
   }
+
+  const cachePercent = conversationUsage?.cacheHitPercent
+  const cacheLabel =
+    cachePercent === undefined
+      ? "—"
+      : `${Math.round(Math.min(100, Math.max(0, cachePercent)))}%`
+  const tokensLabel = conversationUsage
+    ? `${formatCompactTokenCount(conversationUsage.inputTokens)} ↑ · ${formatCompactTokenCount(conversationUsage.outputTokens)} ↓`
+    : "—"
 
   return (
     <div
@@ -91,15 +111,21 @@ export function ContextUsageRing({
       <button
         type="button"
         onTouchStart={handleTouchStart}
+        aria-label={`${t("chat.contextWindow")}: ${percent}% ${t("chat.contextUsed")}`}
+        title={`${t("chat.contextWindow")}: ${percent}% ${t("chat.contextUsed")}`}
         className="relative flex h-6 w-6 cursor-pointer items-center justify-center transition-opacity hover:opacity-70"
       >
-        <svg className="h-6 w-6 -rotate-90" viewBox="0 0 20 20">
+        <svg
+          className="h-6 w-6 -rotate-90"
+          viewBox="0 0 20 20"
+          aria-hidden="true"
+        >
           <circle
             cx="10"
             cy="10"
             r={radius}
             fill="none"
-            className="stroke-muted-foreground/30"
+            className="stroke-muted-foreground/25"
             strokeWidth="2"
           />
           <circle
@@ -114,71 +140,60 @@ export function ContextUsageRing({
             strokeDashoffset={offset}
           />
         </svg>
-        <span className="text-muted-foreground absolute text-[8px] font-medium tabular-nums">
-          {percent}
-        </span>
       </button>
 
       {visible && (
         <div
-          className={`bg-popover text-popover-foreground absolute right-0 bottom-full z-50 mb-3 w-[220px] rounded-xl border p-4 shadow-lg transition-all duration-150 ${
+          className={`bg-popover text-popover-foreground absolute right-0 bottom-full z-50 mb-3 w-[272px] max-w-[calc(100vw-2rem)] rounded-2xl border p-4 shadow-xl transition-all duration-150 ${
             animated
               ? "scale-100 opacity-100"
               : "pointer-events-none scale-95 opacity-0"
           }`}
         >
-          <div className="bg-popover absolute right-3 -bottom-1.5 h-3 w-3 rotate-45 border-r border-b" />
-
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground text-xs">
-              {t("chat.contextTitle")}
-            </span>
-            <span className="text-xs font-medium">
-              {formatTokens(usage.used_tokens)} /{" "}
-              {formatTokens(usage.compress_at_tokens)}
-            </span>
+          <div className="text-base font-medium">{t("chat.contextWindow")}</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">
+            {percent}% {t("chat.contextUsed")}
           </div>
-          <div className="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
-            <div
-              className="dark:bg-brand h-full rounded-full bg-violet-500 transition-all"
-              style={{ width: `${barPercent}%` }}
-            />
+          <div className="text-muted-foreground mt-1 text-sm tabular-nums">
+            {formatContextTokenCount(usage.used_tokens)} /{" "}
+            {formatContextTokenCount(usage.total_tokens)}{" "}
+            {t("chat.contextTokensWord")}
           </div>
 
-          <div className="mt-2 space-y-0.5">
-            {usage.history_tokens != null && usage.history_tokens > 0 && (
-              <div className="flex items-center justify-between text-[10px]">
-                <span className="text-muted-foreground">History</span>
-                <span className="tabular-nums">
-                  {formatTokens(usage.history_tokens)}
-                </span>
-              </div>
-            )}
-            <div className="flex items-center justify-between text-[10px]">
-              <span className="text-muted-foreground">{t("chat.contextCompressAt")}</span>
-              <span className="tabular-nums">
-                {formatTokens(usage.compress_at_tokens)}
-              </span>
+          <dl className="mt-4 space-y-2 text-sm">
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">
+                {t("chat.contextTokens")}
+              </dt>
+              <dd className="tabular-nums">{tokensLabel}</dd>
             </div>
-            {usage.summarize_at_tokens != null && usage.summarize_at_tokens > 0 && (
-              <div className="flex items-center justify-between text-[10px]">
-                <span className="text-muted-foreground">{t("chat.contextSummarizeAt")}</span>
-                <span className="tabular-nums">
-                  {formatTokens(usage.summarize_at_tokens)}
-                </span>
-              </div>
-            )}
-          </div>
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">
+                {t("chat.contextCacheLastReply")}
+              </dt>
+              <dd className="text-emerald-600 tabular-nums dark:text-emerald-400">
+                {cacheLabel}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">{t("chat.contextCost")}</dt>
+              <dd className="tabular-nums">
+                {formatConversationCostUsd(conversationUsage?.costUsd)}
+              </dd>
+            </div>
+          </dl>
 
-          <button
-            type="button"
-            onClick={handleDetail}
-            disabled={cooldown}
-            className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-violet-600 transition-opacity hover:opacity-70 disabled:opacity-40 dark:text-[#8fb39a]"
-          >
-            {t("chat.contextDetail")}
-            <IconArrowRight className="h-3 w-3" />
-          </button>
+          {onDetailClick && (
+            <button
+              type="button"
+              onClick={handleDetail}
+              disabled={cooldown}
+              className="text-muted-foreground hover:text-foreground mt-3 inline-flex items-center gap-1 text-xs font-medium transition-colors disabled:opacity-40"
+            >
+              {t("chat.contextDetail")}
+              <IconArrowRight className="h-3 w-3" />
+            </button>
+          )}
         </div>
       )}
     </div>
