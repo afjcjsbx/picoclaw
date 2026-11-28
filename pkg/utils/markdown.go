@@ -21,8 +21,8 @@ var (
 
 var skipTags = map[string]bool{
 	"script": true, "style": true, "head": true,
-	"noscript": true, "template": true,
-	"nav": true, "footer": true, "aside": true, "header": true, "form": true, "dialog": true,
+	"template": true,
+	"nav":      true, "footer": true, "header": true, "form": true, "dialog": true,
 }
 
 func isSafeHref(href string) bool {
@@ -63,6 +63,15 @@ func getAttr(n *html.Node, key string) string {
 	return ""
 }
 
+func hasAttr(n *html.Node, key string) bool {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeAttr(val string) string {
 	val = strings.ReplaceAll(val, "\n", "")
 	val = strings.ReplaceAll(val, "\r", "")
@@ -74,31 +83,49 @@ func isUnlikelyNode(n *html.Node) bool {
 	if n.Type != html.ElementNode {
 		return false
 	}
-	classId := strings.ToLower(getAttr(n, "class") + " " + getAttr(n, "id"))
-	if classId == " " {
+
+	// Hidden nodes add no readable content, but can carry duplicated
+	// navigation or modal text.
+	if hasAttr(n, "hidden") || strings.EqualFold(normalizeAttr(getAttr(n, "aria-hidden")), "true") {
+		return true
+	}
+
+	// Semantic content containers win over layout class names.
+	if n.Data == "main" || n.Data == "article" {
 		return false
 	}
-	if strings.Contains(classId, "article") || strings.Contains(classId, "main") ||
-		strings.Contains(classId, "content") {
+	switch strings.ToLower(normalizeAttr(getAttr(n, "role"))) {
+	case "main", "article":
 		return false
+	case "navigation", "banner", "contentinfo", "complementary", "search", "dialog", "menu", "menubar":
+		return true
 	}
-	unlikelyKeywords := []string{
-		"menu",
-		"nav",
-		"footer",
-		"sidebar",
-		"cookie",
-		"banner",
-		"sponsor",
-		"advert",
-		"popup",
-		"modal",
-		"newsletter",
-		"share",
-		"social",
+
+	// Match whole class/id tokens. Substring matching drops legitimate content
+	// when layout classes such as "sidebar__container" or "skip_popup" contain
+	// a noise keyword.
+	classTokens := strings.Fields(strings.ToLower(getAttr(n, "class") + " " + getAttr(n, "id")))
+	for _, token := range classTokens {
+		switch token {
+		case "article", "main", "content":
+			return false
+		}
 	}
-	for _, keyword := range unlikelyKeywords {
-		if strings.Contains(classId, keyword) {
+	for _, token := range classTokens {
+		switch token {
+		case "menu",
+			"nav",
+			"footer",
+			"sidebar",
+			"cookie",
+			"banner",
+			"sponsor",
+			"advert",
+			"popup",
+			"modal",
+			"newsletter",
+			"share",
+			"social":
 			return true
 		}
 	}
@@ -371,7 +398,10 @@ func (c *converter) walk(n *html.Node) {
 }
 
 func HtmlToMarkdown(htmlStr string) (string, error) {
-	doc, err := html.Parse(strings.NewReader(htmlStr))
+	doc, err := html.ParseWithOptions(
+		strings.NewReader(htmlStr),
+		html.ParseOptionEnableScripting(false),
+	)
 	if err != nil {
 		return "", err
 	}

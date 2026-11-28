@@ -194,16 +194,57 @@ func TestHtmlToMarkdown(t *testing.T) {
 			expected: "**Important:** read the ***critical instructions*** *carefully*.",
 		},
 		{
-			name: "Article with nav and aside sections (noise to filter)",
+			name: "Article with nav and complementary sections (noise to filter)",
 			input: `
         <nav><a href="/home">Home</a><a href="/about-us">About us</a></nav>
         <article>
             <h2>Article title</h2>
             <p>This is the body of the article.</p>
         </article>
-        <aside><p>Advertisement</p></aside>
+        <aside role="complementary"><p>Advertisement</p></aside>
        `,
 			expected: "## Article title\n\nThis is the body of the article.",
+		},
+		{
+			name:     "Preserves content in sidebar layout containers",
+			input:    `<div class="sidebar__container"><div class="sidebar__page"><h2>Coupons</h2><p>10% off</p></div></div>`,
+			expected: "## Coupons\n\n10% off",
+		},
+		{
+			name:     "Preserves content in negated popup classes",
+			input:    `<main class="pageHolder skip_popup"><h2>Recovered title</h2><p>Recovered body</p></main>`,
+			expected: "## Recovered title\n\nRecovered body",
+		},
+		{
+			name: "Filters exact sidebar and popup class or id tokens",
+			input: `<div class="sidebar"><p>Sidebar noise</p></div>` +
+				`<div id="popup"><p>Popup noise</p></div>` +
+				`<main><h2>Offers</h2></main>`,
+			expected: "## Offers",
+		},
+		{
+			name: "Filters semantic noise roles and hidden content",
+			input: `<div role="navigation"><p>Navigation noise</p></div>` +
+				`<div role="banner"><p>Banner noise</p></div>` +
+				`<div aria-hidden="true"><p>Aria-hidden noise</p></div>` +
+				`<div hidden><p>Hidden noise</p></div>` +
+				`<main><h2>Kept</h2><p>Useful content</p></main>`,
+			expected: "## Kept\n\nUseful content",
+		},
+		{
+			name:     "Semantic main overrides layout class tokens",
+			input:    `<main class="sidebar"><p>Still kept</p></main>`,
+			expected: "Still kept",
+		},
+		{
+			name:     "Preserves useful aside content",
+			input:    `<aside><h2>Details</h2><p>Useful sidebar information</p></aside>`,
+			expected: "## Details\n\nUseful sidebar information",
+		},
+		{
+			name:     "Preserves server-rendered noscript content",
+			input:    `<noscript><h2>Fallback title</h2><p>Fallback body</p></noscript>`,
+			expected: "## Fallback title\n\nFallback body",
 		},
 		{
 			name:     "Text with mixed special HTML entities",

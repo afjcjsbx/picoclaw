@@ -59,6 +59,11 @@ const (
 	// be useful; the configured budget still wins when it is below the floor.
 	minMaxChars = 1500
 
+	// noReadableContentMessage is returned when neither Markdown conversion nor
+	// the plaintext fallback finds any readable content. The page may need a
+	// real browser to execute JavaScript or clear a consent/challenge wall.
+	noReadableContentMessage = "No readable content could be extracted from this page; it may be script-rendered. Try with a browser, if you have one configured."
+
 	// maxSearchResponseBytes caps how much of a search provider's HTTP response
 	// is buffered in memory. Search providers return compact JSON; anything
 	// larger is either an error page or a misbehaving upstream, and reading it
@@ -2609,17 +2614,24 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		text = formatted.String()
 		extractor = "json"
 
-	case mediaType == "text/html" || looksLikeHTML(bodyStr):
+	case isHTMLContentType(mediaType, bodyStr):
 		switch strings.ToLower(t.format) {
 		case "markdown":
 			var err error
 			text, err = utils.HtmlToMarkdown(bodyStr)
 			if err != nil {
-				return ErrorResult(fmt.Sprintf("failed to HTML to markdown: %v", err))
+				logger.DebugCF(
+					"tool",
+					"Markdown extraction failed, falling back to plaintext",
+					map[string]any{"url": urlStr, "error": err.Error()},
+				)
 			}
 			if strings.TrimSpace(text) == "" {
-				logger.DebugCF("tool", "Markdown extraction returned empty content, falling back to plaintext",
-					map[string]any{"url": urlStr})
+				logger.DebugCF(
+					"tool",
+					"Markdown extraction returned empty content, falling back to plaintext",
+					map[string]any{"url": urlStr},
+				)
 				text = t.extractText(bodyStr)
 				extractor = "text"
 			} else {
@@ -2629,6 +2641,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		default:
 			text = t.extractText(bodyStr)
 			extractor = "text"
+		}
+
+		if strings.TrimSpace(text) == "" {
+			return ErrorResult(noReadableContentMessage)
 		}
 
 	default:
@@ -2677,6 +2693,22 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		toolResult.ForceArtifact = true
 	}
 	return toolResult
+}
+
+// isHTMLContentType keeps transport classification separate from extraction:
+// HTML and XML documents go through the readable-content pipeline, while JSON
+// and unknown binary/text payloads keep their dedicated handling.
+func isHTMLContentType(mediaType, body string) bool {
+	switch strings.ToLower(mediaType) {
+	case "text/html", "application/xhtml+xml", "application/xml", "text/xml":
+		return true
+	case "", "application/octet-stream":
+		// Missing or unparsable Content-Type is the only case where body
+		// sniffing may override transport metadata.
+		return looksLikeHTML(body)
+	default:
+		return false
+	}
 }
 
 func looksLikeHTML(body string) bool {
