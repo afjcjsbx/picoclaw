@@ -973,7 +973,6 @@ func TestHandlePatchConfig_PreservesDebugFlagOverride(t *testing.T) {
 }
 
 func TestHandlePatchConfig_SavesDiscordTokenFromPayload(t *testing.T) {
-	t.Skip("TODO: fix this test")
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -982,13 +981,12 @@ func TestHandlePatchConfig_SavesDiscordTokenFromPayload(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{
-		"channel_list": [
-			{
-				"name":"discord",
+		"channel_list": {
+			"discord": {
 				"enabled": true,
-				"token": "discord-test-token"
+				"settings": {"token": "discord-test-token"}
 			}
-		]
+		}
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 

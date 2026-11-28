@@ -50,13 +50,15 @@ In practice, each suite gives us:
 - automatic cleanup after the run
 - a clean place to encode the exact regression we want to prevent
 
-## Current Reference Suite
+## Current Suites
 
-[`integration/suites/mcp-streamable/`](suites/mcp-streamable/) is the reference example today.
+The runner auto-discovers every directory under `integration/suites/`.
 
-It does three things:
+### `mcp-streamable`
 
-- builds and starts a fixture MCP server from [`integration/fixtures/mcp-streamable-server/`](fixtures/mcp-streamable-server/)
+This is the reference MCP transport suite. It:
+
+- builds and starts the fixture MCP server from [`integration/fixtures/mcp-streamable-server/`](fixtures/mcp-streamable-server/)
 - injects connection details into the runner container through environment variables
 - runs [`TestIntegration_RealConfiguredServer`](../pkg/mcp/manager_real_server_integration_test.go) to verify that PicoClaw can connect to a real server, discover tools, invoke one, and validate the response payload
 

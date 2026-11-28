@@ -77,6 +77,7 @@ type AgentLoop struct {
 
 	// workerSem limits concurrent turn processing workers.
 	workerSem chan struct{}
+	workerWG  sync.WaitGroup
 
 	// activeTurnStates tracks active turns per session to prevent duplicates.
 	activeTurnStates sync.Map
@@ -213,6 +214,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
 	al.startPlugins()
 	defer al.running.Store(false)
+	defer al.workerWG.Wait()
 
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return err
@@ -299,7 +301,9 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			// Session claimed — spawn a worker goroutine that acquires a semaphore
 			// slot. The goroutine is spawned immediately so the main loop keeps
 			// draining the inbound channel. The goroutine blocks on the semaphore.
+			al.workerWG.Add(1)
 			go func(m bus.InboundMessage, ph *turnState) {
+				defer al.workerWG.Done()
 				var releaseSession bool
 				// Acquire semaphore slot (blocks if at capacity)
 				select {

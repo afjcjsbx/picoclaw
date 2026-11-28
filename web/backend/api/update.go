@@ -3,8 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/sipeed/picoclaw/pkg/updater"
 )
 
 // registerUpdateRoutes registers the self-update endpoint.
@@ -42,7 +40,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		binary = "picoclaw-launcher"
 	}
 
-	if err := updater.UpdateSelfFromRelease(req.URL, "", "", binary); err != nil {
+	if err := h.updateSelf(req.URL, "", "", binary); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(updateResponse{Status: "error", Message: err.Error()})
 		return
