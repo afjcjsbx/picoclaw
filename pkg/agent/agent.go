@@ -73,6 +73,8 @@ type AgentLoop struct {
 	// pendingExecApprovals maps approval tokens to the user waiting for an
 	// answer when exec cannot classify a command.
 	pendingExecApprovals sync.Map
+	approvalBrokerMu     sync.RWMutex
+	approvalBrokers      map[string]ApprovalBroker
 	mu                   sync.RWMutex
 
 	// workerSem limits concurrent turn processing workers.
@@ -145,6 +147,7 @@ const (
 	metadataKeyMessageKind     = "message_kind"
 	metadataKeyToolCalls       = "tool_calls"
 	metadataKeyToolCallID      = "tool_call_id"
+	metadataKeyToolResultError = "tool_result_is_error"
 	metadataKeyOutboundKind    = "outbound_kind"
 	messageKindThought         = "thought"
 	messageKindToolFeedback    = "tool_feedback"

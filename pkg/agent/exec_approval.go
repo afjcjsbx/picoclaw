@@ -163,6 +163,22 @@ func (h *execUnknownCommandApprovalHook) ask(
 		}, nil
 	}
 
+	if broker := al.approvalBroker(origin.Channel); broker != nil {
+		decision, err := broker.RequestApproval(ctx, ApprovalRequest{
+			SessionKey: req.Meta.SessionKey,
+			TurnID:     req.Meta.TurnID,
+			ToolCallID: req.ToolCallID,
+			Tool:       req.Tool,
+			Arguments:  req.Arguments,
+			Command:    display,
+			Reason:     reason,
+		})
+		if err != nil {
+			return ApprovalDecision{Reason: "approval request failed"}, nil
+		}
+		return decision, nil
+	}
+
 	var nonce [execApprovalTokenBytes]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return ApprovalDecision{Reason: "could not create an approval token"}, err

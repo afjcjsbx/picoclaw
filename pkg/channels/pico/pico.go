@@ -733,6 +733,11 @@ func (c *PicoChannel) SendPlaceholder(ctx context.Context, chatID string) (strin
 	return msgID, nil
 }
 
+// SupportsStructuredTurnOutput marks Pico as a structured output channel.
+func (c *PicoChannel) SupportsStructuredTurnOutput() bool {
+	return true
+}
+
 // BeginStream implements channels.StreamingCapable for Pico WebUI.
 func (c *PicoChannel) BeginStream(ctx context.Context, chatID string) (channels.Streamer, error) {
 	if c == nil || c.config == nil || !c.config.Streaming.Enabled {

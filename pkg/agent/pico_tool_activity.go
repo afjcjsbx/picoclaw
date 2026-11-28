@@ -28,13 +28,17 @@ func buildPicoToolCallsMessage(
 func buildPicoToolResultMessage(
 	msg bus.OutboundMessage,
 	toolCallID, output string,
+	isError bool,
 ) bus.OutboundMessage {
 	msg.Content = output
 	if msg.Context.Raw == nil {
-		msg.Context.Raw = make(map[string]string, 2)
+		msg.Context.Raw = make(map[string]string, 3)
 	}
 	msg.Context.Raw[metadataKeyMessageKind] = messageKindToolResult
 	msg.Context.Raw[metadataKeyToolCallID] = toolCallID
+	if isError {
+		msg.Context.Raw[metadataKeyToolResultError] = "true"
+	}
 	return msg
 }
 

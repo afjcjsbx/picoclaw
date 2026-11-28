@@ -92,6 +92,12 @@ const (
 	opaqueMinLength      = 32
 )
 
+// RedactSecrets masks credential-looking values using the same rules as the
+// filesystem model-context filter.
+func RedactSecrets(text string) string {
+	return redactSecrets(text)
+}
+
 // redactSecrets masks credential-looking values in content rendered to the
 // model (search results and file reads), so that secrets found in files do not
 // reach the model even when they are not part of the configured sensitive

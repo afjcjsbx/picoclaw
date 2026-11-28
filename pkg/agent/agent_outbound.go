@@ -260,7 +260,7 @@ func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string
 
 func (al *AgentLoop) publishPicoReasoning(
 	ctx context.Context,
-	reasoningContent, chatID, sessionKey, modelName string,
+	channelName, reasoningContent, chatID, sessionKey, modelName string,
 ) {
 	if reasoningContent == "" || chatID == "" {
 		return
@@ -280,7 +280,7 @@ func (al *AgentLoop) publishPicoReasoning(
 
 	if err := al.bus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Context: bus.InboundContext{
-			Channel: "pico",
+			Channel: channelName,
 			ChatID:  chatID,
 			Raw:     raw,
 		},
@@ -289,13 +289,13 @@ func (al *AgentLoop) publishPicoReasoning(
 	}); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
 			errors.Is(err, bus.ErrBusClosed) {
-			logger.DebugCF("agent", "Pico reasoning publish skipped (timeout/cancel)", map[string]any{
-				"channel": "pico",
+			logger.DebugCF("agent", "Structured reasoning publish skipped (timeout/cancel)", map[string]any{
+				"channel": channelName,
 				"error":   err.Error(),
 			})
 		} else {
-			logger.WarnCF("agent", "Failed to publish pico reasoning (best-effort)", map[string]any{
-				"channel": "pico",
+			logger.WarnCF("agent", "Failed to publish structured reasoning (best-effort)", map[string]any{
+				"channel": channelName,
 				"error":   err.Error(),
 			})
 		}
@@ -405,8 +405,10 @@ func (al *AgentLoop) publishPicoToolResult(
 	ctx context.Context,
 	ts *turnState,
 	toolCallID, output string,
+	isError bool,
 ) {
-	if al == nil || al.bus == nil || ts == nil || ts.channel != "pico" ||
+	if al == nil || al.bus == nil || ts == nil ||
+		!supportsStructuredTurnOutput(al.channelManager, ts.channel) ||
 		!ts.opts.AllowInterimPicoPublish || strings.TrimSpace(toolCallID) == "" {
 		return
 	}
@@ -415,6 +417,7 @@ func (al *AgentLoop) publishPicoToolResult(
 		outboundMessageForTurn(ts, ""),
 		toolCallID,
 		output,
+		isError,
 	)
 	if err := publishOutboundToolActivity(ctx, al, msg); err != nil &&
 		!errors.Is(err, context.DeadlineExceeded) &&

@@ -53,6 +53,38 @@ func (al *AgentLoop) tryHandleStopCommand(
 	return true
 }
 
+// SessionIdle reports whether a session has no active or pending-stop turn.
+func (al *AgentLoop) SessionIdle(sessionKey string) bool {
+	if _, ok := al.activeTurnStates.Load(sessionKey); ok {
+		return false
+	}
+	_, pendingStop := al.pendingStops.Load(sessionKey)
+	return !pendingStop
+}
+
+// CancelSession cancels the active turn for a session or arms a pending stop
+// for a queued turn that has not registered yet.
+func (al *AgentLoop) CancelSession(sessionKey string) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return fmt.Errorf("session key is required")
+	}
+	ts := al.getActiveTurnState(sessionKey)
+	if ts == nil {
+		al.markPendingStop(sessionKey)
+		return nil
+	}
+	if strings.HasPrefix(ts.snapshot().TurnID, pendingTurnPrefix) {
+		al.markPendingStop(sessionKey)
+		return nil
+	}
+	if err := al.HardAbort(sessionKey); err != nil {
+		return err
+	}
+	al.pendingStops.Delete(sessionKey)
+	return nil
+}
+
 func (al *AgentLoop) stopActiveTurnForSession(sessionKey string) (commands.StopResult, error) {
 	sessionKey = strings.TrimSpace(sessionKey)
 	if sessionKey == "" {

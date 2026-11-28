@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -37,6 +40,7 @@ func TestNewPicoclawCommand(t *testing.T) {
 	assert.Nil(t, cmd.PersistentPostRun)
 
 	allowedCommands := []string{
+		"acp",
 		"agent",
 		"auth",
 		"config",
@@ -65,12 +69,36 @@ func TestNewPicoclawCommand(t *testing.T) {
 	}
 }
 
+func TestACPStdoutHygiene(t *testing.T) {
+	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestACPStdoutHelper$")
+	command.Env = append(os.Environ(),
+		"PICOCLAW_ACP_HELPER=1",
+		"PICOCLAW_HOME="+t.TempDir(),
+	)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	_ = command.Run()
+	if stdout.Len() != 0 {
+		t.Fatalf("ACP helper wrote non-protocol stdout: %q", stdout.String())
+	}
+}
+
+func TestACPStdoutHelper(t *testing.T) {
+	if os.Getenv("PICOCLAW_ACP_HELPER") != "1" {
+		return
+	}
+	os.Args = []string{"picoclaw", "acp"}
+	main()
+}
+
 func TestMachineOutputRequested(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 		want bool
 	}{
+		{name: "acp protocol", args: []string{"acp"}, want: true},
 		{name: "json flag", args: []string{"usage", "--json"}, want: true},
 		{name: "json true", args: []string{"usage", "--json=true"}, want: true},
 		{name: "json one", args: []string{"usage", "--json=1"}, want: true},

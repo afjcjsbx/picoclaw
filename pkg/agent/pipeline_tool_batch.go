@@ -109,7 +109,7 @@ func (b *toolBatch) persistSkippedToolCall(tc providers.ToolCall, reason, messag
 		Role:       "tool",
 		Content:    message,
 		ToolCallID: tc.ID,
-	}, false)
+	}, false, true)
 }
 
 // abandon closes call i when the turn ends before it is finished (hard abort
@@ -130,9 +130,9 @@ func (b *toolBatch) skipRemainingForLoop(start int) {
 
 // appendToolMessage adds msg to the turn and, unless the turn is history-less,
 // to the session store. ingest also hands it to the context manager.
-func (b *toolBatch) appendToolMessage(msg providers.Message, ingest bool) {
+func (b *toolBatch) appendToolMessage(msg providers.Message, ingest, isError bool) {
 	if msg.Role == "tool" {
-		b.al.publishPicoToolResult(b.turnCtx, b.ts, msg.ToolCallID, msg.Content)
+		b.al.publishPicoToolResult(b.turnCtx, b.ts, msg.ToolCallID, msg.Content, isError)
 	}
 	b.toolMessages++
 	if b.toolMessages == len(b.calls) {
@@ -254,10 +254,11 @@ func (b *toolBatch) prepare(i int) (*preparedCall, toolStep) {
 
 	if al.hooks != nil {
 		approval := al.hooks.ApproveTool(b.turnCtx, &ToolApprovalRequest{
-			Meta:      ts.eventMeta("runTurn", "turn.tool.approve"),
-			Context:   cloneTurnContext(ts.turnCtx),
-			Tool:      pc.name,
-			Arguments: pc.args,
+			Meta:       ts.eventMeta("runTurn", "turn.tool.approve"),
+			Context:    cloneTurnContext(ts.turnCtx),
+			ToolCallID: pc.tc.ID,
+			Tool:       pc.name,
+			Arguments:  pc.args,
 		})
 		if !approval.Approved {
 			b.deny(pc, hookDeniedToolContent("Tool execution denied by approval hook", approval.Reason))
@@ -364,7 +365,7 @@ func (b *toolBatch) asyncCallback(toolName, toolCallID string) tools.AsyncCallba
 		}
 
 		content = al.cfg.FilterSensitiveData(content)
-		al.publishPicoToolResult(context.Background(), ts, toolCallID, content)
+		al.publishPicoToolResult(context.Background(), ts, toolCallID, content, result.IsError)
 
 		logger.InfoCF("agent", "Async tool completed, publishing result",
 			map[string]any{
@@ -588,7 +589,7 @@ func (b *toolBatch) finishDenied(pc *preparedCall) {
 		Role:       "tool",
 		Content:    pc.denyContent,
 		ToolCallID: pc.tc.ID,
-	}, false)
+	}, false, true)
 }
 
 // outboundMediaMessage builds the channel message that delivers refs to the
@@ -722,7 +723,7 @@ func (b *toolBatch) finishRespond(pc *preparedCall) bool {
 		inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 	)
 
-	b.appendToolMessage(toolResultMsg, true)
+	b.appendToolMessage(toolResultMsg, true, hookResult.IsError)
 	return b.recordLoopCall(toolName, toolArgs)
 }
 
@@ -858,7 +859,7 @@ func (b *toolBatch) finishRun(pc *preparedCall) (toolStep, bool) {
 		toolErrorSummary(toolResult),
 		inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 	)
-	b.appendToolMessage(toolResultMsg, true)
+	b.appendToolMessage(toolResultMsg, true, toolResult.IsError)
 	return toolStepContinue, b.recordLoopCall(pc.name, pc.loopArgs)
 }
 
