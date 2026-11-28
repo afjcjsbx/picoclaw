@@ -83,10 +83,6 @@ interface NavGroup {
 
 const baseNavGroups: Omit<NavGroup, "items">[] = [
   {
-    label: "navigation.chat",
-    defaultOpen: true,
-  },
-  {
     label: "navigation.model_group",
     defaultOpen: true,
   },
@@ -368,17 +364,6 @@ export function AppSidebar({
         ...baseNavGroups[0],
         items: [
           {
-            title: "navigation.chat",
-            url: "/",
-            icon: IconMessageCircle,
-            translateTitle: true,
-          },
-        ],
-      },
-      {
-        ...baseNavGroups[1],
-        items: [
-          {
             title: "navigation.models",
             url: "/models",
             icon: IconAtom,
@@ -404,7 +389,7 @@ export function AppSidebar({
         isChannelsGroup: true,
       },
       {
-        ...baseNavGroups[2],
+        ...baseNavGroups[1],
         items: [
           {
             title: "navigation.hub",
@@ -445,7 +430,7 @@ export function AppSidebar({
         ],
       },
       {
-        ...baseNavGroups[3],
+        ...baseNavGroups[2],
         items: [
           {
             title: "navigation.config",
@@ -507,403 +492,369 @@ export function AppSidebar({
             </Link>
           </Button>
         </div>
-        <Collapsible
-          key="navigation.chat"
-          defaultOpen
-          className="group/collapsible mb-1"
-        >
-          <SidebarGroup className="px-2 py-0">
-            <SidebarGroupLabel asChild>
-              <CollapsibleTrigger className="text-muted-foreground/80 hover:text-foreground hover:bg-sidebar-accent/70 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors">
-                <span>{t("navigation.chat")}</span>
-                <IconChevronRight className="size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-              </CollapsibleTrigger>
-            </SidebarGroupLabel>
-            <CollapsibleContent>
-              <SidebarGroupContent className="pt-1">
-                <SidebarMenu>
-                  <SidebarMenuItem key="navigation.chat">
-                    <SidebarMenuButton
-                      asChild
-                      isActive={currentPath === "/"}
-                      tooltip={t("navigation.chat")}
-                      onClick={handleNavItemClick}
-                      className="h-9 rounded-lg px-3"
-                    >
-                      <Link to="/">
-                        <IconMessageCircle
-                          className={`size-4 ${
-                            currentPath === "/" ? "opacity-100" : "opacity-60"
-                          }`}
-                        />
-                        <span
-                          className={
-                            currentPath === "/"
-                              ? "opacity-100 group-data-[collapsible=icon]:hidden"
-                              : "opacity-80 group-data-[collapsible=icon]:hidden"
-                          }
-                        >
-                          {t("navigation.chat")}
-                        </span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </CollapsibleContent>
-          </SidebarGroup>
-        </Collapsible>
         {showSessionHistory && (
-          <SidebarGroup className="px-2 py-0">
-            <SidebarGroupLabel className="px-2">
-              {t("chat.history")}
-            </SidebarGroupLabel>
-            <div className="px-2 pb-1">
-              <div className="relative">
-                <IconSearch className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={sessionSearch.query}
-                  onChange={(event) =>
-                    sessionSearch.setQuery(event.target.value)
-                  }
-                  placeholder={t("chat.searchPlaceholder")}
-                  aria-label={t("chat.searchPlaceholder")}
-                  className="bg-background/60 border-border/60 focus-visible:ring-ring h-8 w-full rounded-lg border pr-7 pl-7 text-xs outline-none focus-visible:ring-1"
-                />
-                {sessionSearch.query !== "" && (
-                  <button
-                    type="button"
-                    aria-label={t("chat.searchPlaceholder")}
-                    onClick={sessionSearch.clear}
-                    className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5"
-                  >
-                    <IconX className="size-3.5" />
-                  </button>
-                )}
-              </div>
-            </div>
-            {sessionSearch.isActive && (
-              <div className="max-h-[min(42vh,24rem)] overflow-y-auto">
-                <SidebarMenu>
-                  {sessionSearch.isSearching &&
-                  sessionSearch.results.length === 0 ? (
-                    <SidebarMenuItem>
-                      <div className="text-muted-foreground px-3 py-2 text-xs">
-                        {t("chat.loadingMore")}
-                      </div>
-                    </SidebarMenuItem>
-                  ) : sessionSearch.error ? (
-                    <SidebarMenuItem>
-                      <div className="text-muted-foreground px-3 py-2 text-xs">
-                        {t("chat.searchFailed")}
-                      </div>
-                    </SidebarMenuItem>
-                  ) : sessionSearch.results.length === 0 ? (
-                    <SidebarMenuItem>
-                      <div className="text-muted-foreground px-3 py-2 text-xs">
-                        {t("chat.searchNoResults")}
-                      </div>
-                    </SidebarMenuItem>
-                  ) : (
-                    <>
-                      {sessionSearch.results.map((result, index) => {
-                        const { before, match, after } = splitSnippetMatch(
-                          result.snippet,
-                          result.match_start,
-                          result.match_end,
-                        )
-                        return (
-                          <SidebarMenuItem
-                            key={`${result.session_id}-${result.message_index}-${index}`}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => handleSearchResultClick(result)}
-                              className="hover:bg-sidebar-accent/70 focus-visible:bg-sidebar-accent/70 w-full rounded-lg px-2 py-1.5 text-left outline-none"
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="text-foreground truncate text-xs font-medium">
-                                  {result.title}
-                                </span>
-                                <span className="bg-muted/60 text-muted-foreground ml-auto shrink-0 rounded px-1 py-0.5 text-[10px] uppercase">
-                                  {result.role === "user"
-                                    ? t("chat.you", { defaultValue: "You" })
-                                    : t("chat.assistant", {
-                                        defaultValue: "Assistant",
-                                      })}
-                                </span>
-                              </div>
-                              <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs leading-relaxed">
-                                {before}
-                                <mark className="bg-primary/20 text-foreground rounded-sm">
-                                  {match}
-                                </mark>
-                                {after}
-                              </p>
-                            </button>
-                          </SidebarMenuItem>
-                        )
-                      })}
-                      {sessionSearch.truncated && (
+          <Collapsible defaultOpen className="group/collapsible mb-1">
+            <SidebarGroup className="px-2 py-0">
+              <SidebarGroupLabel asChild>
+                <CollapsibleTrigger className="text-muted-foreground/80 hover:text-foreground hover:bg-sidebar-accent/70 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors">
+                  <span>{t("navigation.chat")}</span>
+                  <IconChevronRight className="size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                </CollapsibleTrigger>
+              </SidebarGroupLabel>
+              <CollapsibleContent>
+                <div className="px-2 pb-1">
+                  <div className="relative">
+                    <IconSearch className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={sessionSearch.query}
+                      onChange={(event) =>
+                        sessionSearch.setQuery(event.target.value)
+                      }
+                      placeholder={t("chat.searchPlaceholder")}
+                      aria-label={t("chat.searchPlaceholder")}
+                      className="bg-background/60 border-border/60 focus-visible:ring-ring h-8 w-full rounded-lg border pr-7 pl-7 text-xs outline-none focus-visible:ring-1"
+                    />
+                    {sessionSearch.query !== "" && (
+                      <button
+                        type="button"
+                        aria-label={t("chat.searchPlaceholder")}
+                        onClick={sessionSearch.clear}
+                        className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5"
+                      >
+                        <IconX className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {sessionSearch.isActive && (
+                  <div className="max-h-[min(42vh,24rem)] overflow-y-auto">
+                    <SidebarMenu>
+                      {sessionSearch.isSearching &&
+                      sessionSearch.results.length === 0 ? (
                         <SidebarMenuItem>
-                          <div className="text-muted-foreground px-3 py-1 text-[11px]">
-                            {t("chat.searchTruncated")}
+                          <div className="text-muted-foreground px-3 py-2 text-xs">
+                            {t("chat.loadingMore")}
+                          </div>
+                        </SidebarMenuItem>
+                      ) : sessionSearch.error ? (
+                        <SidebarMenuItem>
+                          <div className="text-muted-foreground px-3 py-2 text-xs">
+                            {t("chat.searchFailed")}
+                          </div>
+                        </SidebarMenuItem>
+                      ) : sessionSearch.results.length === 0 ? (
+                        <SidebarMenuItem>
+                          <div className="text-muted-foreground px-3 py-2 text-xs">
+                            {t("chat.searchNoResults")}
+                          </div>
+                        </SidebarMenuItem>
+                      ) : (
+                        <>
+                          {sessionSearch.results.map((result, index) => {
+                            const { before, match, after } = splitSnippetMatch(
+                              result.snippet,
+                              result.match_start,
+                              result.match_end,
+                            )
+                            return (
+                              <SidebarMenuItem
+                                key={`${result.session_id}-${result.message_index}-${index}`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleSearchResultClick(result)
+                                  }
+                                  className="hover:bg-sidebar-accent/70 focus-visible:bg-sidebar-accent/70 w-full rounded-lg px-2 py-1.5 text-left outline-none"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-foreground truncate text-xs font-medium">
+                                      {result.title}
+                                    </span>
+                                    <span className="bg-muted/60 text-muted-foreground ml-auto shrink-0 rounded px-1 py-0.5 text-[10px] uppercase">
+                                      {result.role === "user"
+                                        ? t("chat.you", { defaultValue: "You" })
+                                        : t("chat.assistant", {
+                                            defaultValue: "Assistant",
+                                          })}
+                                    </span>
+                                  </div>
+                                  <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs leading-relaxed">
+                                    {before}
+                                    <mark className="bg-primary/20 text-foreground rounded-sm">
+                                      {match}
+                                    </mark>
+                                    {after}
+                                  </p>
+                                </button>
+                              </SidebarMenuItem>
+                            )
+                          })}
+                          {sessionSearch.truncated && (
+                            <SidebarMenuItem>
+                              <div className="text-muted-foreground px-3 py-1 text-[11px]">
+                                {t("chat.searchTruncated")}
+                              </div>
+                            </SidebarMenuItem>
+                          )}
+                        </>
+                      )}
+                    </SidebarMenu>
+                  </div>
+                )}
+                <SidebarGroupContent
+                  className={`pt-1 ${sessionSearch.isActive ? "hidden" : ""}`}
+                >
+                  <div className="max-h-[min(42vh,24rem)] overflow-y-auto">
+                    <SidebarMenu>
+                      {sessions.length > 0 ? (
+                        sessions.map((session) =>
+                          (() => {
+                            const splitGroup = splitGroupBySession.get(
+                              session.id,
+                            )
+                            if (splitGroup) {
+                              if (splitGroup.sessions[0]?.id !== session.id) {
+                                return null
+                              }
+
+                              const groupKey = splitGroupKey(splitGroup.ids)
+                              const groupTitle =
+                                (splitGroup.ids.includes(activeSessionId)
+                                  ? sessionById.get(activeSessionId)?.title
+                                  : undefined) ||
+                                splitGroup.sessions[0].title ||
+                                t("chat.newChat")
+                              const groupRunning = splitGroup.sessions.some(
+                                (member) => isSessionRunning(member.id),
+                              )
+                              const groupUnread = splitGroup.sessions.some(
+                                (member) => unreadSessionIds.has(member.id),
+                              )
+
+                              return (
+                                <SidebarMenuItem key={groupKey}>
+                                  <Collapsible
+                                    open={expandedSplitId === groupKey}
+                                    onOpenChange={(open) =>
+                                      setExpandedSplitId(open ? groupKey : null)
+                                    }
+                                    className="group/collapsible"
+                                  >
+                                    <CollapsibleTrigger asChild>
+                                      <SidebarMenuButton
+                                        type="button"
+                                        isActive={splitGroup.ids.includes(
+                                          activeSessionId,
+                                        )}
+                                        tooltip={groupTitle}
+                                        draggable
+                                        onDragStart={(event) => {
+                                          event.dataTransfer.setData(
+                                            SESSION_DRAG_TYPE,
+                                            session.id,
+                                          )
+                                          event.dataTransfer.effectAllowed =
+                                            "move"
+                                        }}
+                                        onDragOver={handleSessionDragOver}
+                                        onDrop={(event) =>
+                                          handleSessionDrop(event, session.id)
+                                        }
+                                        className="text-muted-foreground hover:text-foreground h-9 rounded-lg px-3"
+                                      >
+                                        <IconChevronRight className="size-3.5 transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                                        <span className="min-w-0 flex-1 truncate">
+                                          {groupTitle}
+                                        </span>
+                                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                          <SessionStatusIndicator
+                                            isRunning={groupRunning}
+                                            isUnread={groupUnread}
+                                          />
+                                          <span className="text-muted-foreground text-xs">
+                                            {splitGroup.ids.length}
+                                          </span>
+                                        </span>
+                                      </SidebarMenuButton>
+                                    </CollapsibleTrigger>
+                                    <CollapsibleContent>
+                                      <SidebarMenuSub>
+                                        {splitGroup.sessions.map((member) => (
+                                          <SidebarMenuSubItem key={member.id}>
+                                            <SidebarMenuSubButton
+                                              asChild
+                                              isActive={
+                                                member.id === activeSessionId
+                                              }
+                                              className="pr-8"
+                                            >
+                                              {renderSessionLink(member)}
+                                            </SidebarMenuSubButton>
+                                            <button
+                                              type="button"
+                                              aria-label={t(
+                                                "chat.deleteSession",
+                                              )}
+                                              title={t("chat.deleteSession")}
+                                              onClick={() =>
+                                                setPendingDeleteSession(member)
+                                              }
+                                              className="text-muted-foreground hover:text-destructive focus-visible:text-destructive focus-visible:ring-sidebar-ring absolute top-1 right-1 rounded p-1 focus-visible:ring-2 focus-visible:outline-hidden md:opacity-0 md:group-hover/menu-sub-item:opacity-100 md:focus-visible:opacity-100"
+                                            >
+                                              <IconTrash className="size-3.5" />
+                                            </button>
+                                          </SidebarMenuSubItem>
+                                        ))}
+                                      </SidebarMenuSub>
+                                    </CollapsibleContent>
+                                  </Collapsible>
+                                </SidebarMenuItem>
+                              )
+                            }
+
+                            if (splitGroupBySession.has(session.id)) return null
+
+                            return (
+                              <SidebarMenuItem key={session.id}>
+                                <SidebarMenuButton
+                                  asChild
+                                  isActive={session.id === activeSessionId}
+                                  tooltip={session.title || t("chat.newChat")}
+                                  className="text-muted-foreground hover:text-foreground h-9 rounded-lg px-3"
+                                >
+                                  {renderSessionLink(session)}
+                                </SidebarMenuButton>
+                                <SidebarMenuAction
+                                  showOnHover
+                                  aria-label={t("chat.deleteSession")}
+                                  title={t("chat.deleteSession")}
+                                  onClick={() =>
+                                    setPendingDeleteSession(session)
+                                  }
+                                >
+                                  <IconTrash />
+                                </SidebarMenuAction>
+                              </SidebarMenuItem>
+                            )
+                          })(),
+                        )
+                      ) : (
+                        <SidebarMenuItem>
+                          <div className="text-muted-foreground px-3 py-2 text-xs">
+                            {loadError
+                              ? loadErrorMessage
+                              : isLoadingMore
+                                ? t("chat.loadingMore")
+                                : t("chat.noHistory")}
                           </div>
                         </SidebarMenuItem>
                       )}
-                    </>
-                  )}
-                </SidebarMenu>
-              </div>
-            )}
-            <SidebarGroupContent
-              className={`pt-1 ${sessionSearch.isActive ? "hidden" : ""}`}
-            >
-              <div className="max-h-[min(42vh,24rem)] overflow-y-auto">
-                <SidebarMenu>
-                  {sessions.length > 0 ? (
-                    sessions.map((session) =>
-                      (() => {
-                        const splitGroup = splitGroupBySession.get(session.id)
-                        if (splitGroup) {
-                          if (splitGroup.sessions[0]?.id !== session.id) {
-                            return null
-                          }
-
-                          const groupKey = splitGroupKey(splitGroup.ids)
-                          const groupTitle =
-                            (splitGroup.ids.includes(activeSessionId)
-                              ? sessionById.get(activeSessionId)?.title
-                              : undefined) ||
-                            splitGroup.sessions[0].title ||
-                            t("chat.newChat")
-                          const groupRunning = splitGroup.sessions.some(
-                            (member) => isSessionRunning(member.id),
-                          )
-                          const groupUnread = splitGroup.sessions.some(
-                            (member) => unreadSessionIds.has(member.id),
-                          )
-
-                          return (
-                            <SidebarMenuItem key={groupKey}>
-                              <Collapsible
-                                open={expandedSplitId === groupKey}
-                                onOpenChange={(open) =>
-                                  setExpandedSplitId(open ? groupKey : null)
-                                }
-                                className="group/collapsible"
-                              >
-                                <CollapsibleTrigger asChild>
-                                  <SidebarMenuButton
-                                    type="button"
-                                    isActive={splitGroup.ids.includes(
-                                      activeSessionId,
-                                    )}
-                                    tooltip={groupTitle}
-                                    draggable
-                                    onDragStart={(event) => {
-                                      event.dataTransfer.setData(
-                                        SESSION_DRAG_TYPE,
-                                        session.id,
-                                      )
-                                      event.dataTransfer.effectAllowed = "move"
-                                    }}
-                                    onDragOver={handleSessionDragOver}
-                                    onDrop={(event) =>
-                                      handleSessionDrop(event, session.id)
-                                    }
-                                    className="text-muted-foreground hover:text-foreground h-9 rounded-lg px-3"
-                                  >
-                                    <IconChevronRight className="size-3.5 transition-transform group-data-[state=open]/collapsible:rotate-90" />
-                                    <span className="min-w-0 flex-1 truncate">
-                                      {groupTitle}
-                                    </span>
-                                    <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                                      <SessionStatusIndicator
-                                        isRunning={groupRunning}
-                                        isUnread={groupUnread}
-                                      />
-                                      <span className="text-muted-foreground text-xs">
-                                        {splitGroup.ids.length}
-                                      </span>
-                                    </span>
-                                  </SidebarMenuButton>
-                                </CollapsibleTrigger>
-                                <CollapsibleContent>
-                                  <SidebarMenuSub>
-                                    {splitGroup.sessions.map((member) => (
-                                      <SidebarMenuSubItem key={member.id}>
-                                        <SidebarMenuSubButton
-                                          asChild
-                                          isActive={
-                                            member.id === activeSessionId
-                                          }
-                                          className="pr-8"
-                                        >
-                                          {renderSessionLink(member)}
-                                        </SidebarMenuSubButton>
-                                        <button
-                                          type="button"
-                                          aria-label={t("chat.deleteSession")}
-                                          title={t("chat.deleteSession")}
-                                          onClick={() =>
-                                            setPendingDeleteSession(member)
-                                          }
-                                          className="text-muted-foreground hover:text-destructive focus-visible:text-destructive focus-visible:ring-sidebar-ring absolute top-1 right-1 rounded p-1 focus-visible:ring-2 focus-visible:outline-hidden md:opacity-0 md:group-hover/menu-sub-item:opacity-100 md:focus-visible:opacity-100"
-                                        >
-                                          <IconTrash className="size-3.5" />
-                                        </button>
-                                      </SidebarMenuSubItem>
-                                    ))}
-                                  </SidebarMenuSub>
-                                </CollapsibleContent>
-                              </Collapsible>
-                            </SidebarMenuItem>
-                          )
-                        }
-
-                        if (splitGroupBySession.has(session.id)) return null
-
-                        return (
-                          <SidebarMenuItem key={session.id}>
-                            <SidebarMenuButton
-                              asChild
-                              isActive={session.id === activeSessionId}
-                              tooltip={session.title || t("chat.newChat")}
-                              className="text-muted-foreground hover:text-foreground h-9 rounded-lg px-3"
-                            >
-                              {renderSessionLink(session)}
-                            </SidebarMenuButton>
-                            <SidebarMenuAction
-                              showOnHover
-                              aria-label={t("chat.deleteSession")}
-                              title={t("chat.deleteSession")}
-                              onClick={() => setPendingDeleteSession(session)}
-                            >
-                              <IconTrash />
-                            </SidebarMenuAction>
-                          </SidebarMenuItem>
-                        )
-                      })(),
-                    )
-                  ) : (
-                    <SidebarMenuItem>
-                      <div className="text-muted-foreground px-3 py-2 text-xs">
-                        {loadError
-                          ? loadErrorMessage
-                          : isLoadingMore
-                            ? t("chat.loadingMore")
-                            : t("chat.noHistory")}
-                      </div>
-                    </SidebarMenuItem>
-                  )}
-                  {hasMore && sessions.length > 0 && (
-                    <SidebarMenuItem>
-                      <div
-                        ref={observerRef}
-                        className="text-muted-foreground min-h-2 px-3 py-1 text-center text-xs"
-                      >
-                        {isLoadingMore ? t("chat.loadingMore") : null}
-                      </div>
-                    </SidebarMenuItem>
-                  )}
-                </SidebarMenu>
-              </div>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
-        {navGroups
-          .filter((group) => group.label !== "navigation.chat")
-          .map((group) => (
-            <Collapsible
-              key={group.label}
-              defaultOpen={group.defaultOpen}
-              className="group/collapsible mb-1"
-            >
-              <SidebarGroup className="px-2 py-0">
-                <SidebarGroupLabel asChild>
-                  <CollapsibleTrigger className="text-muted-foreground/80 hover:text-foreground hover:bg-sidebar-accent/70 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors">
-                    <span>{t(group.label)}</span>
-                    <IconChevronRight className="size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-                  </CollapsibleTrigger>
-                </SidebarGroupLabel>
-                <CollapsibleContent>
-                  <SidebarGroupContent className="pt-1">
-                    <SidebarMenu>
-                      {group.items.map((item) => {
-                        const isActive =
-                          currentPath === item.url ||
-                          (item.url !== "/" &&
-                            currentPath.startsWith(`${item.url}/`))
-                        return (
-                          <SidebarMenuItem key={item.title}>
-                            <SidebarMenuButton
-                              asChild
-                              isActive={isActive}
-                              tooltip={
-                                item.translateTitle === false
-                                  ? item.title
-                                  : t(item.title)
-                              }
-                              onClick={handleNavItemClick}
-                              data-tour={
-                                item.url === "/models"
-                                  ? "models-nav"
-                                  : undefined
-                              }
-                              className={`h-9 rounded-lg px-3 ${isActive ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground"}`}
-                            >
-                              <Link to={item.url}>
-                                <item.icon
-                                  className={`size-4 ${isActive ? "opacity-100" : "opacity-60"}`}
-                                />
-                                <span
-                                  className={
-                                    isActive
-                                      ? "opacity-100 group-data-[collapsible=icon]:hidden"
-                                      : "opacity-80 group-data-[collapsible=icon]:hidden"
-                                  }
-                                >
-                                  {item.translateTitle === false
-                                    ? item.title
-                                    : t(item.title)}
-                                </span>
-                              </Link>
-                            </SidebarMenuButton>
-                          </SidebarMenuItem>
-                        )
-                      })}
-                      {group.isChannelsGroup && hasMoreChannels && (
-                        <SidebarMenuItem key="channels-more-toggle">
-                          <SidebarMenuButton
-                            onClick={toggleShowAllChannels}
-                            tooltip={
-                              showAllChannels
-                                ? t("navigation.show_less_channels")
-                                : t("navigation.show_more_channels")
-                            }
-                            className="text-muted-foreground hover:bg-muted/60 h-9 px-3"
+                      {hasMore && sessions.length > 0 && (
+                        <SidebarMenuItem>
+                          <div
+                            ref={observerRef}
+                            className="text-muted-foreground min-h-2 px-3 py-1 text-center text-xs"
                           >
-                            {showAllChannels ? (
-                              <IconChevronsUp className="size-4 opacity-60" />
-                            ) : (
-                              <IconChevronsDown className="size-4 opacity-60" />
-                            )}
-                            <span className="opacity-80 group-data-[collapsible=icon]:hidden">
-                              {showAllChannels
-                                ? t("navigation.show_less_channels")
-                                : t("navigation.show_more_channels")}
-                            </span>
-                          </SidebarMenuButton>
+                            {isLoadingMore ? t("chat.loadingMore") : null}
+                          </div>
                         </SidebarMenuItem>
                       )}
                     </SidebarMenu>
-                  </SidebarGroupContent>
-                </CollapsibleContent>
-              </SidebarGroup>
-            </Collapsible>
-          ))}
+                  </div>
+                </SidebarGroupContent>
+              </CollapsibleContent>
+            </SidebarGroup>
+          </Collapsible>
+        )}
+        {navGroups.map((group) => (
+          <Collapsible
+            key={group.label}
+            defaultOpen={group.defaultOpen}
+            className="group/collapsible mb-1"
+          >
+            <SidebarGroup className="px-2 py-0">
+              <SidebarGroupLabel asChild>
+                <CollapsibleTrigger className="text-muted-foreground/80 hover:text-foreground hover:bg-sidebar-accent/70 flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors">
+                  <span>{t(group.label)}</span>
+                  <IconChevronRight className="size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                </CollapsibleTrigger>
+              </SidebarGroupLabel>
+              <CollapsibleContent>
+                <SidebarGroupContent className="pt-1">
+                  <SidebarMenu>
+                    {group.items.map((item) => {
+                      const isActive =
+                        currentPath === item.url ||
+                        (item.url !== "/" &&
+                          currentPath.startsWith(`${item.url}/`))
+                      return (
+                        <SidebarMenuItem key={item.title}>
+                          <SidebarMenuButton
+                            asChild
+                            isActive={isActive}
+                            tooltip={
+                              item.translateTitle === false
+                                ? item.title
+                                : t(item.title)
+                            }
+                            onClick={handleNavItemClick}
+                            data-tour={
+                              item.url === "/models" ? "models-nav" : undefined
+                            }
+                            className={`h-9 rounded-lg px-3 ${isActive ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground"}`}
+                          >
+                            <Link to={item.url}>
+                              <item.icon
+                                className={`size-4 ${isActive ? "opacity-100" : "opacity-60"}`}
+                              />
+                              <span
+                                className={
+                                  isActive
+                                    ? "opacity-100 group-data-[collapsible=icon]:hidden"
+                                    : "opacity-80 group-data-[collapsible=icon]:hidden"
+                                }
+                              >
+                                {item.translateTitle === false
+                                  ? item.title
+                                  : t(item.title)}
+                              </span>
+                            </Link>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      )
+                    })}
+                    {group.isChannelsGroup && hasMoreChannels && (
+                      <SidebarMenuItem key="channels-more-toggle">
+                        <SidebarMenuButton
+                          onClick={toggleShowAllChannels}
+                          tooltip={
+                            showAllChannels
+                              ? t("navigation.show_less_channels")
+                              : t("navigation.show_more_channels")
+                          }
+                          className="text-muted-foreground hover:bg-muted/60 h-9 px-3"
+                        >
+                          {showAllChannels ? (
+                            <IconChevronsUp className="size-4 opacity-60" />
+                          ) : (
+                            <IconChevronsDown className="size-4 opacity-60" />
+                          )}
+                          <span className="opacity-80 group-data-[collapsible=icon]:hidden">
+                            {showAllChannels
+                              ? t("navigation.show_less_channels")
+                              : t("navigation.show_more_channels")}
+                          </span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </CollapsibleContent>
+            </SidebarGroup>
+          </Collapsible>
+        ))}
       </SidebarContent>
       <SidebarFooter className="border-sidebar-border border-t">
         <AppSidebarControls />
