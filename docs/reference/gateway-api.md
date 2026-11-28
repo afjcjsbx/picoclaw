@@ -59,11 +59,11 @@ Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_call
 
 ## Launcher API
 
-The launcher serves the dashboard SPA and a REST API for everything the UI does. All routes require the dashboard session cookie except the public login/setup pages and `/api/auth/*`.
+The launcher serves the dashboard SPA and a REST API for everything the UI does. Dashboard routes require the session cookie except the public login/setup pages and `/api/auth/*`. First-run `POST /api/auth/setup` additionally requires the one-time `setup_token` from the launcher's owner-only `~/.picoclaw/dashboard-setup-token` file; the token is never returned by an API. Once a password exists, setup requests require an authenticated session and do not need the token.
 
 | Group | Representative endpoints | Purpose |
 | --- | --- | --- |
-| Auth | `POST /api/auth/setup`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/status` | Dashboard password lifecycle (public) |
+| Auth | `POST /api/auth/setup`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/status` | Dashboard password lifecycle; first-run setup requires the one-time bootstrap token |
 | Pico proxy | `GET /api/pico/info`, `POST /api/pico/token`, `POST /api/pico/setup`, `GET /pico/ws`, `GET /pico/media/{id}` | Chat proxy to the Gateway; frontend never talks to the Gateway directly |
 | Config | `GET`/`PUT`/`PATCH /api/config`, `/api/config/reset`, `/api/config/test-command-patterns` | Read and edit `config.json` |
 | Gateway lifecycle | `/api/gateway/status`, `/logs`, `/logs/clear`, `/start`, `/stop`, `/restart` | Manage the `picoclaw gateway` subprocess and its log buffer |

@@ -151,7 +151,7 @@ PicoClaw 将数据存储在您配置的工作区中（默认：`~/.picoclaw/work
 
 ### Web 启动器控制台
 
-用 **picoclaw-launcher** 打开浏览器控制台前需要先使用密码登录。首次启动时打开 `/launcher-setup` 创建 dashboard 登录密码；后续手动登录使用 `/launcher-login`。
+用 **picoclaw-launcher** 打开浏览器控制台前需要先使用密码登录。首次启动时，launcher 会在 `~/.picoclaw/dashboard-setup-token` 生成一个一次性设置令牌（仅所有者可读写），并在控制台模式下打印。打开 `/launcher-setup`，输入该令牌并创建 dashboard 密码。令牌不会通过 API 返回，只能使用一次，成功设置后会被删除；后续手动登录使用 `/launcher-login`。
 
 - **配置文件**：与 `config.json` 同一目录（若设置了 `PICOCLAW_CONFIG`，则与它所指的文件同目录）。启动器专用文件名为 `launcher-config.json`。
 - **密码存储**：支持的平台会把 bcrypt 后的密码哈希存入 `launcher-auth.db`。如果当前平台不支持 SQLite 密码存储，则把 bcrypt 哈希存入 `launcher-config.json`。
@@ -159,7 +159,7 @@ PicoClaw 将数据存储在您配置的工作区中（默认：`~/.picoclaw/work
 - **本地自动登录**：launcher 启动后自动打开本地浏览器时，会使用仅允许 loopback 访问的一次性引导入口自动设置会话 Cookie。
 - **不再支持的鉴权方式**：不再支持 URL token 登录（`?token=...`）、`PICOCLAW_LAUNCHER_TOKEN` 和 `Authorization: Bearer` dashboard 鉴权。
 - **退出登录**：应使用 **`POST /api/auth/logout`**，且请求头为 **`Content-Type: application/json`**（请求体可为 `{}`），勿使用可被第三方页面触发的 GET 链接登出。
-- **暴力尝试**：`POST /api/auth/login` 对同一远程地址有 **每分钟尝试次数上限**（超限返回 HTTP 429）。
+- **暴力尝试**：`POST /api/auth/login` 对同一远程地址有 **每分钟尝试次数上限**（超限返回 HTTP 429）。首次设置中失败的 `POST /api/auth/setup` 尝试也采用相同的限制；有效的引导令牌或已认证的密码修改不会被该限制拦截。
 - **会话时长**：登录后的 HttpOnly 会话 Cookie 默认约 **31 天**有效，但 launcher 进程重启后已有会话会失效。
 
 ### 技能来源 (Skill Sources)

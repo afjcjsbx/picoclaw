@@ -490,8 +490,9 @@ func buildAppCredentialRules(appHome, codexHome string) ([]protectedRootRule, []
 	add(appHome, []string{
 		"auth.json",
 		"auth/mcp",
-		"plugin-data",
 		"channels/weixin/context-tokens",
+		"dashboard-setup-token",
+		"plugin-data",
 	})
 	add(codexHome, []string{"auth.json"})
 	return rules, live

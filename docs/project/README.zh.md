@@ -194,7 +194,7 @@ picoclaw-launcher
 ```
 
 > [!TIP]
-> **远程访问 / Docker / 虚拟机：** 添加 `-public` 参数以监听所有网络接口：
+> **远程访问 / Docker / 虚拟机：** 添加 `-public` 参数以监听所有网络接口。首次设置仍需要输入所有者专用的 `~/.picoclaw/dashboard-setup-token` 中的一次性令牌；请先完成设置，再暴露启动器：
 >
 > ```bash
 > picoclaw-launcher -public

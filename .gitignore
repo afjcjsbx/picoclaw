@@ -26,6 +26,7 @@ build/
 .env
 config/config.json
 .security.yml
+dashboard-setup-token
 onboard
 
 

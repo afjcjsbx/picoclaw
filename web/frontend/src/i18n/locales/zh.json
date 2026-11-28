@@ -28,7 +28,10 @@
   },
   "launcherSetup": {
     "title": "设置控制台密码",
-    "description": "设置一个密码来保护控制台访问权限，登录时需要输入此密码。",
+    "description": "输入启动器提供的一次性设置令牌，然后设置密码以保护控制台。",
+    "tokenLabel": "设置令牌",
+    "tokenPlaceholder": "粘贴一次性设置令牌",
+    "tokenHelp": "令牌显示在启动器控制台中，或保存在 $PICOCLAW_HOME/dashboard-setup-token 中（默认 ~/.picoclaw/dashboard-setup-token）。设置密码后令牌即失效。",
     "passwordLabel": "密码",
     "passwordPlaceholder": "至少 8 个字符",
     "confirmLabel": "确认密码",

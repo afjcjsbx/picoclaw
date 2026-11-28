@@ -25,6 +25,7 @@ import { useTheme } from "@/hooks/use-theme"
 function LauncherSetupPage() {
   const { t, i18n } = useTranslation()
   const { theme, toggleTheme } = useTheme()
+  const [setupToken, setSetupToken] = React.useState("")
   const [password, setPassword] = React.useState("")
   const [confirm, setConfirm] = React.useState("")
   const [submitting, setSubmitting] = React.useState(false)
@@ -39,7 +40,11 @@ function LauncherSetupPage() {
     }
     setSubmitting(true)
     try {
-      const result = await postLauncherDashboardSetup(password, confirm)
+      const result = await postLauncherDashboardSetup(
+        password,
+        confirm,
+        setupToken,
+      )
       if (result.ok) {
         globalThis.location.assign("/launcher-login")
         return
@@ -93,6 +98,25 @@ function LauncherSetupPage() {
           </CardHeader>
           <CardContent>
             <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="setup-token">
+                  {t("launcherSetup.tokenLabel")}
+                </Label>
+                <Input
+                  id="setup-token"
+                  name="setup_token"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  required
+                  value={setupToken}
+                  onChange={(e) => setSetupToken(e.target.value)}
+                  placeholder={t("launcherSetup.tokenPlaceholder")}
+                />
+                <p className="text-muted-foreground text-xs">
+                  {t("launcherSetup.tokenHelp")}
+                </p>
+              </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="setup-password">
                   {t("launcherSetup.passwordLabel")}

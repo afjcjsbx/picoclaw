@@ -49,7 +49,10 @@
   },
   "launcherSetup": {
     "title": "Nastavení hesla k dashboardu",
-    "description": "Zvolte heslo pro ochranu přístupu k dashboardu. Budete ho zadávat při každém přihlášení.",
+    "description": "Zadejte jednorázový token ze spouštěče a poté zvolte heslo pro ochranu dashboardu.",
+    "tokenLabel": "Nastavovací token",
+    "tokenPlaceholder": "Vložte jednorázový nastavovací token",
+    "tokenHelp": "Token najdete v konzoli spouštěče nebo v $PICOCLAW_HOME/dashboard-setup-token (výchozí ~/.picoclaw/dashboard-setup-token). Po nastavení hesla přestane platit.",
     "passwordLabel": "Heslo",
     "passwordPlaceholder": "Alespoň 8 znaků",
     "confirmLabel": "Potvrzení hesla",
