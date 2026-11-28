@@ -266,7 +266,7 @@ func (h *pluginMCPHook) publishPicoToolResult(
 	if !ok || !strings.EqualFold(strings.TrimSpace(msg.Channel), "pico") {
 		return
 	}
-	msg = buildPicoToolResultMessage(msg, toolCallID, output)
+	msg = buildPicoToolResultMessage(msg, toolCallID, output, false)
 	h.publishToolActivity(ctx, msg)
 }
 

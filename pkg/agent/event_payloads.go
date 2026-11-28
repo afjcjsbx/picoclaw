@@ -75,6 +75,7 @@ type LLMResponsePayload struct {
 	InputTokens  int
 	OutputTokens int
 	TotalTokens  int
+	FinishReason string
 }
 
 // LLMDeltaPayload describes a streamed LLM delta.

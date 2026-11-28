@@ -44,7 +44,8 @@ func (b *toolFeedbackBatch) publish(
 	toolArgs map[string]any,
 	messages []providers.Message,
 ) {
-	if !shouldPublishToolFeedback(b.al.cfg, b.ts) || b.ts.channel == "pico" {
+	if !shouldPublishToolFeedback(b.al.cfg, b.ts) ||
+		supportsStructuredTurnOutput(b.al.channelManager, b.ts.channel) {
 		return
 	}
 	if b.compact && b.sent {

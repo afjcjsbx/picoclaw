@@ -123,6 +123,7 @@ const sidebars = {
       ]),
     ]),
     cat('Design Notes', 'design/README', [
+      d('design/acp', 'ACP Integration'),
       d('design/steering-spec', 'Steering Spec'),
       d('design/parallel-tool-calls-spec', 'Parallel Tool Calls Spec'),
       d('design/provider-refactoring', 'Provider Refactoring'),

@@ -18,6 +18,7 @@ Every command accepts the global `--no-color` flag, which disables ANSI colors i
 | [`status`](#status--version--update) / [`version`](#status--version--update) / [`update`](#status--version--update) | Inspect and update the installation |
 | [`usage`](#usage) | Show token usage and cost per session |
 | [`agent`](#agent) | Interact with the agent directly |
+| [`acp`](#acp) | Run PicoClaw as an Agent Client Protocol stdio agent |
 | [`gateway`](#gateway) | Start the Gateway service |
 | [`model`](#model) / [`model add`](#model-add) | Show, set, and add models |
 | [`auth`](#auth) | OAuth login, credentials, and QR channel setup |
@@ -115,6 +116,26 @@ picoclaw agent
 picoclaw agent -m "Summarize today's cron output" --model claude-sonnet-4.6
 picoclaw agent -s my-project -m "What changed in the workspace?"
 ```
+
+## ACP
+
+Runs PicoClaw as a standalone [Agent Client Protocol](https://agentclientprotocol.com/protocol/overview) agent. The command speaks newline-delimited JSON-RPC 2.0 over stdin/stdout and is intended for clients such as Paseo and Zed. stdout contains only ACP messages; logs and errors go to stderr.
+
+| Flag | Description |
+| --- | --- |
+| `--cwd` | Workspace root; defaults to the current directory |
+| `--model` | Initial model alias for new sessions |
+| `--max-sessions` | Maximum ACP sessions in the process (default 32) |
+| `--max-message-bytes` | Maximum incoming ACP message size (default 1 MiB) |
+| `-d, --debug` | Enable debug logging on stderr |
+
+```bash
+picoclaw acp --cwd /path/to/workspace
+```
+
+The current implementation supports initialization, session creation and loading with history replay, prompt turns, message/thought/tool updates, cancellation, permission requests, slash-command advertisement, and per-session model/mode selection. Session-scoped MCP servers, additional workspace roots, and client-provided system prompts are not advertised yet.
+
+Exit codes are `0` for a clean client disconnect, `2` for configuration/startup failures, and `3` for unrecoverable runtime failures.
 
 ## Gateway
 

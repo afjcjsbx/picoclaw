@@ -5,6 +5,7 @@ description: "PicoClaw design notes: proposals and investigations kept for histo
 
 Proposal-style and exploratory documents kept for historical context and implementation rationale. For settled behavior, see [`../architecture/`](../architecture/). Locale-specific working notes are allowed here without an English source document.
 
+- [ACP Integration](acp.md): stdio Agent Client Protocol server for Paseo, Zed, and other ACP clients.
 - [Provider Architecture Refactoring](provider-refactoring.md): refactoring providers by protocol (issue #283, branch `feat/refactor-provider-by-protocol`).
 - [Provider Refactoring Test Suite Summary](provider-refactoring-tests.md): test suite designed for the provider refactoring.
 - [Steering Implementation Specification](steering-spec.md): problem statement and spec for steering a running agent. See also [Steering](../architecture/steering.md).

@@ -11,6 +11,9 @@ import (
 
 const Logo = pkg.Logo
 
+// StdioProtocolAnnotation marks commands whose stdout is a machine protocol.
+const StdioProtocolAnnotation = "picoclaw_stdio_protocol"
+
 // GetPicoclawHome returns the picoclaw home directory.
 // Priority: $PICOCLAW_HOME > ~/.picoclaw
 func GetPicoclawHome() string {

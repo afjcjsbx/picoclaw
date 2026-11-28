@@ -83,6 +83,12 @@ type StreamingCapable interface {
 	BeginStream(ctx context.Context, chatID string) (Streamer, error)
 }
 
+// StructuredTurnOutputCapable marks channels that consume structured thought
+// and tool activity instead of plain tool-feedback messages.
+type StructuredTurnOutputCapable interface {
+	SupportsStructuredTurnOutput() bool
+}
+
 // Streamer is defined in pkg/bus to avoid circular imports.
 // This alias keeps channel implementations using channels.Streamer unchanged.
 type Streamer = bus.Streamer

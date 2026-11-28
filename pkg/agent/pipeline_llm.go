@@ -680,11 +680,12 @@ func (p *Pipeline) CallLLM(
 		exec.response.ReasoningDetails = nil
 	}
 	reasoningContent := responseReasoningContent(exec.response)
-	shouldPublishPicoToolCallInterim := ts.channel == "pico" && len(exec.response.ToolCalls) > 0
-	if shouldPublishPicoToolCallInterim {
-		// Pico tool-call turns publish their reasoning/content/tool summary as a
-		// structured sequence after the tool-call payload is normalized below.
-	} else if ts.channel == "pico" {
+	structuredOutput := supportsStructuredTurnOutput(p.ChannelManager, ts.channel)
+	shouldPublishStructuredToolCallInterim := structuredOutput && len(exec.response.ToolCalls) > 0
+	if shouldPublishStructuredToolCallInterim {
+		// Structured channels publish reasoning/content/tool summaries after the
+		// tool-call payload is normalized below.
+	} else if structuredOutput {
 		if exec.streamingPublisher != nil && exec.streamingPublisher.ReasoningPublished() {
 			if err := exec.streamingPublisher.FinalizeReasoning(turnCtx, reasoningContent); err != nil {
 				logger.WarnCF("agent", "Failed to finalize streamed pico reasoning", map[string]any{
@@ -697,7 +698,7 @@ func (p *Pipeline) CallLLM(
 			// Publish pico thoughts before the turn context is canceled at return time.
 			// The async variant can race with turn teardown and intermittently drop the
 			// thought message in CI even though the LLM produced reasoning content.
-			al.publishPicoReasoning(turnCtx, reasoningContent, ts.chatID, ts.sessionKey, exec.llmModelName)
+			al.publishPicoReasoning(turnCtx, ts.channel, reasoningContent, ts.chatID, ts.sessionKey, exec.llmModelName)
 		}
 	} else {
 		go al.handleReasoning(
@@ -711,6 +712,7 @@ func (p *Pipeline) CallLLM(
 		ContentLen:   len(exec.response.Content),
 		ToolCalls:    len(exec.response.ToolCalls),
 		HasReasoning: exec.response.Reasoning != "" || exec.response.ReasoningContent != "",
+		FinishReason: exec.response.FinishReason,
 	}
 	if exec.response.Usage != nil {
 		llmResponsePayload.InputTokens = exec.response.Usage.PromptTokens
@@ -745,7 +747,7 @@ func (p *Pipeline) CallLLM(
 	// No-tool-call path: steering check and direct response
 	if len(exec.response.ToolCalls) == 0 || exec.gracefulTerminal {
 		responseContent := exec.response.Content
-		if responseContent == "" && exec.response.ReasoningContent != "" && ts.channel != "pico" {
+		if responseContent == "" && exec.response.ReasoningContent != "" && !structuredOutput {
 			responseContent = exec.response.ReasoningContent
 		}
 		if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
@@ -789,8 +791,12 @@ func (p *Pipeline) CallLLM(
 
 	// Tool-call path: normalize and prepare for tool execution
 	exec.normalizedToolCalls = make([]providers.ToolCall, 0, len(exec.response.ToolCalls))
-	for _, tc := range exec.response.ToolCalls {
-		exec.normalizedToolCalls = append(exec.normalizedToolCalls, cliprovider.NormalizeToolCall(tc))
+	for index, tc := range exec.response.ToolCalls {
+		normalized := cliprovider.NormalizeToolCall(tc)
+		if strings.TrimSpace(normalized.ID) == "" {
+			normalized.ID = fmt.Sprintf("%s-tool-%d-%d", ts.turnID, iteration, index)
+		}
+		exec.normalizedToolCalls = append(exec.normalizedToolCalls, normalized)
 	}
 
 	toolNames := make([]string, 0, len(exec.normalizedToolCalls))
@@ -853,7 +859,7 @@ func (p *Pipeline) CallLLM(
 		ts.recordPersistedMessage(assistantMsg)
 		ts.ingestMessage(turnCtx, al, assistantMsg)
 	}
-	if shouldPublishPicoToolCallInterim {
+	if shouldPublishStructuredToolCallInterim {
 		al.publishPicoToolCallInterim(
 			turnCtx,
 			ts,

@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
+	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/acp"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/agent"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/auth"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/internal/cliui"
@@ -133,6 +135,7 @@ picoclaw --no-color status`,
 	})
 
 	cmd.AddCommand(
+		acp.NewACPCommand(),
 		configcmd.NewConfigCommand(),
 		onboard.NewOnboardCommand(),
 		agent.NewAgentCommand(),
@@ -184,7 +187,13 @@ const machineOutputFlag = "json"
 // tree, so the command that runs keeps unparsed flags.
 func machineOutputRequested(args []string) bool {
 	cmd, rest, err := NewPicoclawCommand().Find(args)
-	if err != nil || cmd.Flags().Lookup(machineOutputFlag) == nil {
+	if err != nil {
+		return false
+	}
+	if cmd.Annotations[internal.StdioProtocolAnnotation] == "true" {
+		return true
+	}
+	if cmd.Flags().Lookup(machineOutputFlag) == nil {
 		return false
 	}
 	if cmd.ParseFlags(rest) != nil {
@@ -234,6 +243,10 @@ func main() {
 	if err != nil {
 		syncCliUIColor(cmd)
 		fmt.Fprint(os.Stderr, cliui.FormatCLIError(err.Error(), last))
+		var exitErr *acp.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
 		os.Exit(1)
 	}
 }
