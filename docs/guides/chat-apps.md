@@ -8,7 +8,7 @@ title: "Chat Apps Configuration"
 
 ## 💬 Chat Apps
 
-Talk to your picoclaw through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Feishu, Slack, IRC, OneBot, MQTT, MaixCam, or Pico (native protocol)
+Talk to your picoclaw through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Feishu, Slack, IRC, OneBot, Mail (custom build), MQTT, MaixCam, or Pico (native protocol)
 
 > **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
 
@@ -27,6 +27,7 @@ Talk to your picoclaw through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk,
 | **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](../channels/feishu/)                                                                            |
 | **IRC**              | ⭐⭐ Medium        | Server + TLS configuration                            | [Docs](#irc)                                                                                                     |
 | **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](../channels/onebot/)                                                                            |
+| **Mail**             | ⭐⭐ Medium        | Custom build (`channel_mail`): IMAP (IDLE) + SMTP, threaded replies, attachments | [Docs](../channels/mail/)                                                                              |
 | **MQTT**             | ⭐ Easy            | Any MQTT client via broker pub/sub                    | [Docs](../channels/mqtt/)                                                                              |
 | **MaixCam**          | ⭐ Easy            | Hardware integration channel for Sipeed AI cameras    | [Docs](../channels/maixcam/)                                                                           |
 | **Pico**             | ⭐ Easy            | Native PicoClaw protocol channel                      | [Docs](../channels/pico/)                                                                                        |
@@ -100,6 +101,7 @@ From the control channel, ask the agent to use the `message` tool with the desti
 - Some channels may still answer protocol-level interactions (for example Discord slash commands) with a denial message. For absolute silence, use a native output-only channel or do not grant the interaction scope.
 - `group_trigger.mention_only` is not a substitute: it filters group messages and still responds when the bot is mentioned or receives a DM.
 - `enabled: false` disables both directions. The channel must stay enabled for outbound delivery.
+
 
 <a id="telegram"></a>
 <details>

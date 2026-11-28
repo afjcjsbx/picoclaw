@@ -1157,6 +1157,8 @@ func (m *Manager) getChannelConfigAndEnabled(channelName string) (*config.Channe
 		return bc, settings.GroupID != 0 && settings.Token.String() != ""
 	case *config.MQTTSettings:
 		return bc, settings.Broker != "" && settings.AgentID != ""
+	case *config.MailSettings:
+		return bc, settings.IMAPHost != "" && settings.SMTPHost != ""
 	}
 
 	return bc, bc.Enabled
