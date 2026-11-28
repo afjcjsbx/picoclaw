@@ -83,6 +83,7 @@ import {
 import {
   type ConversationUsageStats,
   lastReplyCacheHitRate,
+  lastTurnWorkedMs,
   summarizeConversationUsage,
 } from "@/features/chat/usage"
 import { useChatModels } from "@/hooks/use-chat-models"
@@ -105,6 +106,7 @@ import {
   initializeSplitSessionState,
   pendingScrollTargetAtom,
   sessionRunningAtom,
+  sessionStartedAtAtom,
   sessionTitlesAtom,
   splitConversationsAtom,
   splitLayoutSizesAtom,
@@ -545,7 +547,9 @@ interface SplitConversationViewProps {
     isTyping: boolean,
     isCompacting: boolean,
     compactionMarkers: CompactionMarker[],
+    typingStartedAt?: number,
   ) => React.ReactNode
+  sessionStartedAt: Record<string, number>
   onActivate: (sessionId: string) => void
   onRemove: (sessionId: string) => void
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void
@@ -566,6 +570,7 @@ function SplitConversationView({
   isCompacting,
   compactionMarkers,
   renderMessages,
+  sessionStartedAt,
   onActivate,
   onRemove,
   onScroll,
@@ -681,6 +686,7 @@ function SplitConversationView({
                 ? compactionMarkers
                 : (splitSessionStates[sessionId]?.compactionMarkers ?? [])
             }
+            typingStartedAt={sessionStartedAt[sessionId]}
             renderMessages={renderMessages}
             onActivate={onActivate}
             onRemove={onRemove}
@@ -721,6 +727,7 @@ interface SplitConversationPaneProps {
   isTyping: boolean
   isCompacting: boolean
   compactionMarkers: CompactionMarker[]
+  typingStartedAt?: number
   renderMessages: SplitConversationViewProps["renderMessages"]
   onActivate: SplitConversationViewProps["onActivate"]
   onRemove: SplitConversationViewProps["onRemove"]
@@ -743,6 +750,7 @@ function SplitConversationPane({
   isTyping,
   isCompacting,
   compactionMarkers,
+  typingStartedAt,
   renderMessages,
   onActivate,
   onRemove,
@@ -834,6 +842,7 @@ function SplitConversationPane({
               isTyping,
               isCompacting,
               compactionMarkers,
+              typingStartedAt,
             )}
           </div>
         )}
@@ -899,6 +908,7 @@ export function ChatPage() {
   const sessionTitles = useAtomValue(sessionTitlesAtom)
   const splitSessionStates = useAtomValue(splitSessionStatesAtom)
   const sessionRunning = useAtomValue(sessionRunningAtom)
+  const sessionStartedAt = useAtomValue(sessionStartedAtAtom)
 
   const {
     messages,
@@ -1109,6 +1119,7 @@ export function ChatPage() {
     isTyping: boolean,
     isCompacting: boolean,
     completedCompactions: CompactionMarker[],
+    typingStartedAt?: number,
   ) => {
     const filePathAliasesByMessage = new Map<string, Record<string, string>>()
     const filePathAliases: Record<string, string> = {}
@@ -1359,6 +1370,9 @@ export function ChatPage() {
 
       const isStatusGroup = index === statusActivityIndex
       const firstMessageId = item.items[0]?.message.id ?? turnKey
+      const workedDurationMs = isStatusGroup
+        ? lastTurnWorkedMs(renderedMessages)
+        : undefined
       const reasoningCount = item.items.filter(
         ({ message }) => message.kind === "thought",
       ).length
@@ -1385,6 +1399,8 @@ export function ChatPage() {
                 fallbackLabel={item.label}
                 reasoningCount={reasoningCount}
                 toolCount={toolCount}
+                startedAt={typingStartedAt}
+                workedDurationMs={workedDurationMs}
               />
             ) : undefined
           }
@@ -1779,6 +1795,7 @@ export function ChatPage() {
                 isCompacting={isCompacting}
                 compactionMarkers={compactionMarkers}
                 renderMessages={renderMessages}
+                sessionStartedAt={sessionStartedAt}
                 onActivate={(sessionId) => {
                   void switchSession(sessionId)
                 }}
@@ -1809,6 +1826,7 @@ export function ChatPage() {
                     isTyping,
                     isCompacting,
                     compactionMarkers,
+                    sessionStartedAt[activeSessionId],
                   )}
                 </div>
               </div>

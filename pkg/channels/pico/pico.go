@@ -199,6 +199,10 @@ type PicoChannel struct {
 	cancel             context.CancelFunc
 	progress           *channels.ToolFeedbackAnimator
 	deleteMessageFn    func(context.Context, string, string) error
+	// typingStartedAt tracks active turns per session so a refreshed Web UI can
+	// restore the "Working for…" indicator instead of losing it.
+	typingMu        sync.Mutex
+	typingStartedAt map[string]int64
 	// broadcastFn lets tests intercept outbound broadcasts. nil → broadcastToSession.
 	broadcastFn func(chatID string, msg PicoMessage) error
 }
@@ -240,6 +244,7 @@ func NewPicoChannel(
 		},
 		connections:        make(map[string]*picoConn),
 		sessionConnections: make(map[string]map[string]*picoConn),
+		typingStartedAt:    make(map[string]int64),
 	}
 	ch.progress = channels.NewToolFeedbackAnimator(ch.EditMessage)
 	ch.deleteMessageFn = ch.DeleteMessage
@@ -357,6 +362,10 @@ func (c *PicoChannel) Stop(ctx context.Context) error {
 	for _, pc := range c.takeAllConnections() {
 		pc.close()
 	}
+
+	c.typingMu.Lock()
+	clear(c.typingStartedAt)
+	c.typingMu.Unlock()
 
 	if c.cancel != nil {
 		c.cancel()
@@ -601,14 +610,91 @@ func (c *PicoChannel) FinalizeToolFeedbackMessage(ctx context.Context, msg bus.O
 // The returned stop function is always registered and emits the matching
 // activity event when the turn ends.
 func (c *PicoChannel) StartTyping(ctx context.Context, chatID string) (func(), error) {
-	startMsg := newMessage(TypeTypingStart, nil)
+	sessionID := picoSessionID(chatID)
+	startedAt := time.Now().UnixMilli()
+	c.recordTypingStart(sessionID, startedAt)
+
+	startMsg := newMessage(TypeTypingStart, map[string]any{
+		PayloadKeyStartedAt: startedAt,
+	})
 	// No session client is not an error: the all-sessions observer still needs
 	// the start event.
 	_ = c.broadcastToSession(chatID, startMsg)
 	return func() {
+		c.clearTypingStart(sessionID, startedAt)
 		stopMsg := newMessage(TypeTypingStop, nil)
 		c.broadcastToSession(chatID, stopMsg)
 	}, nil
+}
+
+// picoSessionID extracts the Pico session ID from a channel chat ID.
+func picoSessionID(chatID string) string {
+	return strings.TrimPrefix(chatID, "pico:")
+}
+
+func (c *PicoChannel) recordTypingStart(sessionID string, startedAt int64) {
+	if sessionID == "" || sessionID == allSessionsSessionID {
+		return
+	}
+	c.typingMu.Lock()
+	if c.typingStartedAt == nil {
+		c.typingStartedAt = make(map[string]int64)
+	}
+	c.typingStartedAt[sessionID] = startedAt
+	c.typingMu.Unlock()
+}
+
+func (c *PicoChannel) clearTypingStart(sessionID string, startedAt int64) {
+	if sessionID == "" || sessionID == allSessionsSessionID {
+		return
+	}
+	c.typingMu.Lock()
+	if c.typingStartedAt[sessionID] == startedAt {
+		delete(c.typingStartedAt, sessionID)
+	}
+	c.typingMu.Unlock()
+}
+
+func (c *PicoChannel) typingSnapshot() map[string]int64 {
+	c.typingMu.Lock()
+	defer c.typingMu.Unlock()
+	if len(c.typingStartedAt) == 0 {
+		return nil
+	}
+	snapshot := make(map[string]int64, len(c.typingStartedAt))
+	for sessionID, startedAt := range c.typingStartedAt {
+		snapshot[sessionID] = startedAt
+	}
+	return snapshot
+}
+
+// sendTypingSnapshot replays active turn state to a newly connected client so
+// the Web UI keeps showing "Working for…" after a page refresh.
+func (c *PicoChannel) sendTypingSnapshot(pc *picoConn) {
+	if pc == nil {
+		return
+	}
+	if pc.sessionID == allSessionsSessionID {
+		for sessionID, startedAt := range c.typingSnapshot() {
+			activity := newMessage(TypeSessionActivity, map[string]any{
+				PayloadKeyEvent:     TypeTypingStart,
+				PayloadKeyStartedAt: startedAt,
+			})
+			activity.SessionID = sessionID
+			_ = pc.writeJSON(activity)
+		}
+		return
+	}
+	if pc.sessionID == "" {
+		return
+	}
+	if startedAt, ok := c.typingSnapshot()[pc.sessionID]; ok {
+		snapshot := newMessage(TypeTypingStart, map[string]any{
+			PayloadKeyStartedAt: startedAt,
+		})
+		snapshot.SessionID = pc.sessionID
+		_ = pc.writeJSON(snapshot)
+	}
 }
 
 // SetCompactionState implements channels.CompactionStateCapable. It broadcasts
@@ -1126,6 +1212,9 @@ func (c *PicoChannel) broadcastSessionActivity(sessionID string, msg PicoMessage
 	if final, _ := msg.Payload[PayloadKeyFinal].(bool); final {
 		payload[PayloadKeyFinal] = true
 	}
+	if startedAt, ok := msg.Payload[PayloadKeyStartedAt]; ok {
+		payload[PayloadKeyStartedAt] = startedAt
+	}
 	activity := newMessage(TypeSessionActivity, payload)
 	activity.SessionID = sessionID
 
@@ -1233,6 +1322,8 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		"conn_id":    pc.id,
 		"session_id": sessionID,
 	})
+
+	c.sendTypingSnapshot(pc)
 
 	go c.readLoop(pc)
 }

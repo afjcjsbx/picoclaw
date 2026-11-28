@@ -997,6 +997,7 @@ export function sendChatMessage({
         }
       : {}),
   }))
+  setSessionRunning(sessionId, true, Date.now())
 
   if (clearsHistory) {
     // Keep the cached split-pane snapshot in sync with the transcript that
@@ -1034,6 +1035,7 @@ export function sendChatMessage({
     return true
   } catch (error) {
     console.error("Failed to send pico message:", error)
+    setSessionRunning(sessionId, false)
     updateChatStore((prev) => ({
       messages: prev.messages.filter((message) => message.id !== id),
       isTyping: false,

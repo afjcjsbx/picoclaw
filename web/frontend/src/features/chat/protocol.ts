@@ -81,6 +81,22 @@ function parseModelName(payload: Record<string, unknown>): string | undefined {
   return modelName || undefined
 }
 
+function parseStartedAt(
+  payload: Record<string, unknown>,
+  timestamp?: number | string,
+): number | undefined {
+  const raw = payload.started_at
+  const numeric = typeof raw === "number" ? raw : Number(raw)
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return normalizeUnixTimestamp(numeric)
+  }
+  const fallback = Number(timestamp)
+  if (Number.isFinite(fallback) && fallback > 0) {
+    return normalizeUnixTimestamp(fallback)
+  }
+  return undefined
+}
+
 interface ToolResultPayload {
   toolCallId: string
   output: string
@@ -137,10 +153,11 @@ export function handlePicoActivityMessage(message: PicoMessage) {
   const event =
     typeof message.payload?.event === "string" ? message.payload.event : ""
   const isFinal = message.payload?.final === true
+  const startedAt = parseStartedAt(message.payload ?? {}, message.timestamp)
 
   switch (event) {
     case "typing.start":
-      setSessionRunning(sessionId, true)
+      setSessionRunning(sessionId, true, startedAt)
       break
     case "typing.stop":
     case "error":
@@ -320,7 +337,11 @@ export function handlePicoMessage(
     }
 
     case "typing.start":
-      setSessionRunning(expectedSessionId, true)
+      setSessionRunning(
+        expectedSessionId,
+        true,
+        parseStartedAt(payload, message.timestamp),
+      )
       updateSession({ isTyping: true })
       break
 
