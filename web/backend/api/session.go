@@ -376,6 +376,7 @@ type picoJSONLSessionRef struct {
 
 type picoLegacySessionRef struct {
 	ID   string
+	Key  string
 	Path string
 }
 
@@ -541,7 +542,7 @@ func (h *Handler) findLegacyPicoSessions(dir string) ([]picoLegacySessionRef, er
 			continue
 		}
 		seen[sessionID] = struct{}{}
-		refs = append(refs, picoLegacySessionRef{ID: sessionID, Path: path})
+		refs = append(refs, picoLegacySessionRef{ID: sessionID, Key: sess.Key, Path: path})
 	}
 	return refs, nil
 }
@@ -1380,9 +1381,33 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	jsonlRef, jsonlErr := h.findPicoJSONLSession(dir, sessionID)
+	legacyRef, legacyErr := h.findLegacyPicoSession(dir, sessionID)
+	if jsonlErr != nil && legacyErr != nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	// Remove derived Seahorse state before deleting the canonical files. The
+	// launcher may run in a different process from the gateway, so this uses a
+	// one-shot database operation rather than the gateway's in-memory engine.
+	sessionKeys := make(map[string]struct{}, 2)
+	if jsonlErr == nil && jsonlRef.Key != "" {
+		sessionKeys[jsonlRef.Key] = struct{}{}
+	}
+	if legacyErr == nil && legacyRef.Key != "" {
+		sessionKeys[legacyRef.Key] = struct{}{}
+	}
+	for key := range sessionKeys {
+		if err := deleteSeahorseSession(r.Context(), dir, key); err != nil {
+			http.Error(w, "failed to delete session memory", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	removed := false
-	if ref, err := h.findPicoJSONLSession(dir, sessionID); err == nil {
-		base := filepath.Join(dir, sanitizeSessionKey(ref.Key))
+	if jsonlErr == nil {
+		base := filepath.Join(dir, sanitizeSessionKey(jsonlRef.Key))
 		for _, path := range []string{base + ".jsonl", base + ".meta.json"} {
 			if err := os.Remove(path); err != nil {
 				if os.IsNotExist(err) {
@@ -1395,7 +1420,7 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if legacyRef, err := h.findLegacyPicoSession(dir, sessionID); err == nil {
+	if legacyErr == nil {
 		if err := os.Remove(legacyRef.Path); err != nil {
 			if !os.IsNotExist(err) {
 				http.Error(w, "failed to delete session", http.StatusInternalServerError)
