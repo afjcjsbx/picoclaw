@@ -4,13 +4,17 @@ import {
   parseToolCallsValue,
   toolCallsSignature,
 } from "@/features/chat/tool-calls"
-import { parseTokenUsage } from "@/features/chat/usage"
-import type { ChatAttachment, ChatMessage } from "@/store/chat"
+import { parseContextUsage, parseTokenUsage } from "@/features/chat/usage"
+import type { ChatAttachment, ChatMessage, ContextUsage } from "@/store/chat"
 
-const pendingHistoryLoads = new Map<
-  string,
-  Promise<{ messages: ChatMessage[]; start: number; hasMore: boolean }>
->()
+export interface SessionHistoryPage {
+  messages: ChatMessage[]
+  start: number
+  hasMore: boolean
+  contextUsage?: ContextUsage
+}
+
+const pendingHistoryLoads = new Map<string, Promise<SessionHistoryPage>>()
 
 function toChatAttachments({
   media,
@@ -108,45 +112,52 @@ function stripUploadedFiles(content: string) {
 export function loadSessionMessages(
   sessionId: string,
   before?: number,
-): Promise<{ messages: ChatMessage[]; start: number; hasMore: boolean }> {
+): Promise<SessionHistoryPage> {
   const key = JSON.stringify([sessionId, before])
   const pending = pendingHistoryLoads.get(key)
   if (pending) return pending
 
-  const request = getSessionHistory(sessionId, before).then((detail) => ({
-    messages: detail.messages.map((message, index) => {
-      const uploadedFiles =
-        message.role === "user"
-          ? stripUploadedFiles(message.content)
-          : { content: message.content }
-      const attachments = [
-        ...(toChatAttachments({
-          media: message.media,
-          attachments: message.attachments,
-        }) ?? []),
-        ...(uploadedFiles.attachments ?? []),
-      ]
-      const usage = parseTokenUsage({ usage: message.usage })
+  const request = getSessionHistory(sessionId, before).then((detail) => {
+    const contextUsage = parseContextUsage(detail.context_usage)
 
-      return {
-        id: `hist-${detail.start + index}`,
-        role: message.role,
-        content: uploadedFiles.content,
-        kind:
-          message.role === "assistant" ? (message.kind ?? "normal") : undefined,
-        modelName: message.model_name,
-        toolCalls:
-          message.role === "assistant"
-            ? parseToolCallsValue(message.tool_calls)
-            : undefined,
-        attachments: attachments.length > 0 ? attachments : undefined,
-        ...(usage ? { usage } : {}),
-        timestamp: message.created_at ?? detail.updated,
-      }
-    }),
-    start: detail.start,
-    hasMore: detail.start > 0,
-  }))
+    return {
+      messages: detail.messages.map((message, index) => {
+        const uploadedFiles =
+          message.role === "user"
+            ? stripUploadedFiles(message.content)
+            : { content: message.content }
+        const attachments = [
+          ...(toChatAttachments({
+            media: message.media,
+            attachments: message.attachments,
+          }) ?? []),
+          ...(uploadedFiles.attachments ?? []),
+        ]
+        const usage = parseTokenUsage({ usage: message.usage })
+
+        return {
+          id: `hist-${detail.start + index}`,
+          role: message.role,
+          content: uploadedFiles.content,
+          kind:
+            message.role === "assistant"
+              ? (message.kind ?? "normal")
+              : undefined,
+          modelName: message.model_name,
+          toolCalls:
+            message.role === "assistant"
+              ? parseToolCallsValue(message.tool_calls)
+              : undefined,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          ...(usage ? { usage } : {}),
+          timestamp: message.created_at ?? detail.updated,
+        }
+      }),
+      start: detail.start,
+      hasMore: detail.start > 0,
+      ...(contextUsage ? { contextUsage } : {}),
+    }
+  })
   pendingHistoryLoads.set(key, request)
   const clearPending = () => {
     if (pendingHistoryLoads.get(key) === request) {

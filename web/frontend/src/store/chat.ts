@@ -255,7 +255,12 @@ export function updateSplitSessionState(
 
 export function initializeSplitSessionState(
   sessionId: string,
-  history: { messages: ChatMessage[]; start: number; hasMore: boolean },
+  history: {
+    messages: ChatMessage[]
+    start: number
+    hasMore: boolean
+    contextUsage?: ContextUsage
+  },
 ) {
   store.set(splitSessionStatesAtom, (states) =>
     sessionId in states
@@ -269,6 +274,9 @@ export function initializeSplitSessionState(
             compactionMarkers: [],
             historyStart: history.start,
             hasMoreHistory: history.hasMore,
+            ...(history.contextUsage
+              ? { contextUsage: history.contextUsage }
+              : {}),
           },
         },
   )
