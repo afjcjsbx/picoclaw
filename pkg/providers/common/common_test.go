@@ -1264,3 +1264,16 @@ func TestSerializeMessagesWithOptions_NoGeminiFallbackOmitsExtraContent(t *testi
 		t.Fatalf("did not expect extra_content without Gemini fallback, got %s", string(data))
 	}
 }
+
+func TestWireUsageInfoReadsReasoningTokens(t *testing.T) {
+	var u WireUsage
+	body := `{"prompt_tokens":10,"completion_tokens":30,"total_tokens":40,` +
+		`"completion_tokens_details":{"reasoning_tokens":12}}`
+	if err := json.Unmarshal([]byte(body), &u); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	info := u.Info()
+	if info.CompletionTokens != 30 || info.ReasoningTokens != 12 {
+		t.Fatalf("Info() = %+v, want 30 completion tokens including 12 reasoning", info)
+	}
+}

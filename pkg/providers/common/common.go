@@ -346,16 +346,21 @@ func ParseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 // --- Response parsing ---
 
 // WireUsage is an OpenAI-compatible usage object, including the prompt-cache
-// breakdown that OpenAI and OpenRouter report under prompt_tokens_details.
+// breakdown that OpenAI and OpenRouter report under prompt_tokens_details and
+// the reasoning split reported under completion_tokens_details.
 type WireUsage struct {
 	UsageInfo
 	PromptTokensDetails *struct {
 		CachedTokens     int `json:"cached_tokens"`
 		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
 }
 
-// Info converts u to a UsageInfo with the cache breakdown filled in. Nil-safe.
+// Info converts u to a UsageInfo with the cache and reasoning breakdown filled
+// in. Nil-safe.
 func (u *WireUsage) Info() *UsageInfo {
 	if u == nil {
 		return nil
@@ -364,6 +369,9 @@ func (u *WireUsage) Info() *UsageInfo {
 	if d := u.PromptTokensDetails; d != nil {
 		info.CacheReadTokens = d.CachedTokens
 		info.CacheCreationTokens = d.CacheWriteTokens
+	}
+	if d := u.CompletionTokensDetails; d != nil {
+		info.ReasoningTokens = d.ReasoningTokens
 	}
 	return &info
 }

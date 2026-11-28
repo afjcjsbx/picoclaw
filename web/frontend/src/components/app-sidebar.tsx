@@ -1,6 +1,7 @@
 import { IconChevronRight } from "@tabler/icons-react"
 import {
   IconAtom,
+  IconChartBar,
   IconChevronsDown,
   IconChevronsUp,
   IconClock,
@@ -440,6 +441,12 @@ export function AppSidebar({
             title: "navigation.cron",
             url: "/agent/cron",
             icon: IconClock,
+            translateTitle: true,
+          },
+          {
+            title: "navigation.usage",
+            url: "/agent/usage",
+            icon: IconChartBar,
             translateTitle: true,
           },
         ],

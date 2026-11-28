@@ -31,6 +31,10 @@ type Totals struct {
 	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 
+	// ReasoningTokens is already part of OutputTokens. Providers that do not
+	// split reasoning from the answer leave it at zero.
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+
 	// CostUSD sums the costs providers reported. Calls without a reported cost
 	// contribute nothing.
 	CostUSD float64 `json:"cost_usd,omitempty"`
@@ -56,20 +60,35 @@ func (t *Totals) InputBreakdown() string {
 		return line
 	}
 
-	parts := []string{inputShare("fresh", t.FreshInputTokens(), t.InputTokens)}
+	parts := []string{tokenShare("fresh", t.FreshInputTokens(), t.InputTokens)}
 	if t.CacheReadTokens > 0 {
-		parts = append(parts, inputShare("cache read", t.CacheReadTokens, t.InputTokens))
+		parts = append(parts, tokenShare("cache read", t.CacheReadTokens, t.InputTokens))
 	}
 	if t.CacheCreationTokens > 0 {
-		parts = append(parts, inputShare("cache write", t.CacheCreationTokens, t.InputTokens))
+		parts = append(parts, tokenShare("cache write", t.CacheCreationTokens, t.InputTokens))
 	}
 	return line + " — " + strings.Join(parts, " · ")
 }
 
-// inputShare renders a token count with its one-decimal percentage of all
-// input tokens. A nonzero share below 0.1% does not render as 0.0%.
-func inputShare(label string, tokens, input int) string {
-	return label + " " + FormatTokens(tokens) + " (" + formatShare(tokens, input) + ")"
+// OutputBreakdown renders the output token count and, when the provider
+// reported reasoning tokens, the answer/reasoning split with each share of the
+// output tokens.
+func (t *Totals) OutputBreakdown() string {
+	line := FormatTokens(t.OutputTokens) + " tokens"
+	if t.ReasoningTokens == 0 {
+		return line
+	}
+	answer := max(t.OutputTokens-t.ReasoningTokens, 0)
+	return line + " — " + strings.Join([]string{
+		tokenShare("answer", answer, t.OutputTokens),
+		tokenShare("reasoning", t.ReasoningTokens, t.OutputTokens),
+	}, " · ")
+}
+
+// tokenShare renders a token count with its one-decimal percentage of a whole.
+// A nonzero share below 0.1% does not render as 0.0%.
+func tokenShare(label string, tokens, whole int) string {
+	return label + " " + FormatTokens(tokens) + " (" + formatShare(tokens, whole) + ")"
 }
 
 func formatShare(tokens, input int) string {
@@ -92,6 +111,7 @@ func (t *Totals) Merge(other Totals) {
 	t.TotalTokens += other.TotalTokens
 	t.CacheReadTokens += other.CacheReadTokens
 	t.CacheCreationTokens += other.CacheCreationTokens
+	t.ReasoningTokens += other.ReasoningTokens
 	t.CostUSD += other.CostUSD
 }
 
@@ -113,6 +133,7 @@ func (t *Totals) addCall(u providers.UsageInfo) {
 		TotalTokens:         total,
 		CacheReadTokens:     u.CacheReadTokens,
 		CacheCreationTokens: u.CacheCreationTokens,
+		ReasoningTokens:     u.ReasoningTokens,
 		CostUSD:             u.CostUSD,
 	})
 }

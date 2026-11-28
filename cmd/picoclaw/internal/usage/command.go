@@ -13,6 +13,7 @@ type options struct {
 	Session string
 	JSON    bool
 	Limit   int
+	Days    int
 }
 
 // NewUsageCommand builds the `picoclaw usage` command.
@@ -27,7 +28,11 @@ func NewUsageCommand() *cobra.Command {
 The command reads <workspace>/sessions without modifying it, so it can run while
 the gateway is active. Totals are cumulative per session: truncating, compacting,
 or clearing a session's history does not reduce them. Sessions removed by
-pruning are no longer reported.`,
+pruning are no longer reported.
+
+--days adds the usage of the last N days, read from the usage ledger. The ledger
+only holds usage recorded since it was introduced and keeps the spend of
+sessions that were later pruned.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := internal.LoadConfig()
@@ -41,6 +46,7 @@ pruning are no longer reported.`,
 
 	cmd.Flags().StringVarP(&opts.Session, "session", "s", "", "Show only this session key or alias")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Emit machine-readable JSON")
+	cmd.Flags().IntVar(&opts.Days, "days", 0, "Also show usage per day for the last N days (0 disables)")
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "n", 20, "Maximum sessions to list (0 shows all)")
 
 	return cmd
