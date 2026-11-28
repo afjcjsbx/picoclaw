@@ -1,12 +1,19 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/config"
 	picomcp "github.com/sipeed/picoclaw/pkg/mcp"
 )
@@ -268,6 +275,167 @@ func TestConfigAPIPatchCreatesMCPServer(t *testing.T) {
 		strings.Join(server.Args, " ") != "-y example-server" {
 		t.Fatalf("new MCP server was not stored: %#v", server)
 	}
+}
+
+func TestLocalCommandExecutionHelper(t *testing.T) {
+	if os.Getenv("PICOCLAW_LOCAL_EXECUTION_HELPER") != "1" {
+		return
+	}
+	marker := os.Getenv("PICOCLAW_LOCAL_EXECUTION_MARKER")
+	if marker == "" {
+		os.Exit(2)
+	}
+	if err := os.WriteFile(marker, []byte("started"), 0o600); err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func TestConfigAPICannotEnableLocalCommandExecution(t *testing.T) {
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			t.Setenv(config.LocalCommandExecutionEnv, "false")
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.json")
+			marker := filepath.Join(dir, "local-command-started")
+			envFile := filepath.Join(dir, ".env")
+			const secretLine = "PRIVATE_FILE_CONTENT_WITHOUT_EQUALS"
+			if err := os.WriteFile(envFile, []byte(secretLine), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := []string{os.Args[0], "-test.run=^TestLocalCommandExecutionHelper$"}
+			childEnv := map[string]string{
+				"PICOCLAW_LOCAL_EXECUTION_HELPER": "1",
+				"PICOCLAW_LOCAL_EXECUTION_MARKER": marker,
+				config.LocalCommandExecutionEnv:   "true",
+			}
+
+			cfg := config.DefaultConfig()
+			cfg.Tools.MCP.Enabled = true
+			if err := config.SaveConfig(configPath, cfg); err != nil {
+				t.Fatal(err)
+			}
+
+			payload := map[string]any{
+				"allow_local_command_execution": true,
+				"tools": map[string]any{
+					"mcp": map[string]any{
+						"enabled": true,
+						"servers": map[string]any{
+							"remote": map[string]any{
+								"enabled":  true,
+								"type":     "stdio",
+								"command":  command[0],
+								"args":     command[1:],
+								"env":      childEnv,
+								"env_file": envFile,
+							},
+						},
+					},
+				},
+				"hooks": map[string]any{
+					"enabled": true,
+					"processes": map[string]any{
+						"remote": map[string]any{
+							"enabled": true,
+							"command": command,
+							"env":     childEnv,
+						},
+					},
+				},
+			}
+			if method == http.MethodPut {
+				data, err := json.Marshal(cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var full map[string]any
+				if err := json.Unmarshal(data, &full); err != nil {
+					t.Fatal(err)
+				}
+				for key, value := range payload {
+					full[key] = value
+				}
+				payload = full
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			handler := NewHandler(configPath)
+			mux := http.NewServeMux()
+			handler.registerConfigRoutes(mux)
+			recorder := httptest.NewRecorder()
+			mux.ServeHTTP(recorder, httptest.NewRequest(method, "/api/config", bytes.NewReader(body)))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("%s status = %d, body=%s", method, recorder.Code, recorder.Body.String())
+			}
+			if config.LocalCommandExecutionAllowed() {
+				t.Fatalf("%s config write enabled parent-process command execution", method)
+			}
+
+			stored, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() after %s error = %v", method, err)
+			}
+			server := stored.Tools.MCP.Servers["remote"]
+
+			nativeManager := picomcp.NewManager()
+			defer nativeManager.Close()
+			err = nativeManager.LoadFromMCPConfig(t.Context(), stored.Tools.MCP, stored.WorkspacePath())
+			requireLocalCommandExecutionDisabled(t, err)
+			if strings.Contains(err.Error(), secretLine) {
+				t.Fatalf("native MCP exposed env_file contents: %v", err)
+			}
+			requireLocalExecutionMarkerAbsent(t, marker)
+
+			pluginManager := picomcp.NewManager()
+			defer pluginManager.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			err = pluginManager.ConnectPluginServer(ctx, "remote", server, picomcp.PluginRuntimeOptions{
+				Lifetime:    ctx,
+				Environment: localCommandTestEnv(server.Env),
+				Timeout:     time.Second,
+			})
+			requireLocalCommandExecutionDisabled(t, err)
+			requireLocalExecutionMarkerAbsent(t, marker)
+
+			hookCfg := stored.Hooks.Processes["remote"]
+			hook, err := agent.NewProcessHook(t.Context(), "remote", agent.ProcessHookOptions{
+				Command: hookCfg.Command,
+				Env:     localCommandTestEnv(hookCfg.Env),
+			})
+			if hook != nil {
+				_ = hook.Close()
+			}
+			requireLocalCommandExecutionDisabled(t, err)
+			requireLocalExecutionMarkerAbsent(t, marker)
+		})
+	}
+}
+
+func requireLocalCommandExecutionDisabled(t *testing.T, err error) {
+	t.Helper()
+	if !errors.Is(err, config.ErrLocalCommandExecutionDisabled) {
+		t.Fatalf("error = %v, want local command execution disabled", err)
+	}
+}
+
+func requireLocalExecutionMarkerAbsent(t *testing.T, marker string) {
+	t.Helper()
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("disabled local command executed: marker stat error = %v", err)
+	}
+}
+
+func localCommandTestEnv(values map[string]string) []string {
+	env := make([]string, 0, len(values))
+	for key, value := range values {
+		env = append(env, key+"="+value)
+	}
+	return env
 }
 
 func assertStoredMCPSecrets(t *testing.T, configPath, name string) {

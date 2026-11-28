@@ -28,6 +28,7 @@ import (
 )
 
 func TestOAuthLoginRefreshAndLogout(t *testing.T) {
+	t.Setenv(config.LocalCommandExecutionEnv, "false")
 	for _, clientID := range []string{"", "registered-client"} {
 		for _, transport := range []string{"http", "sse"} {
 			t.Run(

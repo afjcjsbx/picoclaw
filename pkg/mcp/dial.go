@@ -125,13 +125,16 @@ func buildNativeStdioTransport(
 	name string,
 	cfg config.MCPServerConfig,
 ) (mcp.Transport, error) {
+	if err := config.RequireLocalCommandExecution(); err != nil {
+		return nil, err
+	}
 	if cfg.Command == "" {
 		return nil, fmt.Errorf("command is required for stdio transport")
 	}
 	logger.DebugCF("mcp", "Using stdio transport",
 		map[string]any{
 			"server":  name,
-			"command": cfg.Command,
+			"command": newServerRedactor(cfg).Redact(cfg.Command),
 		})
 
 	cmd := exec.CommandContext(ctx, fileutil.ExpandHome(cfg.Command), cfg.Args...)
@@ -144,7 +147,7 @@ func buildNativeStdioTransport(
 	if cfg.EnvFile != "" {
 		envVars, err := loadEnvFile(cfg.EnvFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load env file %s: %w", cfg.EnvFile, err)
+			return nil, fmt.Errorf("failed to load env file %q: %w", cfg.EnvFile, err)
 		}
 		for k, v := range envVars {
 			envMap[k] = v

@@ -19,6 +19,8 @@ Isolation applies to child processes only. The main `picoclaw` process keeps run
 
 Known exception: the Linux USB device monitor spawns `udevadm` directly because it only observes host devices; it is outside the child-process isolation scope.
 
+Isolation is separate from permission to launch configured local commands. MCP `stdio` servers and process hooks remain disabled until `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` is set in the PicoClaw process environment; see [Local Command Execution from Configuration](../guides/configuration.md#local-command-execution-from-configuration).
+
 ## Quick Start
 
 On Linux, install bubblewrap first:

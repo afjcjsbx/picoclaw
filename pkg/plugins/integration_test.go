@@ -77,6 +77,7 @@ func writeTestFile(t *testing.T, root, path string, data []byte) {
 
 func fixturePlugin(t *testing.T) string {
 	t.Helper()
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 	root, _ := canonicalRoot(t.TempDir())
 	writeTestFile(t, root, "plugin.json", manifestJSON(nil))
 	writeTestFile(

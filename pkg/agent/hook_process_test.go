@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +23,13 @@ func TestProcessHook_HelperProcess(t *testing.T) {
 	if os.Getenv("PICOCLAW_HOOK_HELPER") != "1" {
 		return
 	}
+	if marker := os.Getenv("PICOCLAW_HOOK_EXECUTION_MARKER"); marker != "" {
+		if err := os.WriteFile(marker, []byte("started"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if err := runProcessHookHelper(); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
@@ -36,7 +44,7 @@ func TestAgentLoop_MountProcessHook_LLMAndObserver(t *testing.T) {
 
 	eventLog := filepath.Join(t.TempDir(), "events.log")
 	if err := al.MountProcessHook(context.Background(), "ipc-llm", ProcessHookOptions{
-		Command:      processHookHelperCommand(),
+		Command:      processHookHelperCommand(t),
 		Env:          processHookHelperEnv("rewrite", eventLog),
 		Observe:      true,
 		InterceptLLM: true,
@@ -77,7 +85,7 @@ func TestAgentLoop_MountProcessHook_ToolRewrite(t *testing.T) {
 
 	al.RegisterTool(&echoTextTool{})
 	if err := al.MountProcessHook(context.Background(), "ipc-tool", ProcessHookOptions{
-		Command:       processHookHelperCommand(),
+		Command:       processHookHelperCommand(t),
 		Env:           processHookHelperEnv("rewrite", ""),
 		InterceptTool: true,
 	}); err != nil {
@@ -140,7 +148,7 @@ func TestAgentLoop_MountProcessHook_ApprovalDeny(t *testing.T) {
 	defer cleanup()
 
 	if err := al.MountProcessHook(context.Background(), "ipc-approval", ProcessHookOptions{
-		Command:     processHookHelperCommand(),
+		Command:     processHookHelperCommand(t),
 		Env:         processHookHelperEnv("deny", ""),
 		ApproveTool: true,
 	}); err != nil {
@@ -191,6 +199,7 @@ func TestAgentLoop_MountProcessHook_IsolationSupportsRelativeDirAndCommand(t *te
 	if runtime.GOOS != "linux" {
 		t.Skip("linux-only isolation path handling")
 	}
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 
 	provider := &llmHookTestProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)
@@ -257,7 +266,44 @@ func TestAgentLoop_MountProcessHook_IsolationSupportsRelativeDirAndCommand(t *te
 	}
 }
 
-func processHookHelperCommand() []string {
+func TestNewProcessHook_RequiresLocalCommandExecution(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "empty"},
+		{name: "false", value: "false"},
+		{name: "invalid", value: "invalid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "hook-started")
+			command := processHookHelperCommand(t)
+			t.Setenv(config.LocalCommandExecutionEnv, tt.value)
+
+			hook, err := NewProcessHook(t.Context(), "disabled", ProcessHookOptions{
+				Command: command,
+				Env: []string{
+					"PICOCLAW_HOOK_HELPER=1",
+					"PICOCLAW_HOOK_EXECUTION_MARKER=" + marker,
+				},
+			})
+			if hook != nil {
+				_ = hook.Close()
+			}
+			if !errors.Is(err, config.ErrLocalCommandExecutionDisabled) {
+				t.Fatalf("NewProcessHook() error = %v, want local command execution disabled", err)
+			}
+			if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+				t.Fatalf("disabled process hook executed: marker stat error = %v", statErr)
+			}
+		})
+	}
+}
+
+func processHookHelperCommand(t *testing.T) []string {
+	t.Helper()
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 	return []string{os.Args[0], "-test.run=TestProcessHook_HelperProcess", "--"}
 }
 

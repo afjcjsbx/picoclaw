@@ -75,6 +75,9 @@ Oversized MCP text results are bounded, not dropped: the model keeps the first 4
 
 ## Transport Behavior
 
+> [!IMPORTANT]
+> `stdio` servers are disabled by default for security. Set `PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=true` in the PicoClaw process environment to allow configured commands and `env_file` loading. This is an environment-only opt-in: saving a server through `config.json` or the dashboard cannot enable it. Remote `http`/`sse` servers are unaffected. See [Local Command Execution from Configuration](../guides/configuration.md#local-command-execution-from-configuration).
+
 - If `type` is omitted, transport is auto-detected:
     - `url` is set → `sse`
     - `command` is set → `stdio`

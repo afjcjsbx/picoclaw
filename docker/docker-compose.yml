@@ -11,6 +11,9 @@ services:
     container_name: picoclaw-agent
     profiles:
       - agent
+    environment:
+      # Opt in only when trusted config may launch MCP stdio servers or hooks.
+      - PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=${PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION:-false}
     # Uncomment to access host network; leave commented unless needed.
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
@@ -33,6 +36,9 @@ services:
     restart: unless-stopped
     profiles:
       - gateway
+    environment:
+      # Opt in only when trusted config may launch MCP stdio servers or hooks.
+      - PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=${PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION:-false}
     # Uncomment to access host network; leave commented unless needed.
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
@@ -54,6 +60,8 @@ services:
       - launcher
     environment:
       - PICOCLAW_GATEWAY_HOST=0.0.0.0
+      # The dashboard cannot toggle this; set it in the host environment.
+      - PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=${PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION:-false}
       # Dashboard auth uses a bcrypt password set at /launcher-setup on first run.
       # PICOCLAW_LAUNCHER_HOST overrides the launcher bind address if needed.
     ports:

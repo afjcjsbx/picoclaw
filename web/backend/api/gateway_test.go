@@ -134,9 +134,11 @@ func TestPicoGatewayProtocol(t *testing.T) {
 }
 
 type gatewayStartEnvSnapshot struct {
-	GatewayHost    string `json:"gateway_host"`
-	GatewayHostSet bool   `json:"gateway_host_set"`
-	ConfigPath     string `json:"config_path"`
+	GatewayHost              string `json:"gateway_host"`
+	GatewayHostSet           bool   `json:"gateway_host_set"`
+	ConfigPath               string `json:"config_path"`
+	LocalCommandExecution    string `json:"local_command_execution"`
+	LocalCommandExecutionSet bool   `json:"local_command_execution_set"`
 }
 
 func TestGatewayStartHelperProcess(t *testing.T) {
@@ -152,10 +154,13 @@ func TestGatewayStartHelperProcess(t *testing.T) {
 	}
 
 	host, ok := os.LookupEnv(config.EnvGatewayHost)
+	localExecution, localExecutionSet := os.LookupEnv(config.LocalCommandExecutionEnv)
 	raw, err := json.Marshal(gatewayStartEnvSnapshot{
-		GatewayHost:    host,
-		GatewayHostSet: ok,
-		ConfigPath:     os.Getenv(config.EnvConfig),
+		GatewayHost:              host,
+		GatewayHostSet:           ok,
+		ConfigPath:               os.Getenv(config.EnvConfig),
+		LocalCommandExecution:    localExecution,
+		LocalCommandExecutionSet: localExecutionSet,
 	})
 	if err != nil {
 		_, _ = io.WriteString(os.Stderr, err.Error())
@@ -257,6 +262,20 @@ func TestStartGatewayLocked_ForwardsLauncherHostOverrideToGatewayEnv(t *testing.
 	}
 	if snapshot.ConfigPath != h.configPath {
 		t.Fatalf("config env = %q, want %q", snapshot.ConfigPath, h.configPath)
+	}
+}
+
+func TestStartGatewayLocked_ForwardsLocalCommandExecutionOptIn(t *testing.T) {
+	h := newGatewayStartTestHandler(t)
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
+
+	snapshot := startGatewayAndCaptureEnv(t, h)
+	if !snapshot.LocalCommandExecutionSet || snapshot.LocalCommandExecution != "true" {
+		t.Fatalf(
+			"gateway local command execution env = %q (set=%v), want true",
+			snapshot.LocalCommandExecution,
+			snapshot.LocalCommandExecutionSet,
+		)
 	}
 }
 

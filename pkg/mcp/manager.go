@@ -34,6 +34,10 @@ const mcpMaxConcurrentConnect = 4
 // Lines starting with # are comments
 // Empty lines are ignored
 func loadEnvFile(path string) (map[string]string, error) {
+	if err := config.RequireLocalCommandExecution(); err != nil {
+		return nil, err
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open env file: %w", err)
@@ -56,7 +60,7 @@ func loadEnvFile(path string) (map[string]string, error) {
 		// Parse KEY=value
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid format at line %d: %s", lineNum, line)
+			return nil, fmt.Errorf("invalid format at line %d", lineNum)
 		}
 
 		key := strings.TrimSpace(parts[0])
@@ -405,17 +409,22 @@ func connectServerWithOAuth(
 	cfg config.MCPServerConfig,
 	handler auth.OAuthHandler,
 ) (*ServerConnection, error) {
-	logger.InfoCF("mcp", "Connecting to MCP server",
-		map[string]any{
-			"server":     name,
-			"command":    cfg.Command,
-			"args_count": len(cfg.Args),
-		})
-
 	transportType := config.EffectiveMCPTransportType(cfg)
 	if transportType == "" {
 		return nil, fmt.Errorf("either URL or command must be provided")
 	}
+	if transportType == "stdio" {
+		if err := config.RequireLocalCommandExecution(); err != nil {
+			return nil, err
+		}
+	}
+
+	logger.InfoCF("mcp", "Connecting to MCP server",
+		map[string]any{
+			"server":     name,
+			"command":    newServerRedactor(cfg).Redact(cfg.Command),
+			"args_count": len(cfg.Args),
+		})
 
 	var transport mcp.Transport
 	switch transportType {

@@ -46,6 +46,13 @@ const (
 	// exec tool.
 	// Default: "picoclaw"
 	EnvServiceName = "PICOCLAW_SERVICE_NAME"
+
+	// LocalCommandExecutionEnv is the environment-only opt-in for configured
+	// MCP stdio commands, process hooks, and MCP env_file loading. It must not
+	// be exposed as a config field: dashboard users can write config.json but
+	// cannot change the parent process environment.
+	// Default: disabled
+	LocalCommandExecutionEnv = "PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION"
 )
 
 func GetHome() string {

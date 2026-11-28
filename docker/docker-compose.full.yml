@@ -10,6 +10,9 @@ services:
     container_name: picoclaw-agent-full
     profiles:
       - agent
+    environment:
+      # Required for configured MCP stdio servers; keep false unless trusted.
+      - PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=${PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION:-false}
     volumes:
       - ../config/config.json:/root/.picoclaw/config.json:ro
       - picoclaw-workspace:/root/.picoclaw/workspace
@@ -30,6 +33,9 @@ services:
     restart: unless-stopped
     profiles:
       - gateway
+    environment:
+      # Required for configured MCP stdio servers; keep false unless trusted.
+      - PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION=${PICOCLAW_ALLOW_LOCAL_COMMAND_EXECUTION:-false}
     volumes:
       # Configuration file
       - ../config/config.json:/root/.picoclaw/config.json:ro

@@ -705,6 +705,7 @@ func TestPluginMCPHooksWithDifferentProviderSchema(t *testing.T) {
 }
 
 func TestAgentPluginsHookLifecycle(t *testing.T) {
+	t.Setenv(config.LocalCommandExecutionEnv, "true")
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 	defer al.Close()

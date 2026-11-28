@@ -63,6 +63,9 @@ func (m *Manager) ConnectPluginServer(
 	transportType := config.NormalizeMCPTransportType(cfg.Type)
 	switch transportType {
 	case "stdio":
+		if err := config.RequireLocalCommandExecution(); err != nil {
+			return err
+		}
 		cmd := exec.CommandContext(sessionCtx, cfg.Command, cfg.Args...)
 		cmd.Dir = opts.Directory
 		cmd.Stderr = opts.Stderr
