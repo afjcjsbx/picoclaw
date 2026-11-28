@@ -2168,8 +2168,13 @@ func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) st
 	// Use FilePath as filename for better identification. utils.DownloadFile
 	// applies the shared HTTP retry policy (utils.DoRequestWithRetry) internally.
 	filename := file.FilePath + ext
+	var proxyURL string
+	if c.tgCfg != nil {
+		proxyURL = c.tgCfg.Proxy
+	}
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix:        "telegram",
+		ProxyURL:            proxyURL,
 		BlockPrivateTargets: c.blockPrivateMediaDownloads(),
 	})
 }

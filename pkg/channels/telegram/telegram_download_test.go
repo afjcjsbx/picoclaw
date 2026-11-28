@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,6 +206,87 @@ func TestDownloadFile_RetriesTransientGetFileFailure(t *testing.T) {
 	require.NotEmpty(t, path, "download should recover after a transient getFile failure")
 	t.Cleanup(func() { _ = os.Remove(path) })
 	require.GreaterOrEqual(t, getFileCalls, 2)
+}
+
+// TestDownloadFile_RoutesAttachmentThroughConfiguredProxy ensures the channel
+// proxy applies to the file download as well as the Bot API calls. A separate
+// client is used for attachments, so forgetting to forward the proxy makes
+// getFile succeed while the media request connects directly.
+func TestDownloadFile_RoutesAttachmentThroughConfiguredProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("ALL_PROXY", "")
+	t.Setenv("all_proxy", "")
+
+	const attachment = "audio-bytes"
+	var directDownloads atomic.Int32
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/file/bot") {
+			directDownloads.Add(1)
+			_, _ = w.Write([]byte(attachment))
+			return
+		}
+		t.Errorf("unexpected origin request: %s", r.URL.String())
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer origin.Close()
+
+	var proxyDownloads atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getMe"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"result": map[string]any{
+					"id":         123456,
+					"is_bot":     true,
+					"first_name": "Test",
+					"username":   "test_bot",
+				},
+			})
+		case strings.HasSuffix(r.URL.Path, "/getFile"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"result": map[string]any{
+					"file_id":        "voice-file",
+					"file_unique_id": "uniq",
+					"file_path":      "voice/file_1.oga",
+				},
+			})
+		case strings.Contains(r.URL.Path, "/file/bot"):
+			proxyDownloads.Add(1)
+			_, _ = w.Write([]byte(attachment))
+		default:
+			t.Errorf("unexpected proxy request: %s", r.URL.String())
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer proxy.Close()
+
+	ch, err := NewTelegramChannel(
+		&config.Channel{Type: config.ChannelTelegram, Enabled: true},
+		&config.TelegramSettings{
+			Token:   *config.NewSecureString(testToken),
+			BaseURL: origin.URL,
+			Proxy:   proxy.URL,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	path := ch.downloadFile(context.Background(), "voice-file", ".ogg")
+	require.NotEmpty(t, path)
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, attachment, string(content))
+	require.Equal(t, int32(1), proxyDownloads.Load(), "attachment must use the channel proxy")
+	require.Zero(t, directDownloads.Load(), "attachment must not connect directly to the origin")
 }
 
 // TestHandleMessage_NotifiesUserWhenVoiceDownloadFails pins the silent-drop bug:
