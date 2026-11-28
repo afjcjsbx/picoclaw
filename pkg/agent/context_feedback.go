@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/channels"
@@ -27,7 +28,7 @@ func (al *AgentLoop) notifyContextFeedback(ts *turnState, content string) {
 	if al.cfg == nil || !al.cfg.Agents.Defaults.IsToolFeedbackEnabled() {
 		return
 	}
-	if ts == nil || ts.channel == "" || ts.opts.SuppressToolFeedback {
+	if ts == nil || ts.agent == nil || ts.channel == "" || ts.opts.SuppressToolFeedback {
 		return
 	}
 
@@ -59,6 +60,62 @@ func (al *AgentLoop) notifyContextFeedbackFromCtx(ctx context.Context, sessionKe
 		ts = al.getActiveTurnState(sessionKey)
 	}
 	al.notifyContextFeedback(ts, content)
+}
+
+// notifyCompactionStateFromCtx resolves the active turn for the session (from
+// ctx when available, otherwise from the active turn registry) and forwards an
+// ephemeral context-compaction state update to the turn's channel.
+func (al *AgentLoop) notifyCompactionStateFromCtx(
+	ctx context.Context,
+	sessionKey string,
+	state channels.CompactionState,
+) {
+	if al == nil || al.channelManager == nil {
+		return
+	}
+	ts := turnStateFromContext(ctx)
+	if ts == nil {
+		ts = al.getActiveTurnState(sessionKey)
+	}
+	al.notifyCompactionState(ts, state)
+}
+
+// notifyCompactionState forwards the lifecycle state for a compaction run to
+// the turn's channel.
+func (al *AgentLoop) notifyCompactionState(ts *turnState, state channels.CompactionState) {
+	if ts == nil {
+		return
+	}
+	al.notifyCompactionStateForTarget(ts.channel, ts.chatID, state)
+}
+
+// notifyCompactionStateForTarget delivers the compaction lifecycle state to the
+// channel that can render it. Delivering directly to the channel, instead of
+// through the outbound message bus, keeps the UI state update out of the chat
+// message stream and away from channels that do not implement
+// channels.CompactionStateCapable. It is intentionally independent of the
+// tool-feedback setting: the indicator is a UI state signal, not a progress
+// card.
+func (al *AgentLoop) notifyCompactionStateForTarget(channel, chatID string, state channels.CompactionState) {
+	if al == nil || al.channelManager == nil {
+		return
+	}
+	channel = strings.TrimSpace(channel)
+	chatID = strings.TrimSpace(chatID)
+	if channel == "" || chatID == "" {
+		return
+	}
+	ch, ok := al.channelManager.GetChannel(channel)
+	if !ok || ch == nil {
+		return
+	}
+	capable, ok := ch.(channels.CompactionStateCapable)
+	if !ok {
+		return
+	}
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = capable.SetCompactionState(notifyCtx, chatID, state)
 }
 
 func formatContextSummarizeFeedback(summarized, kept int) string {

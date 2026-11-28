@@ -14,6 +14,29 @@ type TypingCapable interface {
 	StartTyping(ctx context.Context, chatID string) (stop func(), err error)
 }
 
+// CompactionState is the lifecycle state reported for an in-conversation
+// context-compaction indicator.
+type CompactionState string
+
+const (
+	// CompactionStateRunning means context summarization is in progress.
+	CompactionStateRunning CompactionState = "running"
+	// CompactionStateCompleted means a compaction finished and changed the
+	// stored context.
+	CompactionStateCompleted CompactionState = "completed"
+	// CompactionStateIdle means the compaction finished without producing a
+	// summary (nothing to compact, throttled, or failed).
+	CompactionStateIdle CompactionState = "idle"
+)
+
+// CompactionStateCapable — channels that can render an in-conversation
+// context-compaction indicator. The agent forwards compaction lifecycle
+// updates only to channels implementing this interface; other channels are
+// unaffected and never receive the state update as a chat message.
+type CompactionStateCapable interface {
+	SetCompactionState(ctx context.Context, chatID string, state CompactionState) error
+}
+
 // MessageEditor — channels that can edit an existing message.
 // messageID is always string; channels convert platform-specific types internally.
 type MessageEditor interface {

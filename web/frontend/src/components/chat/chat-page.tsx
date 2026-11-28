@@ -37,6 +37,7 @@ import {
   type ChatInputDisabledReason,
 } from "@/components/chat/chat-composer"
 import { ChatEmptyState } from "@/components/chat/chat-empty-state"
+import { CompactionIndicator } from "@/components/chat/compaction-indicator"
 import { ConversationNavigator } from "@/components/chat/conversation-navigator"
 import { FilePreviewPanel } from "@/components/chat/file-preview-panel"
 import { ModelSelector } from "@/components/chat/model-selector"
@@ -92,6 +93,7 @@ import { useSlashCommands } from "@/hooks/use-slash-commands"
 import type {
   ChatAttachment,
   ChatMessage,
+  CompactionMarker,
   ConnectionState,
   SplitLayout,
   SplitLayoutSizes,
@@ -534,11 +536,15 @@ interface SplitConversationViewProps {
   splitSessionStates: Record<string, SplitSessionState>
   messages: ChatMessage[]
   isTyping: boolean
+  isCompacting: boolean
+  compactionMarkers: CompactionMarker[]
   renderMessages: (
     messages: ChatMessage[],
     sessionId: string,
     historyStart: number,
     isTyping: boolean,
+    isCompacting: boolean,
+    compactionMarkers: CompactionMarker[],
   ) => React.ReactNode
   onActivate: (sessionId: string) => void
   onRemove: (sessionId: string) => void
@@ -557,6 +563,8 @@ function SplitConversationView({
   splitSessionStates,
   messages,
   isTyping,
+  isCompacting,
+  compactionMarkers,
   renderMessages,
   onActivate,
   onRemove,
@@ -663,6 +671,16 @@ function SplitConversationView({
                 ? isTyping
                 : (splitSessionStates[sessionId]?.isTyping ?? false)
             }
+            isCompacting={
+              isActive
+                ? isCompacting
+                : (splitSessionStates[sessionId]?.isCompacting ?? false)
+            }
+            compactionMarkers={
+              isActive
+                ? compactionMarkers
+                : (splitSessionStates[sessionId]?.compactionMarkers ?? [])
+            }
             renderMessages={renderMessages}
             onActivate={onActivate}
             onRemove={onRemove}
@@ -701,6 +719,8 @@ interface SplitConversationPaneProps {
   isLoaded: boolean
   isActive: boolean
   isTyping: boolean
+  isCompacting: boolean
+  compactionMarkers: CompactionMarker[]
   renderMessages: SplitConversationViewProps["renderMessages"]
   onActivate: SplitConversationViewProps["onActivate"]
   onRemove: SplitConversationViewProps["onRemove"]
@@ -721,6 +741,8 @@ function SplitConversationPane({
   isLoaded,
   isActive,
   isTyping,
+  isCompacting,
+  compactionMarkers,
   renderMessages,
   onActivate,
   onRemove,
@@ -736,7 +758,7 @@ function SplitConversationPane({
     if (isLoaded && stickToBottomRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [isLoaded, messages, isTyping])
+  }, [isLoaded, messages, isTyping, isCompacting, compactionMarkers])
 
   return (
     <section
@@ -800,8 +822,19 @@ function SplitConversationPane({
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-6">
-            {messages.length === 0 && !isTyping && emptyContent}
-            {renderMessages(messages, sessionId, historyStart, isTyping)}
+            {messages.length === 0 &&
+              !isTyping &&
+              !isCompacting &&
+              compactionMarkers.length === 0 &&
+              emptyContent}
+            {renderMessages(
+              messages,
+              sessionId,
+              historyStart,
+              isTyping,
+              isCompacting,
+              compactionMarkers,
+            )}
           </div>
         )}
       </div>
@@ -871,6 +904,8 @@ export function ChatPage() {
     messages,
     connectionState,
     isTyping,
+    isCompacting,
+    compactionMarkers,
     activeSessionId,
     historyStart,
     hasHydratedActiveSession,
@@ -1072,6 +1107,8 @@ export function ChatPage() {
     sessionId: string,
     start: number,
     isTyping: boolean,
+    isCompacting: boolean,
+    completedCompactions: CompactionMarker[],
   ) => {
     const filePathAliasesByMessage = new Map<string, Record<string, string>>()
     const filePathAliases: Record<string, string> = {}
@@ -1145,6 +1182,9 @@ export function ChatPage() {
           label: string
           startIndex: number
         }
+      | {
+          type: "compaction"
+        }
     > = []
 
     visibleMessages.forEach((item, index) => {
@@ -1187,7 +1227,14 @@ export function ChatPage() {
           : lastIndex,
       -1,
     )
-    if (statusActivityIndex < 0 && (lastUserIndex >= 0 || isTyping)) {
+    // While compacting, the divider below conveys progress on its own. Avoid
+    // also mounting an empty "Working for…" row so the transcript matches the
+    // single centered compaction indicator.
+    if (
+      statusActivityIndex < 0 &&
+      (lastUserIndex >= 0 || isTyping) &&
+      !isCompacting
+    ) {
       renderItems.push({
         type: "activity",
         items: [],
@@ -1195,6 +1242,9 @@ export function ChatPage() {
         startIndex: visibleMessages.length,
       })
       statusActivityIndex = renderItems.length - 1
+    }
+    if (isCompacting) {
+      renderItems.push({ type: "compaction" })
     }
 
     const renderMessage = (
@@ -1264,8 +1314,48 @@ export function ChatPage() {
       )
     }
 
-    return renderItems.map((item, index) => {
-      if (item.type === "message") return renderMessage(item.item)
+    const markersByAnchor = new Map<string, CompactionMarker[]>()
+    const markersAtTop: CompactionMarker[] = []
+    for (const marker of completedCompactions) {
+      if (marker.afterMessageId) {
+        const anchored = markersByAnchor.get(marker.afterMessageId) ?? []
+        anchored.push(marker)
+        markersByAnchor.set(marker.afterMessageId, anchored)
+      } else {
+        markersAtTop.push(marker)
+      }
+    }
+
+    const renderedNodes: React.ReactNode[] = markersAtTop.map((marker) => (
+      <CompactionIndicator key={marker.id} phase="completed" />
+    ))
+    const pushMarkersAfterMessages = (messageIds: string[]) => {
+      for (const messageId of messageIds) {
+        const anchored = markersByAnchor.get(messageId)
+        if (!anchored) continue
+        for (const marker of anchored) {
+          renderedNodes.push(
+            <CompactionIndicator key={marker.id} phase="completed" />,
+          )
+        }
+      }
+    }
+
+    renderItems.forEach((item, index) => {
+      if (item.type === "message") {
+        renderedNodes.push(renderMessage(item.item))
+        pushMarkersAfterMessages([item.item.message.id])
+        return
+      }
+      if (item.type === "compaction") {
+        renderedNodes.push(
+          <CompactionIndicator
+            key={`compaction-${sessionId}`}
+            phase="running"
+          />,
+        )
+        return
+      }
 
       const isStatusGroup = index === statusActivityIndex
       const firstMessageId = item.items[0]?.message.id ?? turnKey
@@ -1280,7 +1370,7 @@ export function ChatPage() {
             : 0),
         0,
       )
-      return (
+      renderedNodes.push(
         <AssistantActivityGroup
           key={
             isStatusGroup ? `activity-${turnKey}` : `activity-${firstMessageId}`
@@ -1288,7 +1378,7 @@ export function ChatPage() {
           label={item.label}
           isActive={isStatusGroup && isTyping}
           status={
-            isStatusGroup ? (
+            isStatusGroup && !isCompacting ? (
               <TypingIndicator
                 key={sessionId}
                 isTyping={isTyping}
@@ -1300,9 +1390,12 @@ export function ChatPage() {
           }
         >
           {item.items.map((activityItem) => renderMessage(activityItem, true))}
-        </AssistantActivityGroup>
+        </AssistantActivityGroup>,
       )
+      pushMarkersAfterMessages(item.items.map(({ message }) => message.id))
     })
+
+    return renderedNodes
   }
 
   const syncScrollState = (element: HTMLDivElement) => {
@@ -1338,7 +1431,15 @@ export function ChatPage() {
       }
       syncScrollState(activeScroller)
     }
-  }, [messages, isTyping, isAtBottom, activeSplitGroup, getActiveScroller])
+  }, [
+    messages,
+    isTyping,
+    isCompacting,
+    compactionMarkers,
+    isAtBottom,
+    activeSplitGroup,
+    getActiveScroller,
+  ])
 
   const handleSend = () => {
     if ((!input.trim() && attachments.length === 0) || !canInput) return
@@ -1675,6 +1776,8 @@ export function ChatPage() {
                 splitSessionStates={splitSessionStates}
                 messages={messages}
                 isTyping={isTyping}
+                isCompacting={isCompacting}
+                compactionMarkers={compactionMarkers}
                 renderMessages={renderMessages}
                 onActivate={(sessionId) => {
                   void switchSession(sessionId)
@@ -1694,12 +1797,18 @@ export function ChatPage() {
                 className="chat-scroll-fade min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-4 md:px-8 lg:px-24 xl:px-48"
               >
                 <div className="mx-auto flex w-full max-w-[49.5rem] flex-col gap-8">
-                  {messages.length === 0 && !isTyping && activeEmptyState}
+                  {messages.length === 0 &&
+                    !isTyping &&
+                    !isCompacting &&
+                    compactionMarkers.length === 0 &&
+                    activeEmptyState}
                   {renderMessages(
                     messages,
                     activeSessionId,
                     historyStart,
                     isTyping,
+                    isCompacting,
+                    compactionMarkers,
                   )}
                 </div>
               </div>

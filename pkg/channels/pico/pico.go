@@ -611,6 +611,18 @@ func (c *PicoChannel) StartTyping(ctx context.Context, chatID string) (func(), e
 	}, nil
 }
 
+// SetCompactionState implements channels.CompactionStateCapable. It broadcasts
+// an ephemeral session-scoped state update so the Web UI can render a
+// "Compacting..." divider while context summarization is running and a
+// "Context compacted" marker once it finishes.
+func (c *PicoChannel) SetCompactionState(ctx context.Context, chatID string, state channels.CompactionState) error {
+	msg := newMessage(TypeSessionCompaction, map[string]any{
+		PayloadKeyCompactionPhase: string(state),
+	})
+	msg.ID = uuid.New().String()
+	return c.broadcast(chatID, msg)
+}
+
 // SendPlaceholder implements channels.PlaceholderCapable.
 // It sends a placeholder message via the Pico Protocol that will later be
 // edited to the actual response via EditMessage (channels.MessageEditor).

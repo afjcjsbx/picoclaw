@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/channels"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -329,6 +330,17 @@ func (m *legacyContextManager) Assemble(ctx context.Context, req *AssembleReques
 }
 
 func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest) error {
+	completed := false
+	if m != nil && m.al != nil && req != nil && req.Reason != ContextCompressReasonManual {
+		m.al.notifyCompactionStateFromCtx(ctx, req.SessionKey, channels.CompactionStateRunning)
+		defer func() {
+			state := channels.CompactionStateIdle
+			if completed {
+				state = channels.CompactionStateCompleted
+			}
+			m.al.notifyCompactionStateFromCtx(ctx, req.SessionKey, state)
+		}()
+	}
 	agent := m.al.agentForSession(req.SessionKey)
 	if req.Reason == ContextCompressReasonThreshold {
 		// A new turn changes what compaction can summarize; drop the previous
@@ -343,6 +355,7 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		// Sync emergency compression — budget exceeded. Hard-budget paths bypass
 		// the threshold throttle so a provider overflow can still recover.
 		if result, ok := m.forceCompression(ctx, req.SessionKey); ok {
+			completed = true
 			m.recordCompactionSuccess(agent, req.SessionKey)
 			m.al.emitEvent(
 				runtimeevents.KindAgentContextCompress,
@@ -378,6 +391,9 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 	case ContextCompressReasonThreshold:
 		// Same agent as Assemble, so the rebuilt prompt reads what was compacted.
 		err := m.compactSession(ctx, agent, req)
+		if err == nil {
+			completed = true
+		}
 		if err != nil && !errors.Is(err, ErrCompactionInProgress) && ctx.Err() == nil {
 			m.recordCompactionFailure(agent, req.SessionKey, err)
 		}
@@ -387,6 +403,9 @@ func (m *legacyContextManager) Compact(ctx context.Context, req *CompactRequest)
 		// the cooldown and the ineffective breaker, and gives automatic
 		// compaction a fresh start.
 		err := m.compactSession(ctx, agent, req)
+		if err == nil {
+			completed = true
+		}
 		if !errors.Is(err, ErrCompactionInProgress) {
 			m.resetCompactionHealth(agent, req.SessionKey)
 		}

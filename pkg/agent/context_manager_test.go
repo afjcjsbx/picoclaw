@@ -1805,6 +1805,103 @@ func TestContextFeedback_PublishedOnPicoChannel(t *testing.T) {
 	}
 }
 
+type compactionStateChannel struct {
+	fakeChannel
+	mu     sync.Mutex
+	states []channels.CompactionState
+}
+
+func (c *compactionStateChannel) SetCompactionState(_ context.Context, _ string, state channels.CompactionState) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.states = append(c.states, state)
+	return nil
+}
+
+func (c *compactionStateChannel) recordedStates() []channels.CompactionState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]channels.CompactionState(nil), c.states...)
+}
+
+type staticChannelManager struct {
+	recordingChannelManager
+	channel channels.Channel
+}
+
+func (m *staticChannelManager) GetChannel(name string) (channels.Channel, bool) {
+	if name == "pico" && m.channel != nil {
+		return m.channel, true
+	}
+	return nil, false
+}
+
+func TestCompactionState_ForwardedToCapableChannel(t *testing.T) {
+	cfg := testConfig(t)
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	ch := &compactionStateChannel{}
+	al.channelManager = &staticChannelManager{channel: ch}
+	ts := &turnState{agent: agent, sessionKey: "sk-compaction", channel: "pico", chatID: "pico:sk-compaction"}
+
+	al.notifyCompactionState(ts, channels.CompactionStateRunning)
+	al.notifyCompactionState(ts, channels.CompactionStateIdle)
+
+	got := ch.recordedStates()
+	if len(got) != 2 ||
+		got[0] != channels.CompactionStateRunning ||
+		got[1] != channels.CompactionStateIdle {
+		t.Fatalf("states = %v, want [running idle]", got)
+	}
+}
+
+func TestCompactionState_FromCtxUsesTurnTarget(t *testing.T) {
+	cfg := testConfig(t)
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	ch := &compactionStateChannel{}
+	al.channelManager = &staticChannelManager{channel: ch}
+	ts := &turnState{agent: agent, sessionKey: "sk-compaction-ctx", channel: "pico", chatID: "pico:sk-compaction-ctx"}
+
+	al.notifyCompactionStateFromCtx(
+		withTurnState(context.Background(), ts),
+		ts.sessionKey,
+		channels.CompactionStateCompleted,
+	)
+
+	got := ch.recordedStates()
+	if len(got) != 1 || got[0] != channels.CompactionStateCompleted {
+		t.Fatalf("states = %v, want [completed]", got)
+	}
+}
+
+func TestCompactionState_ForTargetIgnoresEmptyTarget(t *testing.T) {
+	cfg := testConfig(t)
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	ch := &compactionStateChannel{}
+	al.channelManager = &staticChannelManager{channel: ch}
+
+	al.notifyCompactionStateForTarget("", "", channels.CompactionStateRunning)
+
+	if got := ch.recordedStates(); len(got) != 0 {
+		t.Fatalf("states = %v, want none", got)
+	}
+}
+
+func TestCompactionState_IgnoredForUncapableChannel(t *testing.T) {
+	cfg := testConfig(t)
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	al.channelManager = &staticChannelManager{channel: &fakeChannel{}}
+	ts := &turnState{agent: agent, sessionKey: "sk-compaction-noop", channel: "pico", chatID: "pico:sk-compaction-noop"}
+
+	al.notifyCompactionState(ts, channels.CompactionStateRunning)
+}
+
 func TestContextFeedback_SuppressedWhenToolFeedbackDisabled(t *testing.T) {
 	cfg := testConfig(t)
 	msgBus := bus.NewMessageBus()
@@ -1818,6 +1915,49 @@ func TestContextFeedback_SuppressedWhenToolFeedbackDisabled(t *testing.T) {
 	case out := <-msgBus.OutboundChan():
 		t.Fatalf("unexpected outbound when tool feedback disabled: %+v", out)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestLegacyCompact_EmitsRunningAndCompletedState(t *testing.T) {
+	cfg := testConfig(t)
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "test"})
+	agent := al.registry.GetDefaultAgent()
+	stateChannel := &compactionStateChannel{}
+	al.channelManager = &staticChannelManager{channel: stateChannel}
+
+	history := []providers.Message{
+		{Role: "user", Content: "msg 1"},
+		{Role: "assistant", Content: "resp 1"},
+		{Role: "user", Content: "msg 2"},
+		{Role: "assistant", Content: "resp 2"},
+		{Role: "user", Content: "msg 3"},
+	}
+	if err := agent.Sessions.SetHistory(context.Background(), "session-compaction-state", history); err != nil {
+		t.Fatalf("SetHistory: %v", err)
+	}
+
+	ts := &turnState{
+		agent:      agent,
+		sessionKey: "session-compaction-state",
+		channel:    "pico",
+		chatID:     "pico:session-compaction-state",
+	}
+	al.activeTurnStates.Store(ts.sessionKey, ts)
+	defer al.activeTurnStates.Delete(ts.sessionKey)
+
+	if err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: ts.sessionKey,
+		Reason:     ContextCompressReasonRetry,
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	got := stateChannel.recordedStates()
+	if len(got) != 2 ||
+		got[0] != channels.CompactionStateRunning ||
+		got[1] != channels.CompactionStateCompleted {
+		t.Fatalf("states = %v, want [running completed]", got)
 	}
 }
 

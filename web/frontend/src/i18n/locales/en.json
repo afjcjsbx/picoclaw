@@ -82,6 +82,8 @@
       "step3": "Preparing response...",
       "step4": "Almost there..."
     },
+    "compacting": "Compacting...",
+    "contextCompacted": "Context compacted",
     "reasoningLabel": "Reasoning",
     "toolCallsLabel": "Tool calls",
     "toolInputLabel": "Input",

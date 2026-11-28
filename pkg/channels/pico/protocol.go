@@ -20,8 +20,12 @@ const (
 	TypeTypingStart     = "typing.start"
 	TypeTypingStop      = "typing.stop"
 	TypeSessionActivity = "session.activity"
-	TypeError           = "error"
-	TypePong            = "pong"
+	// TypeSessionCompaction is an ephemeral per-session UI state update. The
+	// payload carries PayloadKeyCompactionPhase as a channels.CompactionState
+	// value ("running", "completed", or "idle").
+	TypeSessionCompaction = "session.compaction"
+	TypeError             = "error"
+	TypePong              = "pong"
 
 	PayloadKeyContent     = "content"
 	PayloadKeyThought     = "thought"
@@ -34,6 +38,9 @@ const (
 	PayloadKeyEvent       = "event"
 	PayloadKeyFinal       = "final"
 	PayloadKeyApproval    = "approval"
+	// PayloadKeyCompactionPhase is the channels.CompactionState value on
+	// TypeSessionCompaction.
+	PayloadKeyCompactionPhase = "phase"
 
 	MessageKindThought    = "thought"
 	MessageKindToolCalls  = "tool_calls"

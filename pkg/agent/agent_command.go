@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -600,6 +601,12 @@ func (al *AgentLoop) buildCommandsRuntime(
 			if opts == nil {
 				return commands.CompactOutcome{}, fmt.Errorf("process options not available")
 			}
+			// Manual compaction runs outside the normal turn context, so the
+			// channel and chat come from the dispatch request. This keeps the
+			// Web UI compaction indicator working for /compact too.
+			channel := opts.Dispatch.Channel()
+			chatID := opts.Dispatch.ChatID()
+			al.notifyCompactionStateForTarget(channel, chatID, channels.CompactionStateRunning)
 			// Same as /clear: the owning agent must be resolvable from the session.
 			ensureSessionMetadata(
 				agent.Sessions,
@@ -609,6 +616,13 @@ func (al *AgentLoop) buildCommandsRuntime(
 			)
 			before, _ := al.currentContextUsage(agent, opts.SessionKey)
 			outcome := &CompactOutcome{}
+			defer func() {
+				state := channels.CompactionStateIdle
+				if outcome.Compacted {
+					state = channels.CompactionStateCompleted
+				}
+				al.notifyCompactionStateForTarget(channel, chatID, state)
+			}()
 			if before != nil {
 				outcome.TokensBefore = before.HistoryTokens
 			}

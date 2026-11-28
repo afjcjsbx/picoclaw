@@ -82,6 +82,8 @@
       "step3": "Připravuji odpověď...",
       "step4": "Už brzy..."
     },
+    "compacting": "Komprimuji...",
+    "contextCompacted": "Kontext zkomprimován",
     "reasoningLabel": "Uvažování",
     "toolCallsLabel": "Volání nástrojů",
     "toolInputLabel": "Vstup",

@@ -43,7 +43,7 @@ pkg/channels/
 ```
 pkg/channels/
 ├── base.go              # BaseChannel shared abstraction layer
-├── interfaces.go        # Optional capability interfaces (TypingCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder)
+├── interfaces.go        # Optional capability interfaces (TypingCapable, CompactionStateCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder)
 ├── README.md            # English documentation
 ├── README.zh.md         # Chinese documentation
 ├── media.go             # MediaSender optional interface
@@ -111,7 +111,7 @@ pkg/identity/
 |-----------|-------------|
 | **Sub-package Isolation** | Each channel is a standalone Go sub-package, depending on `BaseChannel` and interfaces from the `channels` parent package |
 | **Factory Registration** | Sub-packages self-register via `init()`, Manager looks up factories by name, eliminating import coupling |
-| **Capability Discovery** | Optional capabilities are declared via interfaces (`MediaSender`, `TypingCapable`, `ReactionCapable`, `PlaceholderCapable`, `MessageEditor`, `WebhookHandler`, `HealthChecker`), discovered by Manager via runtime type assertions |
+| **Capability Discovery** | Optional capabilities are declared via interfaces (`MediaSender`, `TypingCapable`, `CompactionStateCapable`, `ReactionCapable`, `PlaceholderCapable`, `MessageEditor`, `WebhookHandler`, `HealthChecker`), discovered by Manager via runtime type assertions |
 | **Structured Messages** | Peer, MessageID, and SenderInfo promoted from Metadata to first-class fields on InboundMessage |
 | **Error Classification** | Channels return sentinel errors (`ErrRateLimit`, `ErrTemporary`, etc.), Manager uses these to determine retry strategy |
 | **Centralized Orchestration** | Rate limiting, message splitting, retries, and Typing/Reaction/Placeholder management are all handled by Manager and BaseChannel; channels only need to implement Send |
@@ -656,6 +656,20 @@ func (c *MatrixChannel) StartTyping(ctx context.Context, chatID string) (stop fu
             // Call Matrix API to stop typing
         }
     }, nil
+}
+```
+
+#### CompactionStateCapable — In-Conversation Compaction Indicator
+
+```go
+// If the platform has a live conversation view that can render a
+// "Compacting..." divider while the agent summarizes older context and a
+// "Context compacted" marker once it finishes.
+// The agent delivers these ephemeral updates directly to the channel;
+// other channels never receive them as chat messages.
+func (c *PicoChannel) SetCompactionState(ctx context.Context, chatID string, state channels.CompactionState) error {
+    // Broadcast the state to the clients viewing this conversation.
+    return nil
 }
 ```
 
@@ -1296,7 +1310,7 @@ make test                                       # Full test suite
 | File | Responsibility |
 |------|---------------|
 | `pkg/channels/base.go` | BaseChannel struct, Channel interface, MessageLengthProvider, BaseChannelOption, HandleMessage |
-| `pkg/channels/interfaces.go` | TypingCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder interfaces |
+| `pkg/channels/interfaces.go` | TypingCapable, CompactionStateCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder interfaces |
 | `pkg/channels/media.go` | MediaSender interface |
 | `pkg/channels/webhook.go` | WebhookHandler, HealthChecker interfaces |
 | `pkg/channels/errors.go` | ErrNotRunning, ErrRateLimit, ErrTemporary, ErrSendFailed sentinels; RateLimitError carries retry_after |
@@ -1326,7 +1340,7 @@ make test                                       # Full test suite
 | `pkg/channels/whatsapp_native/` | `"whatsapp_native"` | — (Native whatsmeow mode) |
 | `pkg/channels/maixcam/` | `"maixcam"` | — |
 | `pkg/channels/mqtt/` | `"mqtt"` | — |
-| `pkg/channels/pico/` | `"pico"` | TypingCapable, PlaceholderCapable, MessageEditor, WebhookHandler |
+| `pkg/channels/pico/` | `"pico"` | TypingCapable, CompactionStateCapable, PlaceholderCapable, MessageEditor, WebhookHandler |
 
 ### A.3 Interface Quick Reference
 

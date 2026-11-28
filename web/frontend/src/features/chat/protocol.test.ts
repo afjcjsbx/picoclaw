@@ -13,6 +13,8 @@ beforeEach(() => {
   updateChatStore({
     messages: [],
     isTyping: false,
+    isCompacting: false,
+    compactionMarkers: [],
     contextUsage: undefined,
     activeSessionId: SESSION,
   })
@@ -375,6 +377,104 @@ describe("handlePicoMessage message.delete", () => {
     )
 
     expect(getChatState().messages).toHaveLength(1)
+  })
+})
+
+describe("handlePicoMessage session.compaction", () => {
+  it("toggles the running state from the phase", () => {
+    handlePicoMessage(
+      {
+        type: "session.compaction",
+        session_id: SESSION,
+        payload: { phase: "running" },
+      },
+      SESSION,
+    )
+    expect(getChatState().isCompacting).toBe(true)
+
+    handlePicoMessage(
+      {
+        type: "session.compaction",
+        session_id: SESSION,
+        payload: { phase: "idle" },
+      },
+      SESSION,
+    )
+    expect(getChatState().isCompacting).toBe(false)
+    expect(getChatState().compactionMarkers).toEqual([])
+  })
+
+  it("adds a completed marker anchored to the last message", () => {
+    updateChatStore({
+      messages: [
+        { id: "m1", role: "user", content: "hi", timestamp: 1 },
+        { id: "m2", role: "assistant", content: "hello", timestamp: 2 },
+      ],
+    })
+
+    handlePicoMessage(
+      {
+        type: "session.compaction",
+        id: "compaction-1",
+        session_id: SESSION,
+        payload: { phase: "completed" },
+      },
+      SESSION,
+    )
+
+    expect(getChatState().isCompacting).toBe(false)
+    expect(getChatState().compactionMarkers).toEqual([
+      { id: "compaction-1", afterMessageId: "m2" },
+    ])
+  })
+
+  it("does not duplicate a completed marker with the same event id", () => {
+    const completed = {
+      type: "session.compaction",
+      id: "compaction-1",
+      session_id: SESSION,
+      payload: { phase: "completed" },
+    }
+    handlePicoMessage(completed, SESSION)
+    handlePicoMessage(completed, SESSION)
+
+    expect(getChatState().compactionMarkers).toHaveLength(1)
+  })
+
+  it("supports the legacy boolean active payload", () => {
+    handlePicoMessage(
+      {
+        type: "session.compaction",
+        session_id: SESSION,
+        payload: { active: true },
+      },
+      SESSION,
+    )
+    expect(getChatState().isCompacting).toBe(true)
+
+    handlePicoMessage(
+      {
+        type: "session.compaction",
+        session_id: SESSION,
+        payload: { active: "yes" },
+      },
+      SESSION,
+    )
+    expect(getChatState().isCompacting).toBe(false)
+  })
+
+  it("clears the running state when the turn ends", () => {
+    handlePicoMessage(
+      {
+        type: "session.compaction",
+        session_id: SESSION,
+        payload: { phase: "running" },
+      },
+      SESSION,
+    )
+    handlePicoMessage({ type: "typing.stop", session_id: SESSION }, SESSION)
+
+    expect(getChatState().isCompacting).toBe(false)
   })
 })
 
