@@ -45,6 +45,10 @@ Telegram Channel 通过 Telegram 机器人 API 使用长轮询实现基于机器
 
 Telegram 频道支持消息表情回应（reaction）。收到消息时，网关会自动添加 👀 表情，并在回复发送后移除；`reaction` 工具也可以按需添加该表情。
 
+## 命令审批
+
+当 `tools.exec.unknown_command_policy` 为 `ask`（默认值）且 Agent 无法判定命令风险时，会先向发起请求的用户询问。在 Telegram 中，审批消息带有 **✅ Approve** 和 **❌ Deny** 行内按钮，点击即可回答，无需重新输入 `approve <token>` 或 `deny <token>`。做出选择后按钮会消失，且只有发起请求的用户可以批准或拒绝；直接输入回复仍然有效。
+
 ## 内置命令
 
 Telegram 会在启动时自动注册 PicoClaw 的顶级 Bot 命令，包括 `/start`、`/help`、`/show`、`/list` 和 `/use`。将 `channel_list.telegram.commands_enabled` 设为 `false` 会清空菜单，并由 Agent 拒绝所有斜杠命令。
