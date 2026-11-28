@@ -53,9 +53,9 @@ Every frame is a JSON envelope:
 | Direction | `type` values |
 | --- | --- |
 | Client → server | `message.send`, `media.send`, `ping` |
-| Server → client | `message.create`, `message.update`, `message.delete`, `media.create`, `typing.start`, `typing.stop`, `session.activity`, `error`, `pong` |
+| Server → client | `message.create`, `message.update`, `message.delete`, `media.create`, `typing.start`, `typing.stop`, `session.compaction`, `session.activity`, `error`, `pong` |
 
-Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_calls`, `tool_feedback`), `tool_calls`, `model_name`, `usage`, `final`, and the legacy `thought` boolean. `session.activity` events carry the originating `session_id` and an `event` payload equal to the underlying event type (for example, `typing.start` or `message.create`). The activity payload includes `final: true` when the underlying message is the turn's final response; observers use that flag to set unread state only after a completed answer, while non-final message activity and `typing.start` indicate a running turn. Tool call and tool result card updates are delivered only to their session connection and do not emit `session.activity` events. Observers never receive message content.
+Payload keys of interest: `content`, `message_id`, `kind` (`thought`, `tool_calls`, `tool_feedback`), `tool_calls`, `model_name`, `usage`, `final`, and the legacy `thought` boolean. `session.compaction` carries `phase: "running"` while the agent is summarizing older context, `phase: "completed"` when a compaction changed the stored context, and `phase: "idle"` when a compaction attempt produced no summary; clients use it to render an in-conversation compaction indicator. `session.activity` events carry the originating `session_id` and an `event` payload equal to the underlying event type (for example, `typing.start` or `message.create`). The activity payload includes `final: true` when the underlying message is the turn's final response; observers use that flag to set unread state only after a completed answer, while non-final message activity and `typing.start` indicate a running turn. Tool call and tool result card updates are delivered only to their session connection and do not emit `session.activity` events. Observers never receive message content.
 
 ## Launcher API
 

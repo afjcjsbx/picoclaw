@@ -1060,6 +1060,38 @@ func TestBroadcastToSession_ToolCardsDoNotEmitSessionActivity(t *testing.T) {
 	}
 }
 
+func TestSetCompactionState_BroadcastsSessionCompaction(t *testing.T) {
+	ch := newTestPicoChannel(t)
+
+	var (
+		gotChatID string
+		gotMsg    PicoMessage
+	)
+	ch.broadcastFn = func(chatID string, msg PicoMessage) error {
+		gotChatID = chatID
+		gotMsg = msg
+		return nil
+	}
+
+	if err := ch.SetCompactionState(
+		context.Background(),
+		"pico:sess-1",
+		channels.CompactionStateCompleted,
+	); err != nil {
+		t.Fatalf("SetCompactionState() error = %v", err)
+	}
+
+	if gotChatID != "pico:sess-1" {
+		t.Fatalf("chatID = %q, want pico:sess-1", gotChatID)
+	}
+	if gotMsg.Type != TypeSessionCompaction {
+		t.Fatalf("type = %q, want %q", gotMsg.Type, TypeSessionCompaction)
+	}
+	if got := gotMsg.Payload[PayloadKeyCompactionPhase]; got != string(channels.CompactionStateCompleted) {
+		t.Fatalf("phase = %#v, want completed", got)
+	}
+}
+
 func TestStartTyping_EmitsActivityWithoutSessionClient(t *testing.T) {
 	ch := newTestPicoChannel(t)
 	observerConn, observerMessages, cleanup := newTestPicoWebSocket(t)

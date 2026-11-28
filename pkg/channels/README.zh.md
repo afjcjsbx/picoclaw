@@ -43,7 +43,7 @@ pkg/channels/
 ```
 pkg/channels/
 ├── base.go              # BaseChannel 共享抽象层
-├── interfaces.go        # 可选能力接口（TypingCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder）
+├── interfaces.go        # 可选能力接口（TypingCapable, CompactionStateCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder）
 ├── README.md            # 英文文档
 ├── README.zh.md         # 中文文档
 ├── media.go             # MediaSender 可选接口
@@ -652,6 +652,19 @@ func (c *MatrixChannel) StartTyping(ctx context.Context, chatID string) (stop fu
             // 调用 Matrix API 停止 typing
         }
     }, nil
+}
+```
+
+#### CompactionStateCapable — 对话内压缩指示器
+
+```go
+// 如果平台有实时对话视图，可以在智能体压缩旧上下文时显示
+// “正在压缩…”分隔提示，并在完成后显示“上下文已压缩”标记。
+// 智能体直接向支持该能力的 channel 发送这些临时状态更新，
+// 其他 channel 不会收到聊天消息。
+func (c *PicoChannel) SetCompactionState(ctx context.Context, chatID string, state channels.CompactionState) error {
+    // 将状态广播给正在查看此对话的客户端。
+    return nil
 }
 ```
 
@@ -1279,7 +1292,7 @@ make test                                       # 全量测试
 | 文件 | 职责 |
 |------|------|
 | `pkg/channels/base.go` | BaseChannel 结构体、Channel 接口、MessageLengthProvider、BaseChannelOption、HandleMessage |
-| `pkg/channels/interfaces.go` | TypingCapable、MessageEditor、ReactionCapable、PlaceholderCapable、PlaceholderRecorder 接口 |
+| `pkg/channels/interfaces.go` | TypingCapable、CompactionStateCapable、MessageEditor、ReactionCapable、PlaceholderCapable、PlaceholderRecorder 接口 |
 | `pkg/channels/media.go` | MediaSender 接口 |
 | `pkg/channels/webhook.go` | WebhookHandler、HealthChecker 接口 |
 | `pkg/channels/errors.go` | ErrNotRunning、ErrRateLimit、ErrTemporary、ErrSendFailed 哨兵 |
@@ -1309,7 +1322,7 @@ make test                                       # 全量测试
 | `pkg/channels/whatsapp_native/` | `"whatsapp_native"` | — (原生 whatsmeow 模式) |
 | `pkg/channels/maixcam/` | `"maixcam"` | — |
 | `pkg/channels/mqtt/` | `"mqtt"` | — |
-| `pkg/channels/pico/` | `"pico"` | TypingCapable, PlaceholderCapable, MessageEditor, WebhookHandler |
+| `pkg/channels/pico/` | `"pico"` | TypingCapable, CompactionStateCapable, PlaceholderCapable, MessageEditor, WebhookHandler |
 
 ### A.3 接口速查表
 

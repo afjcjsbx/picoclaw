@@ -472,7 +472,11 @@ function attachSplitSocket(
     if (sessionId === activeSessionIdRef) {
       wsRef = null
       isConnecting = false
-      updateChatStore({ connectionState: "disconnected", isTyping: false })
+      updateChatStore({
+        connectionState: "disconnected",
+        isTyping: false,
+        isCompacting: false,
+      })
     }
     clearRunningForClosedSocket(sessionId)
     scheduleSplitReconnect(sessionId, connection)
@@ -614,6 +618,7 @@ function disconnectChatInternal({
   updateChatStore({
     connectionState: "disconnected",
     isTyping: false,
+    isCompacting: false,
   })
 }
 
@@ -774,6 +779,7 @@ export async function connectChat() {
       updateChatStore({
         connectionState: "disconnected",
         isTyping: false,
+        isCompacting: false,
       })
       clearRunningForClosedSocket(sessionId)
       scheduleReconnect(generation, sessionId)
@@ -857,6 +863,8 @@ export async function hydrateActiveSession() {
       updateChatStore({
         messages: historyPage.messages,
         isTyping: false,
+        isCompacting: false,
+        compactionMarkers: [],
         hasHydratedActiveSession: true,
         historyStart: historyPage.start,
         hasMoreHistory: historyPage.hasMore,
@@ -879,6 +887,8 @@ export async function hydrateActiveSession() {
       updateChatStore({
         messages: [],
         isTyping: false,
+        isCompacting: false,
+        compactionMarkers: [],
         hasHydratedActiveSession: true,
         historyStart: 0,
         hasMoreHistory: false,
@@ -969,8 +979,10 @@ export function sendChatMessage({
       },
     ],
     isTyping: true,
+    isCompacting: false,
     ...(clearsHistory
       ? {
+          compactionMarkers: [],
           contextUsage: undefined,
           historyStart: 0,
           hasMoreHistory: false,
@@ -985,6 +997,8 @@ export function sendChatMessage({
     updateSplitSessionState(sessionId, {
       messages: [],
       isTyping: true,
+      isCompacting: false,
+      compactionMarkers: [],
       contextUsage: undefined,
       historyStart: 0,
       hasMoreHistory: false,
@@ -1015,6 +1029,7 @@ export function sendChatMessage({
     updateChatStore((prev) => ({
       messages: prev.messages.filter((message) => message.id !== id),
       isTyping: false,
+      isCompacting: false,
     }))
     return false
   }
@@ -1049,6 +1064,8 @@ export async function switchChatSession(sessionId: string) {
       updateSplitSessionState(currentState.activeSessionId, {
         messages: currentState.messages,
         isTyping: currentState.isTyping,
+        isCompacting: currentState.isCompacting,
+        compactionMarkers: currentState.compactionMarkers,
         contextUsage: currentState.contextUsage,
         historyStart: currentState.historyStart,
         hasMoreHistory: currentState.hasMoreHistory,
@@ -1064,6 +1081,8 @@ export async function switchChatSession(sessionId: string) {
     setActiveSessionId(sessionId, {
       messages: historyPage.messages,
       isTyping: cachedSplitState?.isTyping ?? false,
+      isCompacting: cachedSplitState?.isCompacting ?? false,
+      compactionMarkers: cachedSplitState?.compactionMarkers ?? [],
       hasHydratedActiveSession: true,
       historyStart: historyPage.start,
       hasMoreHistory: historyPage.hasMore,
@@ -1115,6 +1134,8 @@ export async function newChatSession(force = false) {
   setActiveSessionId(sessionId, {
     messages: [],
     isTyping: false,
+    isCompacting: false,
+    compactionMarkers: [],
     hasHydratedActiveSession: true,
     historyStart: 0,
     hasMoreHistory: false,

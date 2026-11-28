@@ -26,6 +26,8 @@ export interface PicoMessage {
   payload?: Record<string, unknown>
 }
 
+let compactionMarkerSeq = 0
+
 function parseAttachments(
   payload: Record<string, unknown>,
 ): ChatAttachment[] | undefined {
@@ -256,6 +258,7 @@ export function handlePicoMessage(
             (kind === "normal" || message.type === "media.create"))
             ? false
             : prev.isTyping,
+        ...(isFinal ? { isCompacting: false } : {}),
         ...(contextUsage ? { contextUsage } : {}),
       }))
       break
@@ -323,7 +326,7 @@ export function handlePicoMessage(
             },
           ]
         })(),
-        ...(isFinal ? { isTyping: false } : {}),
+        ...(isFinal ? { isTyping: false, isCompacting: false } : {}),
         ...(contextUsage ? { contextUsage } : {}),
       }))
       break
@@ -348,8 +351,48 @@ export function handlePicoMessage(
 
     case "typing.stop":
       setSessionRunning(expectedSessionId, false)
-      updateSession({ isTyping: false })
+      updateSession({ isTyping: false, isCompacting: false })
       break
+
+    case "session.compaction": {
+      const phase =
+        typeof payload.phase === "string"
+          ? payload.phase.trim().toLowerCase()
+          : ""
+      if (phase === "running") {
+        updateSession({ isCompacting: true })
+        break
+      }
+      if (phase === "completed") {
+        const markerId =
+          typeof message.id === "string" && message.id
+            ? message.id
+            : `compaction-${Date.now()}-${++compactionMarkerSeq}`
+        updateSession((prev) => {
+          if (prev.compactionMarkers.some((marker) => marker.id === markerId)) {
+            return { isCompacting: false }
+          }
+          return {
+            isCompacting: false,
+            compactionMarkers: [
+              ...prev.compactionMarkers,
+              {
+                id: markerId,
+                afterMessageId: prev.messages.at(-1)?.id,
+              },
+            ],
+          }
+        })
+        break
+      }
+      if (phase === "idle") {
+        updateSession({ isCompacting: false })
+        break
+      }
+      // Older gateways sent a boolean "active" flag without a phase.
+      updateSession({ isCompacting: payload.active === true })
+      break
+    }
 
     case "error": {
       const requestId =
@@ -367,6 +410,7 @@ export function handlePicoMessage(
           ? prev.messages.filter((msg) => msg.id !== requestId)
           : prev.messages,
         isTyping: false,
+        isCompacting: false,
       }))
       break
     }

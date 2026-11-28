@@ -85,6 +85,15 @@ export interface ContextUsage {
   used_percent: number
 }
 
+// CompactionMarker records a completed context compaction in the current
+// in-memory transcript. afterMessageId anchors the divider after the last
+// message that existed when the compaction finished, so later messages appear
+// below it. Markers are ephemeral: they are not persisted in session history.
+export interface CompactionMarker {
+  id: string
+  afterMessageId?: string
+}
+
 export type ConnectionState =
   "disconnected" | "connecting" | "connected" | "error"
 
@@ -92,6 +101,8 @@ export interface ChatStoreState {
   messages: ChatMessage[]
   connectionState: ConnectionState
   isTyping: boolean
+  isCompacting: boolean
+  compactionMarkers: CompactionMarker[]
   activeSessionId: string
   hasHydratedActiveSession: boolean
   historyStart: number
@@ -102,6 +113,8 @@ export interface ChatStoreState {
 export interface SplitSessionState {
   messages: ChatMessage[]
   isTyping: boolean
+  isCompacting: boolean
+  compactionMarkers: CompactionMarker[]
   contextUsage?: ContextUsage
   historyStart: number
   hasMoreHistory: boolean
@@ -161,6 +174,8 @@ const DEFAULT_CHAT_STATE: ChatStoreState = {
   messages: [],
   connectionState: "disconnected",
   isTyping: false,
+  isCompacting: false,
+  compactionMarkers: [],
   activeSessionId: getInitialActiveSessionId(),
   hasHydratedActiveSession: false,
   historyStart: 0,
@@ -228,6 +243,8 @@ export function updateSplitSessionState(
     const prev = states[sessionId] ?? {
       messages: [],
       isTyping: false,
+      isCompacting: false,
+      compactionMarkers: [],
       historyStart: 0,
       hasMoreHistory: false,
     }
@@ -248,6 +265,8 @@ export function initializeSplitSessionState(
           [sessionId]: {
             messages: history.messages,
             isTyping: false,
+            isCompacting: false,
+            compactionMarkers: [],
             historyStart: history.start,
             hasMoreHistory: history.hasMore,
           },

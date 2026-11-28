@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -425,6 +426,17 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if req == nil {
 		return nil
 	}
+	completed := false
+	if m != nil && m.al != nil && req.Reason != ContextCompressReasonManual {
+		m.al.notifyCompactionStateFromCtx(ctx, req.SessionKey, channels.CompactionStateRunning)
+		defer func() {
+			state := channels.CompactionStateIdle
+			if completed {
+				state = channels.CompactionStateCompleted
+			}
+			m.al.notifyCompactionStateFromCtx(ctx, req.SessionKey, state)
+		}()
+	}
 	budget := m.compactBudget(req.SessionKey, req.Budget)
 	if req.Outcome != nil {
 		req.Outcome.Target = budget
@@ -455,6 +467,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 			return err
 		}
 		created := result.LeafSummaries + result.CondensedSummaries
+		completed = created > 0
 		if req.Outcome != nil {
 			req.Outcome.LeafSummaries = result.LeafSummaries
 			req.Outcome.CondensedSummaries = result.CondensedSummaries
@@ -490,6 +503,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if err != nil {
 		return err
 	}
+	completed = result != nil && result.LeafSummaries+result.CondensedSummaries > 0
 	m.notifyCompaction(ctx, req, result)
 	if req.Reason == ContextCompressReasonThreshold &&
 		(result == nil || result.LeafSummaries+result.CondensedSummaries == 0) {
