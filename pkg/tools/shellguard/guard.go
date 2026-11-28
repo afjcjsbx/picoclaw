@@ -137,6 +137,7 @@ func (g *Guard) assessScript(command string, depth int) Assessment {
 }
 
 func (g *Guard) assessFile(file *syntax.File, depth int) Assessment {
+	resolved := resolveConstants(file)
 	var result Assessment
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil {
@@ -146,20 +147,24 @@ func (g *Guard) assessFile(file *syntax.File, depth int) Assessment {
 		if !ok {
 			return true
 		}
-		result = preferAssessment(result, g.assessCall(call, depth))
+		result = preferAssessment(result, g.assessCall(call, resolved[call], depth))
 		return true
 	})
 	return result
 }
 
-func (g *Guard) assessCall(call *syntax.CallExpr, depth int) Assessment {
+// assessCall classifies one simple command. words is its argv with constant
+// variables already resolved by resolveConstants, or nil to read it as written.
+func (g *Guard) assessCall(call *syntax.CallExpr, words []word, depth int) Assessment {
 	if len(call.Args) == 0 {
 		return Assessment{}
 	}
 
-	words := make([]word, len(call.Args))
-	for i, arg := range call.Args {
-		words[i] = literalWord(arg)
+	if words == nil {
+		words = make([]word, len(call.Args))
+		for i, arg := range call.Args {
+			words[i] = literalWord(arg)
+		}
 	}
 	return g.assessArgv(words, depth)
 }
@@ -236,7 +241,9 @@ func dynamicDestructiveOperand(words []word) (Assessment, bool) {
 		return Assessment{}, false
 	}
 	for _, arg := range words[1:] {
-		if arg.dynamic {
+		// An operand resolved from a constant is as unchecked as a dynamic one:
+		// the path guards never see its value.
+		if arg.dynamic || arg.expanded {
 			return Assessment{
 				Level:   RiskCritical,
 				Command: formatCommand(wordTexts(words)),

@@ -9,10 +9,13 @@ import (
 // word is a shell word reduced to its literal parts. dynamic reports that the
 // word contains an expansion, substitution or glob, which the static guard
 // cannot resolve. homePath marks a word that starts with a tilde or $HOME.
+// expanded marks a word whose text came from a constant the script assigned
+// (see constEnv): the risk classifier reads it, but no path guard has checked it.
 type word struct {
 	text     string
 	dynamic  bool
 	homePath bool
+	expanded bool
 }
 
 // wordExpander supplies the path expansions the workspace guard follows: ~,
@@ -22,6 +25,10 @@ type word struct {
 type wordExpander struct {
 	home string
 	cwd  string
+	// env resolves the constants a script assigned earlier. When set, only
+	// those resolve: tilde and $HOME stay as written, as risk classification
+	// expects.
+	env *constEnv
 }
 
 // literalWord reduces a word to its literal text without resolving any
@@ -57,7 +64,7 @@ func buildWord(w *syntax.Word, x *wordExpander, assignment bool) word {
 
 	wb := wordBuilder{x: x}
 	parts := w.Parts
-	if x != nil {
+	if x != nil && x.env == nil {
 		if lit, ok := parts[0].(*syntax.Lit); ok {
 			if prefix, rest, ok := tildePrefix(lit.Value, assignment); ok {
 				wb.text.WriteString(prefix)
@@ -137,7 +144,7 @@ func (wb *wordBuilder) add(parts []syntax.WordPart, inDouble bool) {
 		case *syntax.DblQuoted:
 			wb.add(p.Parts, true)
 		case *syntax.ParamExp:
-			wb.param(p)
+			wb.param(p, inDouble)
 		default:
 			wb.out.dynamic = true
 		}
@@ -146,9 +153,13 @@ func (wb *wordBuilder) add(parts []syntax.WordPart, inDouble bool) {
 
 // param resolves the few parameters the workspace guard tracks. Every other
 // expansion, and every expansion without an expander, is dynamic.
-func (wb *wordBuilder) param(p *syntax.ParamExp) {
+func (wb *wordBuilder) param(p *syntax.ParamExp, inDouble bool) {
 	if wb.x == nil {
 		wb.out.dynamic = true
+		return
+	}
+	if wb.x.env != nil {
+		wb.constParam(p, inDouble)
 		return
 	}
 
