@@ -7,6 +7,10 @@ interface TypingIndicatorProps {
   fallbackLabel?: string
   reasoningCount?: number
   toolCount?: number
+  /** Server-recorded start time of the active turn, in epoch milliseconds. */
+  startedAt?: number
+  /** Persisted wall-clock duration of a completed turn. */
+  workedDurationMs?: number
 }
 
 function formatDuration(milliseconds: number): string {
@@ -26,6 +30,8 @@ export function TypingIndicator({
   fallbackLabel,
   reasoningCount = 0,
   toolCount = 0,
+  startedAt: startedAtProp,
+  workedDurationMs,
 }: TypingIndicatorProps) {
   const { t } = useTranslation()
   const [timerActive, setTimerActive] = useState(false)
@@ -35,15 +41,21 @@ export function TypingIndicator({
 
   useEffect(() => {
     if (isTyping && !timerActive) {
-      const start = Date.now()
+      const start = startedAtProp ?? Date.now()
       setStartedAt(start)
-      setNow(start)
+      setNow(Date.now())
       setFinishedAt(null)
     } else if (!isTyping && timerActive) {
       setFinishedAt(Date.now())
     }
     setTimerActive(isTyping)
-  }, [isTyping, timerActive])
+  }, [isTyping, timerActive, startedAtProp])
+
+  useEffect(() => {
+    if (isTyping && startedAtProp !== undefined) {
+      setStartedAt(startedAtProp)
+    }
+  }, [isTyping, startedAtProp])
 
   useEffect(() => {
     if (!isTyping) return
@@ -52,8 +64,10 @@ export function TypingIndicator({
     return () => window.clearInterval(interval)
   }, [isTyping])
 
+  const effectiveStartedAt = startedAtProp ?? startedAt
   const starting = isTyping && !timerActive
-  if (!isTyping && startedAt === null) {
+  const hasWorkedDuration = !isTyping && workedDurationMs !== undefined
+  if (!isTyping && effectiveStartedAt === null && !hasWorkedDuration) {
     if (!fallbackLabel) return null
     return (
       <span className="text-muted-foreground/65 inline-flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-[12px] leading-4">
@@ -68,10 +82,11 @@ export function TypingIndicator({
   }
 
   const end = isTyping ? now : (finishedAt ?? now)
-  const durationMs =
-    starting || startedAt === null || end === null
-      ? 0
-      : Math.max(0, end - startedAt)
+  const measuredDurationMs =
+    starting || effectiveStartedAt === null || end === null
+      ? undefined
+      : Math.max(0, end - effectiveStartedAt)
+  const durationMs = measuredDurationMs ?? workedDurationMs ?? 0
   const duration = formatDuration(durationMs)
   const timeLabel = isTyping
     ? t("chat.activityWorkingFor", {

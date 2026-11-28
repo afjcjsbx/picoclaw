@@ -1,7 +1,13 @@
+import { getDefaultStore } from "jotai"
 import { toast } from "sonner"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { getChatState, updateChatStore } from "@/store/chat"
+import {
+  getChatState,
+  sessionRunningAtom,
+  sessionStartedAtAtom,
+  updateChatStore,
+} from "@/store/chat"
 
 import { handlePicoMessage } from "./protocol"
 
@@ -18,6 +24,8 @@ beforeEach(() => {
     contextUsage: undefined,
     activeSessionId: SESSION,
   })
+  getDefaultStore().set(sessionRunningAtom, {})
+  getDefaultStore().set(sessionStartedAtAtom, {})
   vi.mocked(toast.error).mockClear()
 })
 
@@ -485,6 +493,28 @@ describe("handlePicoMessage typing and error events", () => {
 
     handlePicoMessage({ type: "typing.stop", session_id: SESSION }, SESSION)
     expect(getChatState().isTyping).toBe(false)
+  })
+
+  it("restores the server start time and clears it when typing stops", () => {
+    const startedAt = 1_700_000_000_000
+
+    handlePicoMessage(
+      {
+        type: "typing.start",
+        session_id: SESSION,
+        timestamp: startedAt,
+        payload: { started_at: startedAt },
+      },
+      SESSION,
+    )
+
+    expect(getDefaultStore().get(sessionStartedAtAtom)).toEqual({
+      [SESSION]: startedAt,
+    })
+
+    handlePicoMessage({ type: "typing.stop", session_id: SESSION }, SESSION)
+
+    expect(getDefaultStore().get(sessionStartedAtAtom)).toEqual({})
   })
 
   it("removes the failed request, stops typing and reports the error", () => {

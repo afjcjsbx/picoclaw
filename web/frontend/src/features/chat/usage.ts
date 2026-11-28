@@ -239,6 +239,20 @@ export function lastReplyCacheHitRate(
   return undefined
 }
 
+/**
+ * Wall-clock duration of the most recent completed turn. The value comes from
+ * persisted provider usage, so the "Worked for…" label survives a reload.
+ */
+export function lastTurnWorkedMs(messages: ChatMessage[]): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role === "user") return undefined
+    const elapsed = message.usage?.elapsed_ms
+    if (elapsed !== undefined && elapsed > 0) return elapsed
+  }
+  return undefined
+}
+
 export function formatDuration(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return "0.0s"

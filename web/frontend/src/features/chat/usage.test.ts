@@ -13,6 +13,7 @@ import {
   formatTokensPerSecond,
   formatUsageCostUsd,
   lastReplyCacheHitRate,
+  lastTurnWorkedMs,
   parseTokenUsage,
   resolveModelPricing,
   summarizeConversationUsage,
@@ -373,5 +374,25 @@ describe("conversation usage helpers", () => {
 
   it("reports the cache hit rate of the last reply with usage", () => {
     expect(lastReplyCacheHitRate(messages)).toBe(75)
+  })
+
+  it("reports the persisted worked time of the last completed turn", () => {
+    const withElapsed: ChatMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "done",
+        timestamp: 2,
+        usage: { total_tokens: 300, elapsed_ms: 12_300 },
+      },
+    ]
+
+    expect(lastTurnWorkedMs(withElapsed)).toBe(12_300)
+    expect(
+      lastTurnWorkedMs([
+        ...withElapsed,
+        { id: "user-2", role: "user", content: "next", timestamp: 3 },
+      ]),
+    ).toBeUndefined()
   })
 })

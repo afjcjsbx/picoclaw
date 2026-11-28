@@ -78,4 +78,20 @@ describe("TypingIndicator", () => {
     expect(screen.getByRole("status")).not.toHaveTextContent("thoughts")
     expect(screen.getByRole("status")).not.toHaveTextContent("tools")
   })
+
+  it("shows the persisted worked duration after a reload", () => {
+    render(<TypingIndicator isTyping={false} workedDurationMs={12_000} />)
+
+    expect(screen.getByRole("status")).toHaveTextContent("Worked for 12s")
+  })
+
+  it("starts the active timer from the server start time", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-11-27T16:00:00Z"))
+    const startedAt = Date.now() - 5_000
+
+    render(<TypingIndicator isTyping startedAt={startedAt} />)
+
+    expect(screen.getByRole("status")).toHaveTextContent("Working for 5s")
+  })
 })

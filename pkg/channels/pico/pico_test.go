@@ -1117,6 +1117,9 @@ func TestStartTyping_EmitsActivityWithoutSessionClient(t *testing.T) {
 	if got := started.Payload[PayloadKeyEvent]; got != TypeTypingStart {
 		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStart)
 	}
+	if startedAt, ok := started.Payload[PayloadKeyStartedAt].(float64); !ok || startedAt <= 0 {
+		t.Fatalf("started_at = %#v, want positive epoch milliseconds", started.Payload[PayloadKeyStartedAt])
+	}
 
 	stop()
 
@@ -1124,6 +1127,51 @@ func TestStartTyping_EmitsActivityWithoutSessionClient(t *testing.T) {
 	if got := stopped.Payload[PayloadKeyEvent]; got != TypeTypingStop {
 		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStop)
 	}
+}
+
+func TestTypingSnapshotReplaysActiveTurnToNewConnections(t *testing.T) {
+	ch := newTestPicoChannel(t)
+	stop, err := ch.StartTyping(context.Background(), "pico:s-target")
+	if err != nil {
+		t.Fatalf("StartTyping() error = %v", err)
+	}
+
+	sessionConn, sessionMessages, sessionCleanup := newTestPicoWebSocket(t)
+	defer sessionCleanup()
+	sessionPC := &picoConn{id: "session", conn: sessionConn, sessionID: "s-target"}
+	ch.sendTypingSnapshot(sessionPC)
+
+	started := mustReceivePicoMessage(t, sessionMessages)
+	if started.Type != TypeTypingStart {
+		t.Fatalf("type = %q, want %q", started.Type, TypeTypingStart)
+	}
+	if started.SessionID != "s-target" {
+		t.Fatalf("session_id = %q, want s-target", started.SessionID)
+	}
+	if startedAt, ok := started.Payload[PayloadKeyStartedAt].(float64); !ok || startedAt <= 0 {
+		t.Fatalf("started_at = %#v, want positive epoch milliseconds", started.Payload[PayloadKeyStartedAt])
+	}
+
+	observerConn, observerMessages, observerCleanup := newTestPicoWebSocket(t)
+	defer observerCleanup()
+	observerPC := &picoConn{id: "observer", conn: observerConn, sessionID: allSessionsSessionID}
+	ch.sendTypingSnapshot(observerPC)
+
+	activity := mustReceivePicoMessage(t, observerMessages)
+	if activity.Type != TypeSessionActivity {
+		t.Fatalf("type = %q, want %q", activity.Type, TypeSessionActivity)
+	}
+	if activity.SessionID != "s-target" {
+		t.Fatalf("session_id = %q, want s-target", activity.SessionID)
+	}
+	if got := activity.Payload[PayloadKeyEvent]; got != TypeTypingStart {
+		t.Fatalf("activity event = %#v, want %q", got, TypeTypingStart)
+	}
+
+	stop()
+
+	ch.sendTypingSnapshot(sessionPC)
+	assertNoPicoMessage(t, sessionMessages)
 }
 
 func TestBroadcastToSession_ActivityCarriesFinalFlag(t *testing.T) {

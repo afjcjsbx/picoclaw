@@ -146,6 +146,8 @@ export const splitSessionStatesAtom = atom<Record<string, SplitSessionState>>(
 export const sessionTitlesAtom = atom<Record<string, string>>({})
 export const unreadSessionIdsAtom = atom<Set<string>>(new Set<string>())
 export const sessionRunningAtom = atom<Record<string, boolean>>({})
+// Start time (epoch milliseconds) of the current turn for each running session.
+export const sessionStartedAtAtom = atom<Record<string, number>>({})
 
 export interface ComposerInsertion {
   text: string
@@ -208,7 +210,11 @@ export function markSessionRead(sessionId: string) {
   })
 }
 
-export function setSessionRunning(sessionId: string, isRunning: boolean) {
+export function setSessionRunning(
+  sessionId: string,
+  isRunning: boolean,
+  startedAt?: number,
+) {
   if (!sessionId) return
 
   store.set(sessionRunningAtom, (current) => {
@@ -221,15 +227,41 @@ export function setSessionRunning(sessionId: string, isRunning: boolean) {
     }
     return next
   })
+  store.set(sessionStartedAtAtom, (current) => {
+    if (!isRunning) {
+      if (!(sessionId in current)) return current
+      const next = { ...current }
+      delete next[sessionId]
+      return next
+    }
+    const nextStart = startedAt ?? current[sessionId] ?? Date.now()
+    if (current[sessionId] === nextStart) return current
+    return { ...current, [sessionId]: nextStart }
+  })
 }
 
 export function clearSessionRunning(keepSessionId?: string) {
+  let nextRunning: Record<string, boolean> = {}
   store.set(sessionRunningAtom, (current) => {
     const keys = Object.keys(current)
     if (keys.length === 0) return current
     if (!keepSessionId || !current[keepSessionId]) return {}
-    if (keys.length === 1) return current
-    return { [keepSessionId]: true }
+    if (keys.length === 1) {
+      nextRunning = current
+      return current
+    }
+    nextRunning = { [keepSessionId]: true }
+    return nextRunning
+  })
+  if (Object.keys(nextRunning).length === 0 || !keepSessionId) {
+    store.set(sessionStartedAtAtom, {})
+    return
+  }
+  const keptSessionId = keepSessionId
+  store.set(sessionStartedAtAtom, (current) => {
+    const startedAt = current[keptSessionId]
+    if (startedAt === undefined) return current
+    return { [keptSessionId]: startedAt }
   })
 }
 

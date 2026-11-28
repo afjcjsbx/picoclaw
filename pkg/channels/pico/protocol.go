@@ -38,6 +38,9 @@ const (
 	PayloadKeyEvent       = "event"
 	PayloadKeyFinal       = "final"
 	PayloadKeyApproval    = "approval"
+	// PayloadKeyStartedAt is the epoch-millisecond start time of an active
+	// typing/turn, replayed to clients that connect mid-turn.
+	PayloadKeyStartedAt = "started_at"
 	// PayloadKeyCompactionPhase is the channels.CompactionState value on
 	// TypeSessionCompaction.
 	PayloadKeyCompactionPhase = "phase"
