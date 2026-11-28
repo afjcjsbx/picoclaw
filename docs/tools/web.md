@@ -36,7 +36,7 @@ General settings for fetching and processing webpage content.
 
 ### Readable content extraction
 
-For HTML, XHTML, and XML pages, `web_fetch` uses its built-in lightweight parser. In Markdown mode it removes scripts, styles, semantic navigation/banner/footer roles, hidden nodes, and obvious layout/noise classes before conversion. No external extraction library or subprocess is used. When the Markdown result is empty, `web_fetch` falls back to full-page plaintext extraction. If that also returns nothing, the call fails with an explicit message suggesting a configured browser, because the page is probably rendered by JavaScript or hidden behind a consent/challenge wall. The `extractor` field reports which path was used: `markdown` for the local Markdown parser, or `text` for the plaintext fallback.
+For HTML, XHTML, and XML pages, `web_fetch` uses its built-in lightweight parser. In Markdown mode it removes scripts, styles, semantic navigation/banner/footer roles, hidden nodes, and obvious layout/noise classes before conversion. Server-rendered `<noscript>` fallbacks and useful `<aside>` content are preserved, and parsing runs with scripting disabled so those fallbacks remain readable. No external extraction library or subprocess is used. When the Markdown result is empty, `web_fetch` falls back to full-page plaintext extraction. If that also returns nothing, the call fails with an explicit message suggesting a configured browser, because the page is probably rendered by JavaScript or hidden behind a consent/challenge wall. The `extractor` field reports which path was used: `markdown` for the local Markdown parser, or `text` for the plaintext fallback.
 
 ### Pages that need a real browser
 

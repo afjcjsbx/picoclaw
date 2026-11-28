@@ -194,14 +194,14 @@ func TestHtmlToMarkdown(t *testing.T) {
 			expected: "**Important:** read the ***critical instructions*** *carefully*.",
 		},
 		{
-			name: "Article with nav and aside sections (noise to filter)",
+			name: "Article with nav and complementary sections (noise to filter)",
 			input: `
         <nav><a href="/home">Home</a><a href="/about-us">About us</a></nav>
         <article>
             <h2>Article title</h2>
             <p>This is the body of the article.</p>
         </article>
-        <aside><p>Advertisement</p></aside>
+        <aside role="complementary"><p>Advertisement</p></aside>
        `,
 			expected: "## Article title\n\nThis is the body of the article.",
 		},
@@ -235,6 +235,16 @@ func TestHtmlToMarkdown(t *testing.T) {
 			name:     "Semantic main overrides layout class tokens",
 			input:    `<main class="sidebar"><p>Still kept</p></main>`,
 			expected: "Still kept",
+		},
+		{
+			name:     "Preserves useful aside content",
+			input:    `<aside><h2>Details</h2><p>Useful sidebar information</p></aside>`,
+			expected: "## Details\n\nUseful sidebar information",
+		},
+		{
+			name:     "Preserves server-rendered noscript content",
+			input:    `<noscript><h2>Fallback title</h2><p>Fallback body</p></noscript>`,
+			expected: "## Fallback title\n\nFallback body",
 		},
 		{
 			name:     "Text with mixed special HTML entities",

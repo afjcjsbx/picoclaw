@@ -758,6 +758,16 @@ func TestWebTool_WebFetch_LocalExtraction(t *testing.T) {
 			wantExtractor: "text",
 			wantText:      "Navigation fallback text",
 		},
+		{
+			name: "preserves server-rendered noscript and aside content",
+			body: `<html><body><noscript><h2>Server fallback title</h2>` +
+				`<p>Server-rendered fallback body.</p></noscript>` +
+				`<aside><h2>Useful details</h2><p>Sidebar information.</p></aside>` +
+				`</body></html>`,
+			format:        "markdown",
+			wantExtractor: "markdown",
+			wantText:      "Server fallback title",
+		},
 	}
 
 	for _, tt := range tests {

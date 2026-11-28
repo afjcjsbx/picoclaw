@@ -21,8 +21,8 @@ var (
 
 var skipTags = map[string]bool{
 	"script": true, "style": true, "head": true,
-	"noscript": true, "template": true,
-	"nav": true, "footer": true, "aside": true, "header": true, "form": true, "dialog": true,
+	"template": true,
+	"nav":      true, "footer": true, "header": true, "form": true, "dialog": true,
 }
 
 func isSafeHref(href string) bool {
@@ -398,7 +398,10 @@ func (c *converter) walk(n *html.Node) {
 }
 
 func HtmlToMarkdown(htmlStr string) (string, error) {
-	doc, err := html.Parse(strings.NewReader(htmlStr))
+	doc, err := html.ParseWithOptions(
+		strings.NewReader(htmlStr),
+		html.ParseOptionEnableScripting(false),
+	)
 	if err != nil {
 		return "", err
 	}
