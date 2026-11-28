@@ -2,6 +2,7 @@ import { getDefaultStore } from "jotai"
 import { toast } from "sonner"
 
 import {
+  type SessionHistoryPage,
   loadSessionMessages,
   mergeHistoryMessages,
 } from "@/features/chat/history"
@@ -316,7 +317,7 @@ function isManagedSplitSession(sessionId: string): boolean {
 }
 
 function mergeHistoryPage(
-  page: { messages: ChatMessage[]; start: number; hasMore: boolean },
+  page: SessionHistoryPage,
   previous: { messages: ChatMessage[]; historyStart: number },
 ) {
   const historyStart =
@@ -328,6 +329,7 @@ function mergeHistoryPage(
     messages: mergeHistoryMessages(page.messages, previous.messages),
     historyStart,
     hasMoreHistory: historyStart > 0,
+    ...(page.contextUsage ? { contextUsage: page.contextUsage } : {}),
   }
 }
 
@@ -856,6 +858,9 @@ export async function hydrateActiveSession() {
           hasHydratedActiveSession: true,
           historyStart: historyPage.start,
           hasMoreHistory: historyPage.hasMore,
+          ...(currentState.contextUsage || !historyPage.contextUsage
+            ? {}
+            : { contextUsage: historyPage.contextUsage }),
         })
         return
       }
@@ -868,6 +873,9 @@ export async function hydrateActiveSession() {
         hasHydratedActiveSession: true,
         historyStart: historyPage.start,
         hasMoreHistory: historyPage.hasMore,
+        ...(historyPage.contextUsage
+          ? { contextUsage: historyPage.contextUsage }
+          : {}),
       })
     })
     .catch((error) => {
@@ -1050,6 +1058,7 @@ export async function switchChatSession(sessionId: string) {
           messages: cachedSplitState.messages,
           start: cachedSplitState.historyStart,
           hasMore: cachedSplitState.hasMoreHistory,
+          contextUsage: cachedSplitState.contextUsage,
         }
       : await loadSessionMessages(sessionId)
     const currentState = getChatState()
@@ -1086,7 +1095,7 @@ export async function switchChatSession(sessionId: string) {
       hasHydratedActiveSession: true,
       historyStart: historyPage.start,
       hasMoreHistory: historyPage.hasMore,
-      contextUsage: cachedSplitState?.contextUsage,
+      contextUsage: cachedSplitState?.contextUsage ?? historyPage.contextUsage,
     })
 
     if (store.get(gatewayAtom).status === "running") {

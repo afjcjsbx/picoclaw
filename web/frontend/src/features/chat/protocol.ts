@@ -5,11 +5,10 @@ import {
   parseAssistantMessageUpdateState,
 } from "@/features/chat/assistant-message-state"
 import { normalizeUnixTimestamp } from "@/features/chat/state"
-import { parseTokenUsage } from "@/features/chat/usage"
+import { parseContextUsage, parseTokenUsage } from "@/features/chat/usage"
 import {
   type ChatAttachment,
   type ChatMessage,
-  type ContextUsage,
   type SplitSessionState,
   getChatState,
   markSessionUnread,
@@ -72,30 +71,6 @@ function parseAttachments(
   }
 
   return attachments.length > 0 ? attachments : undefined
-}
-
-function parseContextUsage(
-  payload: Record<string, unknown>,
-): ContextUsage | undefined {
-  const raw = payload.context_usage
-  if (!raw || typeof raw !== "object") return undefined
-  const obj = raw as Record<string, unknown>
-  const used = Number(obj.used_tokens)
-  const total = Number(obj.total_tokens)
-  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0)
-    return undefined
-  return {
-    used_tokens: used,
-    total_tokens: total,
-    history_tokens:
-      obj.history_tokens != null ? Number(obj.history_tokens) : undefined,
-    compress_at_tokens: Number(obj.compress_at_tokens) || 0,
-    summarize_at_tokens:
-      obj.summarize_at_tokens != null
-        ? Number(obj.summarize_at_tokens)
-        : undefined,
-    used_percent: Number(obj.used_percent) || 0,
-  }
 }
 
 function parseModelName(payload: Record<string, unknown>): string | undefined {
@@ -226,7 +201,7 @@ export function handlePicoMessage(
       const { content, kind, toolCalls, approval } =
         parseAssistantMessageCreateState(payload)
       const attachments = parseAttachments(payload)
-      const contextUsage = parseContextUsage(payload)
+      const contextUsage = parseContextUsage(payload.context_usage)
       const usage = parseTokenUsage(payload)
       const isPlaceholder = payload.placeholder === true
       const modelName = parseModelName(payload)
@@ -271,7 +246,7 @@ export function handlePicoMessage(
       }
       const messageId = payload.message_id as string
       const attachments = parseAttachments(payload)
-      const contextUsage = parseContextUsage(payload)
+      const contextUsage = parseContextUsage(payload.context_usage)
       const usage = parseTokenUsage(payload)
       const modelName = parseModelName(payload)
       const timestamp =

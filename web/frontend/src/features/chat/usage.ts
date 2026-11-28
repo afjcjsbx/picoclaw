@@ -1,4 +1,4 @@
-import type { ChatMessage, TokenUsage } from "@/store/chat"
+import type { ChatMessage, ContextUsage, TokenUsage } from "@/store/chat"
 
 export interface ModelPricing {
   inputPerMillionUsd: number
@@ -106,6 +106,28 @@ export function parseTokenUsage(
     ...(toolDurationMs ? { tool_duration_ms: toolDurationMs } : {}),
     ...(averageTtftMs ? { average_ttft_ms: averageTtftMs } : {}),
     ...(cost !== undefined ? { cost_usd: cost } : {}),
+  }
+}
+
+/** Parse a `context_usage` object from live Pico payloads or session history. */
+export function parseContextUsage(raw: unknown): ContextUsage | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
+  const obj = raw as Record<string, unknown>
+  const used = Number(obj.used_tokens)
+  const total = Number(obj.total_tokens)
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0)
+    return undefined
+  return {
+    used_tokens: used,
+    total_tokens: total,
+    history_tokens:
+      obj.history_tokens != null ? Number(obj.history_tokens) : undefined,
+    compress_at_tokens: Number(obj.compress_at_tokens) || 0,
+    summarize_at_tokens:
+      obj.summarize_at_tokens != null
+        ? Number(obj.summarize_at_tokens)
+        : undefined,
+    used_percent: Number(obj.used_percent) || 0,
   }
 }
 

@@ -414,6 +414,76 @@ func TestHandleGetSession_JSONLStorage(t *testing.T) {
 	}
 }
 
+func TestHandleGetSession_IncludesPersistedContextUsage(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList[0].ContextWindow = 128_000
+	cfg.ModelList[0].MaxTokens = 8_192
+	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("SaveConfig() error = %v", saveErr)
+	}
+
+	dir := sessionsTestDir(t, configPath)
+	store, err := memory.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+
+	sessionKey := legacyPicoSessionPrefix + "context-jsonl"
+	for _, msg := range []providers.Message{
+		{Role: "user", Content: "question"},
+		{
+			Role:      "assistant",
+			Content:   "answer",
+			ModelName: "custom-default",
+			Usage: &providers.UsageInfo{
+				PromptTokens:  20_000,
+				ContextTokens: 20_000,
+			},
+		},
+	} {
+		if err := store.AddFullMessage(nil, sessionKey, msg); err != nil {
+			t.Fatalf("AddFullMessage() error = %v", err)
+		}
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/context-jsonl", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		ContextUsage *sessionContextUsage `json:"context_usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if resp.ContextUsage == nil {
+		t.Fatal("context_usage = nil, want persisted context usage")
+	}
+	want := sessionContextUsage{
+		UsedTokens:       20_000,
+		TotalTokens:      128_000,
+		CompressAtTokens: 119_808,
+		UsedPercent:      16,
+	}
+	if *resp.ContextUsage != want {
+		t.Fatalf("context_usage = %+v, want %+v", *resp.ContextUsage, want)
+	}
+}
+
 func TestHandleGetSessionUsage_JSONLStorage(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

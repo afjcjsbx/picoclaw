@@ -131,6 +131,87 @@ func sessionUsageTotals(summary usage.Summary) sessionUsage {
 	}
 }
 
+// sessionContextUsage mirrors the live Pico context_usage payload so a stored
+// session can restore the composer context ring after a reload.
+type sessionContextUsage struct {
+	UsedTokens       int `json:"used_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	CompressAtTokens int `json:"compress_at_tokens"`
+	UsedPercent      int `json:"used_percent"`
+}
+
+// latestSessionContextUsage reconstructs context-window usage from the
+// provider-reported prompt size persisted on the last assistant turn. Live Pico
+// messages carry this data, but without it the composer ring disappeared on
+// reload or when switching conversations.
+func latestSessionContextUsage(cfg *config.Config, messages []providers.Message) *sessionContextUsage {
+	if cfg == nil {
+		return nil
+	}
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msgUsage := messages[i].Usage
+		if msgUsage == nil || msgUsage.ContextTokens <= 0 {
+			continue
+		}
+
+		modelName := messages[i].ModelName
+		if modelName == "" {
+			modelName = cfg.Agents.Defaults.GetModelName()
+		}
+		var modelCfg *config.ModelConfig
+		if modelName != "" {
+			if matched, err := cfg.GetModelConfig(modelName); err == nil {
+				modelCfg = matched
+			}
+		}
+
+		contextWindow, maxTokens := sessionContextLimits(cfg, modelCfg)
+		compressAt := contextWindow - maxTokens
+		if compressAt < 0 {
+			compressAt = contextWindow
+		}
+		usedPercent := 0
+		if compressAt > 0 {
+			usedPercent = msgUsage.ContextTokens * 100 / compressAt
+			if usedPercent > 100 {
+				usedPercent = 100
+			}
+		}
+
+		return &sessionContextUsage{
+			UsedTokens:       msgUsage.ContextTokens,
+			TotalTokens:      contextWindow,
+			CompressAtTokens: compressAt,
+			UsedPercent:      usedPercent,
+		}
+	}
+
+	return nil
+}
+
+// sessionContextLimits resolves the effective context window and output reserve
+// for a model, matching pkg/agent resolveContextWindow semantics.
+func sessionContextLimits(cfg *config.Config, modelCfg *config.ModelConfig) (contextWindow, maxTokens int) {
+	if modelCfg != nil {
+		maxTokens = modelCfg.MaxTokens
+	}
+	if maxTokens <= 0 {
+		maxTokens = cfg.Agents.Defaults.MaxTokens
+	}
+	if maxTokens <= 0 {
+		maxTokens = 8192
+	}
+
+	if modelCfg != nil && modelCfg.ContextWindow > 0 {
+		return modelCfg.ContextWindow, maxTokens
+	}
+	if cfg.Agents.Defaults.ContextWindow > 0 {
+		return cfg.Agents.Defaults.ContextWindow, maxTokens
+	}
+	return maxTokens * 4, maxTokens
+}
+
 // usageSummaryFromMessages sums the provider-reported usage persisted on each
 // turn's terminal assistant message. It is the fallback for sessions whose
 // metadata predates the cumulative usage counters.
@@ -1029,12 +1110,22 @@ func (h *Handler) sessionsDir() (string, error) {
 }
 
 func (h *Handler) sessionRuntimeSettings() (string, int, error) {
+	dir, toolFeedbackMaxArgsLength, _, err := h.sessionRuntimeSettingsWithConfig()
+	return dir, toolFeedbackMaxArgsLength, err
+}
+
+// sessionRuntimeSettingsWithConfig is sessionRuntimeSettings plus the loaded
+// config, so callers that also need model settings avoid loading it twice.
+func (h *Handler) sessionRuntimeSettingsWithConfig() (string, int, *config.Config, error) {
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
 
-	return resolveSessionsDir(cfg.Agents.Defaults.Workspace), cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(), nil
+	return resolveSessionsDir(cfg.Agents.Defaults.Workspace),
+		cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
+		cfg,
+		nil
 }
 
 func resolveSessionsDir(workspace string) string {
@@ -1171,7 +1262,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		before = parsed
 	}
 
-	dir, toolFeedbackMaxArgsLength, err := h.sessionRuntimeSettings()
+	dir, toolFeedbackMaxArgsLength, cfg, err := h.sessionRuntimeSettingsWithConfig()
 	if err != nil {
 		http.Error(w, "failed to resolve sessions directory", http.StatusInternalServerError)
 		return
@@ -1220,7 +1311,7 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	page := messages[start:end]
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	response := map[string]any{
 		"id":          sessionID,
 		"messages":    page,
 		"start":       start,
@@ -1230,7 +1321,11 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		"updated":     sess.Updated.Format(time.RFC3339),
 		"forked_from": sess.ForkedFrom,
 		"fork_index":  sess.ForkIndex,
-	})
+	}
+	if contextUsage := latestSessionContextUsage(cfg, sess.Messages); contextUsage != nil {
+		response["context_usage"] = contextUsage
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleGetSessionUsage returns the cumulative token usage and cost of a

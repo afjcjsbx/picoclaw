@@ -61,6 +61,14 @@ export interface SessionDetail {
   updated: string
   forked_from?: string
   fork_index?: number
+  context_usage?: {
+    used_tokens: number
+    total_tokens: number
+    history_tokens?: number
+    compress_at_tokens?: number
+    summarize_at_tokens?: number
+    used_percent?: number
+  }
 }
 
 export interface SessionUsageSummary {
