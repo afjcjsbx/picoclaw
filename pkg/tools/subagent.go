@@ -80,6 +80,7 @@ type SubagentManager struct {
 	temperature    float64
 	hasMaxTokens   bool
 	hasTemperature bool
+	directMessage  bool // default true; when false, outbound tools are stripped from spawned subagents
 	nextID         int
 	spawner        SpawnSubTurnFunc
 
@@ -102,6 +103,8 @@ func NewSubagentManager(
 		tools:         NewToolRegistry(),
 		maxIterations: 10,
 		nextID:        1,
+		// direct_message defaults to true: no behavior change for existing deployments.
+		directMessage: true,
 	}
 }
 
@@ -138,6 +141,14 @@ func (sm *SubagentManager) SetTools(tools *ToolRegistry) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.tools = tools
+}
+
+// SetDirectMessage sets whether spawned subagents may contact the user
+// directly. Defaults to true; when false, outbound tools are stripped.
+func (sm *SubagentManager) SetDirectMessage(enabled bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.directMessage = enabled
 }
 
 // RegisterTool registers a tool for subagent execution.

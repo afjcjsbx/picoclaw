@@ -64,6 +64,9 @@ func DefaultConfig() *Config {
 				LLMRetryBackoffSecs:     2,
 				LLMRetryOnEmptyContent:  true,
 				LLMRetryOnFinishReasons: []string{"length"},
+				SubTurn: SubTurnConfig{
+					DirectMessage: true,
+				},
 			},
 		},
 		Session: SessionConfig{

@@ -31,6 +31,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	// Inject turnState and AgentLoop into context so tools (e.g. spawn) can retrieve them.
 	turnCtx = withTurnState(turnCtx, ts)
 	turnCtx = WithAgentLoop(turnCtx, al)
+	// Register this turn as a ChildTracker so spawn() calls within this turn
+	// are tracked and joined before the turn finishes (prevents async children
+	// from being orphaned).
+	turnCtx = tools.WithChildTracker(turnCtx, ts)
 
 	al.registerActiveTurn(ts)
 	defer al.clearActiveTurn(ts)
